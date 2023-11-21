@@ -8,6 +8,7 @@ packages = [{include = "kic_web_assistant"}]
 
 [tool.poetry.dependencies]
 python = "~3.11"
+requests = "^2.31.0"
 
 
 [tool.poetry.group.dev.dependencies]
