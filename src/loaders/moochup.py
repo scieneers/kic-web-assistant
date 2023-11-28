@@ -18,7 +18,7 @@ class CourseInfo(BaseModel):
         return type
 
 
-def fetch_data(api_url:str='https://learn.ki-campus.org/bridges/moochub/courses') -> dict:
+def fetch_data(api_url:str='https://learn.ki-campus.org/bridges/moochub/courses') -> list[CourseInfo]:
     '''Course information currently is available from two moochub endpoints (currently only one available). All courses are distribuded over multiple pages.'''
 
     def fetch_pages(api_url) -> dict:
@@ -36,10 +36,15 @@ def fetch_data(api_url:str='https://learn.ki-campus.org/bridges/moochub/courses'
     courses = [CourseInfo(**course) for course in courses]
     return courses
 
-def create_payload(course_info:CourseInfo) -> dict:
+def create_payload(course_info:CourseInfo) -> Payload:
     '''Extracts relevant information from course_info and returns a document dictionary.'''
     content = f"Kursname: {course_info.attributes.name}\n Kursbeschreibung{course_info.attributes.abstract}"
-    return Payload(type=Types.course, content=content)
+    return Payload(type=Types.course, vector_content=content)
+
+def get_course_payloads() -> list[Payload]:
+    '''Returns a list of all course payloads.'''
+    course_data = fetch_data()
+    return [create_payload(course) for course in course_data]
 
 if __name__ == '__main__':
     course_data = fetch_data()

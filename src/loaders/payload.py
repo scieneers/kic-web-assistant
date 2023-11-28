@@ -8,4 +8,4 @@ class Types(str, Enum):
 
 class Payload(BaseModel):
     type: Types
-    content: str
+    vector_content: str
