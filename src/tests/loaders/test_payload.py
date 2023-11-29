@@ -1,6 +1,6 @@
 from src.loaders.moochup import create_payload, CourseInfo
 
-def test_moochup():
+def test_moochup_payload_creation():
     course_example = {
         "id": "0cf46a4b-9022-4cd5-9815-92312b3a84dcc",
         "type": "courses",

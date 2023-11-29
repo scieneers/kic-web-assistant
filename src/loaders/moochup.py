@@ -1,10 +1,21 @@
 import requests
 from pydantic import BaseModel, field_validator
 from src.loaders.payload import Payload, Types
+from bs4 import BeautifulSoup
+
 
 class CourseAttributes(BaseModel):
     name: str
     abstract: str
+    
+    @field_validator('abstract')
+    @classmethod
+    def remove_html_tags(cls, abstract: str) -> str:
+        if "<" not in abstract:
+            return abstract
+        
+        soup = BeautifulSoup(abstract, 'html.parser')
+        return soup.get_text()
 
 class CourseInfo(BaseModel):
     type: str

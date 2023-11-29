@@ -15,7 +15,7 @@ embeddings = [embedder.embed(payload.vector_content, type="passage") for payload
 # store in db
 points = [{'id': i, 'vector': embedding, 'payload': payload.model_dump()} 
           for i, (embedding, payload) in enumerate(zip(embeddings, documents))]
-print(points[0])
+print(f"Example point: {points[0]}")
 
 vectordb = VectorDBQdrant(collection_name='test_collection', vector_size=len(embeddings[0]))
 vectordb.upsert(points)
