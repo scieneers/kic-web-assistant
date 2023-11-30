@@ -21,41 +21,34 @@ CONTEXT:
 =========
 '''
 
-prompt=[
-    {'role': 'system', 'content': system_prompt},
-    #{'role': 'user', 'content': user_question_1},
-    #{'role': 'assistant', 'content': assistant_answer_1},
-    #{'role': 'user', 'content': user_question_2},
-]
+class Assistant():
+    def __init__(self):
+        self.embedder = MultilingualE5LargeEmbedder()
+        self.vectordb = VectorDBQdrant()
+    
+        with open(Path(__file__).parent / 'keys.json', 'r') as f:
+            keys = json.load(f)
 
-# get query
-query = 'Welche Kurse zu ethischer KI habt ihr im Angebot?'
+        self.gpt = AzureOpenAI(api_key=keys['AZURE_OPENAI_KEY'], api_version='2023-05-15', azure_endpoint=keys['AZURE_OPENAI_ENDPOINT'])
 
-# embed query
-embedder = MultilingualE5LargeEmbedder()
-embedding = embedder.embed(query, type='query')
 
-# retrieve context
-vectordb = VectorDBQdrant()
-data_points = vectordb.search(collection_name='test_collection', query_vector=embedding)
-context = [point.payload['vector_content'] for point in data_points]
+    def answer(self, query='Welche Kurse zu ethischer KI habt ihr im Angebot?'):
 
-# llm 
-with open(Path(__file__).parent / 'keys.json', 'r') as f:
-    keys = json.load(f)
+        embedding = self.embedder.embed(query, type='query')
 
-client = AzureOpenAI(api_key=keys['AZURE_OPENAI_KEY'], api_version='2023-05-15', azure_endpoint=keys['AZURE_OPENAI_ENDPOINT'])
+        data_points = self.vectordb.search(collection_name='test_collection', query_vector=embedding)
+        context = [point.payload['vector_content'] for point in data_points]
 
-## create prompt
-prompt.append({'role': 'user', 'content': user_question.format(question=query, context='\n\n'.join(context))})
+        prompt=[
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_question.format(question=query, context='\n\n'.join(context))}
+        ]
 
-response = client.chat.completions.create(
-    model='gpt-3_5', # The deployment name you chose when you deployed the GPT-35-Turbo or GPT-4 model.
-    messages=prompt,
-    temperature=0.8,
-    stream=False)
+        response = self.gpt.chat.completions.create(
+            model='gpt-3_5', # The deployment name you chose when you deployed the GPT-35-Turbo or GPT-4 model.
+            messages=prompt,
+            temperature=0.8,
+            stream=False)
 
-print(response.choices[0].message.content)
-
-print('wait')
-
+        print(response.choices[0].message.content)
+        return response.choices[0].message.content

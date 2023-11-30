@@ -1,9 +1,13 @@
 from transformers import AutoTokenizer, AutoModel
 from torch import Tensor
 import torch.nn.functional as F
-
+import os
+        
 class MultilingualE5LargeEmbedder:
     def __init__(self):
+        # tokenizer is not thread-safe, chainlit uses multiple threads
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
         self.tokenizer = AutoTokenizer.from_pretrained('intfloat/multilingual-e5-large')
         self.model = AutoModel.from_pretrained('intfloat/multilingual-e5-large')
 
