@@ -1,2 +1,14 @@
 # local environment
+**/.vscode
+
+## python
 **/.venv
+**/__pycache__
+**/.pytest_cache
+
+## vector store
+**/qdrant_storage
+
+
+# Temp local keys
+src/keys.json
