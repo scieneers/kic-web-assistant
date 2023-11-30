@@ -11,7 +11,7 @@ class CourseAttributes(BaseModel):
     @field_validator('abstract')
     @classmethod
     def remove_html_tags(cls, abstract: str) -> str:
-        if "<" not in abstract:
+        if '<' not in abstract:
             return abstract
         
         soup = BeautifulSoup(abstract, 'html.parser')
@@ -49,7 +49,7 @@ def fetch_data(api_url:str='https://learn.ki-campus.org/bridges/moochub/courses'
 
 def create_payload(course_info:CourseInfo) -> Payload:
     '''Extracts relevant information from course_info and returns a document dictionary.'''
-    content = f"Kursname: {course_info.attributes.name}\n Kursbeschreibung: {course_info.attributes.abstract}"
+    content = f'Kursname: {course_info.attributes.name}\n Kursbeschreibung: {course_info.attributes.abstract}'
     return Payload(type=Types.course, vector_content=content)
 
 def get_course_payloads() -> list[Payload]:
