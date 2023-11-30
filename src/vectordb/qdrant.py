@@ -37,7 +37,7 @@ class VectorDBQdrant():
         )
         print(operation_info)
 
-    def search(self, query_vector, query_filter=None, with_payload=False, limit=3):
+    def search(self, query_vector, query_filter=None, with_payload=True, limit=3):
         search_result = self.client.search(
             collection_name=self.collection_name,
             query_vector=query_vector,
