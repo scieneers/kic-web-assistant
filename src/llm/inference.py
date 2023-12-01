@@ -32,7 +32,7 @@ class Assistant():
         self.gpt = AzureOpenAI(api_key=keys['AZURE_OPENAI_KEY'], api_version='2023-05-15', azure_endpoint=keys['AZURE_OPENAI_ENDPOINT'])
 
 
-    def answer(self, query='Welche Kurse zu ethischer KI habt ihr im Angebot?'):
+    def answer(self, query):
 
         embedding = self.embedder.embed(query, type='query')
 
@@ -52,3 +52,7 @@ class Assistant():
 
         print(response.choices[0].message.content)
         return response.choices[0].message.content
+    
+if __name__ == '__main__':
+    assistant = Assistant()
+    assistant.answer(query='Welche Kurse zu ethischer KI habt ihr im Angebot?')

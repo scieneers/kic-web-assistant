@@ -7,7 +7,7 @@ import pytest
       'KI-Lectures: Lernen und Bildung mit KI\neine Veranstaltungsreihe vom AI.EDU Research Lab des Forschungsschwerpunkts D²L² der FernUniversität in Hagen und dem Projekt tech4comp mit der Universität Leipzig und der TU Dresden, zusammen mit dem DFKI, die im Sommersemester 2021 auf dem KI-Campus stattfindet.\nInhalt \n'),
      ('This has no valid <> html tags.', 'This has no valid <> html tags.')])
 def test_moochup_course_attributes(input: str, expected: str):
-    course_attributes = CourseAttributes(name='Test Title', abstract=input)
+    course_attributes = CourseAttributes(name='Test Title', abstract=input, languages=['de'])
     assert course_attributes.abstract == expected
 
 def test_moochup_payload_creation():

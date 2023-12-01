@@ -7,7 +7,8 @@ from bs4 import BeautifulSoup
 class CourseAttributes(BaseModel):
     name: str
     abstract: str
-    
+    languages: list[str]
+
     @field_validator('abstract')
     @classmethod
     def remove_html_tags(cls, abstract: str) -> str:
@@ -16,7 +17,14 @@ class CourseAttributes(BaseModel):
         
         soup = BeautifulSoup(abstract, 'html.parser')
         return soup.get_text()
-
+    
+    @field_validator('languages')
+    @classmethod
+    def single_language(cls, languages: list[str]) -> str:
+        if len(languages) != 1:
+            raise ValueError('Only one language is expected.')
+        return languages
+    
 class CourseInfo(BaseModel):
     type: str
     attributes: CourseAttributes
@@ -50,7 +58,7 @@ def fetch_data(api_url:str='https://learn.ki-campus.org/bridges/moochub/courses'
 def create_payload(course_info:CourseInfo) -> Payload:
     '''Extracts relevant information from course_info and returns a document dictionary.'''
     content = f'Kursname: {course_info.attributes.name}\n Kursbeschreibung: {course_info.attributes.abstract}'
-    return Payload(type=Types.course, vector_content=content)
+    return Payload(type=Types.course, vector_content=content, language=course_info.attributes.languages[0])
 
 def get_course_payloads() -> list[Payload]:
     '''Returns a list of all course payloads.'''
