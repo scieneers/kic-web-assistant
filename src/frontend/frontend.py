@@ -1,21 +1,36 @@
-import chainlit as cl
-from llm.inference import Assistant
+import streamlit as st
 
-# Random id in die session reinschreiben
+st.title("Echo Bot")
 
-#assistant = Assistant()
+with st.chat_message("user"):
+    st.write("Hello 👋")
 
-@cl.on_message
-async def main(message: cl.Message):
-    '''Your custom logic goes here'''
-    app_user = cl.user_session.get("user")
-    await cl.Message(content=app_user).send()
+#prompt = st.chat_input("Say something")
 
+# Initialize chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    #response = assistant.answer(message.content)
+# Display chat messages from history on app rerun
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])    
 
-    # Send a response back to the user
-    await cl.Message(content=message.content).send()
+# React to user input
+if prompt := st.chat_input("What is up?"):
+    # Display user message in chat message container
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": prompt})
 
-if __name__ == '__main__':
-    pass
+response = f"Echo: {prompt}"
+# Display assistant response in chat message container
+with st.chat_message("assistant"):
+    st.markdown(response)
+# Add assistant response to chat history
+st.session_state.messages.append({"role": "assistant", "content": response})
+
+# from llm.inference import Assistant
+# assistant = Assistant()
+# response = assistant.answer(message.content)

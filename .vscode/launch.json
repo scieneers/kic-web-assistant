@@ -14,18 +14,17 @@
             "justMyCode": true,
         },
         {
-            "name": "Chainlit",
+            "name": "Streamlit",
             "type": "python",
             "request": "launch",
-            "module": "chainlit",
+            "module": "streamlit",
             "args": [
                 "run",
-                "${file}",
-                "-w"
+                "${file}"
             ],
             "console": "integratedTerminal",
             "justMyCode": true,
-            "cwd": "${fileDirname}",
+            "cwd": "${fileDirname}"
         },
     ]
 }
