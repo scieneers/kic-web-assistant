@@ -1,0 +1,12 @@
+version: '3'
+
+tasks:
+  build-frontend:
+    desc: Build the docker image for the streamlit frontend
+    cmds:
+      - docker buildx build --platform linux/amd64 -t europe-west3-docker.pkg.dev/kic-chat-assistant/docker-registry/app:latest -f src/frontend/Dockerfile .
+
+  push-frontend:
+    desc: Pushes the docker image for the streamlit frontend
+    cmds:
+      - docker push europe-west3-docker.pkg.dev/kic-chat-assistant/docker-registry/app:latest

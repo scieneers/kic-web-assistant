@@ -15,9 +15,9 @@ class VectorDBQdrant():
         else:
             raise ValueError("Version must be either 'memory' or 'disk'")
         
-    def get_or_create_collection(self, collection_name, vector_size=None):
+    def get_or_create_collection(self, collection_name, vector_size=None) -> None:
         try:
-            _ = self.client.get_collection(collection_name=self.collection_name)
+            _ = self.client.get_collection(collection_name=collection_name)
         except ResponseHandlingException as e:
             if self.version == 'disk':
                 print('Qdrant container not running? Run:')
@@ -29,7 +29,7 @@ class VectorDBQdrant():
                 vectors_config=VectorParams(size=vector_size, distance=Distance.DOT),
             )
 
-    def upsert(self, collection_name, points: list[dict]):
+    def upsert(self, collection_name, points: list[dict]) -> None:
         qdrant_points = [PointStruct(**point) for point in points]
         operation_info = self.client.upsert(
             collection_name=collection_name,
@@ -38,7 +38,7 @@ class VectorDBQdrant():
         )
         print(operation_info)
 
-    def search(self, collection_name, query_vector, query_filter=None, with_payload=True, limit=3):
+    def search(self, collection_name, query_vector, query_filter=None, with_payload=True, limit=3) -> list[dict]:
         search_result = self.client.search(
             collection_name=collection_name,
             query_vector=query_vector,
