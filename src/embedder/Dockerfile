@@ -1,7 +1,5 @@
 FROM python:3.11-slim
 
-EXPOSE 8501
-
 RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 -ms /bin/bash appuser
 
@@ -11,10 +9,12 @@ RUN apt-get update && apt-get install -y \
 
 COPY poetry.lock pyproject.toml ./
 RUN poetry config virtualenvs.create false && \
-    poetry install --with frontend --no-interaction --no-ansi
+    poetry install --with embedder --no-interaction --no-ansi
 
 USER appuser
 WORKDIR /home/appuser
 
+RUN huggingface-cli download intfloat/multilingual-e5-large
+
 COPY . .
-CMD streamlit run src/frontend/frontend.py
+CMD ["uvicorn", "src.embedder.embedding_api:app", "--host", "0.0.0.0", "--port", "80"]

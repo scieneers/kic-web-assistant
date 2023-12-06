@@ -1,12 +1,39 @@
 version: '3'
 
+vars:
+  # Build for different architecture in case of arm processors
+  TARGET: "linux"
+  REGISTRY: "europe-west3-docker.pkg.dev/kic-chat-assistant/docker-registry"
+
 tasks:
+  print-vars:
+    cmds:
+      - | 
+        echo "TARGET: {{ .TARGET }}"
+        echo "REGISTRY: {{ .REGISTRY }}"
+
   build-frontend:
     desc: Build the docker image for the streamlit frontend
     cmds:
-      - docker buildx build --platform linux/amd64 -t europe-west3-docker.pkg.dev/kic-chat-assistant/docker-registry/app:latest -f src/frontend/Dockerfile .
+      - | 
+        {{ if eq .TARGET "linux" }}
+          docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/app:latest -f src/frontend/Dockerfile .
+        {{ else }}
+          docker build -t app:latest -f src/frontend/Dockerfile .
+        {{ end }}
 
-  push-frontend:
-    desc: Pushes the docker image for the streamlit frontend
+  build-embedder:
+    desc: Build the docker image for the embedder API
     cmds:
-      - docker push europe-west3-docker.pkg.dev/kic-chat-assistant/docker-registry/app:latest
+      - | 
+        {{ if eq .TARGET "linux" }}
+          docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/embedder:latest -f src/embedder/Dockerfile .
+        {{ else }}
+          docker build -t embedder:latest -f src/embedder/Dockerfile .
+        {{ end }}
+        
+  push-images:
+    desc: Pushes the docker images. Make sure to only push amd64 images
+    cmds:
+      - docker push {{ .REGISTRY }}/app:latest
+      - docker push {{ .REGISTRY }}/embedder:latest
