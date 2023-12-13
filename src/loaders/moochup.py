@@ -1,5 +1,5 @@
 import requests
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator 
 from src.loaders.payload import Payload, Types
 from bs4 import BeautifulSoup
 
@@ -7,8 +7,9 @@ from bs4 import BeautifulSoup
 class CourseAttributes(BaseModel):
     name: str
     abstract: str
-    languages: list[str]
-
+    language: str|None = Field(alias='languages')
+    
+    # moochup does not always provide a language, learn.ki-campus.org does
     @field_validator('abstract')
     @classmethod
     def remove_html_tags(cls, abstract: str) -> str:
@@ -18,14 +19,17 @@ class CourseAttributes(BaseModel):
         soup = BeautifulSoup(abstract, 'html.parser')
         return soup.get_text()
     
-    @field_validator('languages')
+    @field_validator('language', mode='before')
     @classmethod
-    def single_language(cls, languages: list[str]) -> str:
-        if len(languages) != 1:
+    def single_language(cls, languages: list[str|None]) -> str:
+        if len(languages) > 1:
             raise ValueError('Only one language is expected.')
-        return languages
+        elif len(languages) == 0:
+            return None
+        return languages[0]
     
 class CourseInfo(BaseModel):
+    id: str
     type: str
     attributes: CourseAttributes
 
@@ -48,7 +52,7 @@ def fetch_data(api_url:str='https://learn.ki-campus.org/bridges/moochub/courses'
     courses = []
     course_infos_page = fetch_pages(api_url)
     courses.extend(course_infos_page['data'])
-    while 'next' in course_infos_page['links']:
+    while 'next' in course_infos_page['links'] and course_infos_page['links']['next']:
         course_infos_page = fetch_pages(course_infos_page['links']['next'])
         courses.extend(course_infos_page['data'])
 
@@ -58,7 +62,7 @@ def fetch_data(api_url:str='https://learn.ki-campus.org/bridges/moochub/courses'
 def create_payload(course_info:CourseInfo) -> Payload:
     '''Extracts relevant information from course_info and returns a document dictionary.'''
     content = f'Kursname: {course_info.attributes.name}\n Kursbeschreibung: {course_info.attributes.abstract}'
-    return Payload(type=Types.course, vector_content=content, language=course_info.attributes.languages[0])
+    return Payload(type=Types.course, vector_content=content, language=course_info.attributes.language)
 
 def get_course_payloads() -> list[Payload]:
     '''Returns a list of all course payloads.'''
@@ -66,7 +70,7 @@ def get_course_payloads() -> list[Payload]:
     return [create_payload(course) for course in course_data]
 
 if __name__ == '__main__':
-    course_data = fetch_data()
+    course_data = fetch_data("https://moodle.ki-campus.org/local/open_api/courses.php")
     print(course_data)
 
     print(create_payload(course_data[0]))

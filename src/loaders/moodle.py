@@ -6,6 +6,10 @@ from pydantic import BaseModel, field_validator
 from src.helpers import get_secrets
 from bs4 import BeautifulSoup
 
+ENVIRONMENT = 'STAGING'
+if ENVIRONMENT == 'PRODUCTION':
+    print("Danger Zone: You are using PRODUCTION environment")
+
 def remove_html_tags(text:str) -> str:
     if '<' not in text:
         return text
@@ -39,17 +43,20 @@ class Moodle():
         base_url: base url of moodle instance
         token: token for moodle api
     """
-    def __init__(self, base_url:str=None, token:str=None) -> None:
+    def __init__(self, base_url:str=None, token:str=None, environment:str=ENVIRONMENT) -> None:
+        if environment not in ['PRODUCTION', 'STAGING']:
+            raise ValueError('Environment must be either PRODUCTION or STAGING.')
+        
         secrets = get_secrets()
         
         if base_url is None:
-            moodle_url = secrets['DATA_SOURCES']['STAGING']['MOODLE_URL']
-            self.base_url = f"https://{moodle_url}/webservice/rest/server.php"
+            moodle_url = secrets['DATA_SOURCES'][environment]['MOODLE_URL']
+            self.base_url = f"{moodle_url}webservice/rest/server.php"
         else:
             self.base_url = base_url
 
         if token is None:
-            self.token = secrets['DATA_SOURCES']['STAGING']['MOODLE_TOKEN']
+            self.token = secrets['DATA_SOURCES'][environment]['MOODLE_TOKEN']
         else:
             self.token = token
     
@@ -61,7 +68,12 @@ class Moodle():
             } 
         params.update(kwargs)
         response = requests.get(url=self.base_url, params=params)
-        return response.json()
+        response.raise_for_status()
+
+        response = response.json()
+        if 'exception' in response:
+            raise Exception(f"{response['errorcode']}: {response['message']}")
+        return response
 
     def get_courses(self) -> list[MoodleCourse]:
         '''get all courses that are set to visible on moodle'''

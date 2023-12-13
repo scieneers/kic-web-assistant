@@ -9,6 +9,6 @@ class Types(Enum):
 class Payload(BaseModel):
     type: Types
     vector_content: str
-    language: str
+    language: str|None
 
     model_config = ConfigDict(use_enum_values=True)
