@@ -1,7 +1,4 @@
 import requests
-from pydantic import BaseModel
-from abc import abstractmethod
-from typing import Dict, Iterator, List
 from pydantic import BaseModel, field_validator
 from src.helpers import get_secrets
 from bs4 import BeautifulSoup
@@ -20,6 +17,7 @@ class CourseTopic(BaseModel):
     id: int
     name: str
     summary: str
+    
     @field_validator('summary')
     @classmethod
     def remove_html(cls, summary:str) -> str:
