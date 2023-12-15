@@ -2,8 +2,8 @@
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 from qdrant_client.http.models import PointStruct
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+from llama_index.vector_stores.qdrant import QdrantVectorStore
 
 class VectorDBQdrant():
     def __init__(self, version='disk'):
@@ -12,19 +12,26 @@ class VectorDBQdrant():
             self.client = QdrantClient(':memory:')
         elif version == 'disk':
             self.client = QdrantClient('localhost', port=6333)
-        else:
-            raise ValueError("Version must be either 'memory' or 'disk'")
-        
-    def get_or_create_collection(self, collection_name, vector_size=None) -> None:
-        try:
-            _ = self.client.get_collection(collection_name=collection_name)
-        except ResponseHandlingException as e:
-            if self.version == 'disk':
+            try:
+                _ = self.client.get_collections()
+            except ResponseHandlingException as e:
                 print('Qdrant container not running? Run:')
                 print('docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1')
-            raise e
+                raise e
+        else:
+            raise ValueError("Version must be either 'memory' or 'disk'")
+    
+    def as_llama_vector_store(self, collection_name) -> QdrantVectorStore:
+        return QdrantVectorStore(client=self.client, collection_name=collection_name)
+
+    def delete_collection(self, collection_name) -> None:
+        self.client.delete_collection(collection_name=collection_name)
+
+    def create_collection(self, collection_name, vector_size) -> None:
+        try:
+            _ = self.client.get_collection(collection_name=collection_name)
         except UnexpectedResponse as e:
-            self.client.create_collection(
+            _ = self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(size=vector_size, distance=Distance.DOT),
             )

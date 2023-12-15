@@ -1,7 +1,19 @@
 import requests
 from pydantic import BaseModel, Field, field_validator 
-from src.loaders.payload import Payload, Types
 from bs4 import BeautifulSoup
+from pydantic import BaseModel, ConfigDict
+from enum import Enum
+
+class Types(Enum):
+    course = 'course'
+    faq = 'faq'
+
+class Payload(BaseModel):
+    type: Types
+    vector_content: str
+    language: str|None
+
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class CourseAttributes(BaseModel):

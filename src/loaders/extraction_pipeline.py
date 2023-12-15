@@ -1,30 +1,27 @@
-from src.loaders.moochup import get_course_payloads
-from src.loaders.payload import Payload
+from src.loaders.moodle import Moodle
+from llama_index import Document
 from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
 from src.vectordb.qdrant import VectorDBQdrant
+from llama_index.text_splitter import SentenceSplitter
+from llama_index.ingestion import IngestionPipeline
 
-# use all loaders 
-documents:list[Payload] = []
-course_payloads = get_course_payloads()
-documents.extend(course_payloads)
+# data extraction 
+documents:list[Document] = []
+courses = Moodle(environment='PRODUCTION').extract()
+documents.extend(courses)
 
-# create embeddings
-embedder = MultilingualE5LargeEmbedder()
-embeddings = [embedder.embed(payload.vector_content, type='passage') for payload in documents]
+# loading pipeline
+vector_store = VectorDBQdrant(version='disk')
+vector_store.delete_collection(collection_name="assistant")
+pipeline = IngestionPipeline(
+    transformations=[
+        SentenceSplitter(chunk_size=256, chunk_overlap=16),
+        MultilingualE5LargeEmbedder(),
+    ],
+    vector_store=vector_store.as_llama_vector_store(collection_name="assistant"),
+)
 
-# store in db
-COLLECTION_NAME = 'test_collection'
-points = [{'id': i, 'vector': embedding, 'payload': payload.model_dump()} 
-          for i, (embedding, payload) in enumerate(zip(embeddings, documents))]
-print(f'Example point: {points[0]}')
+pipeline.run(documents=documents)
 
-vectordb = VectorDBQdrant()
-vectordb.get_or_create_collection(collection_name=COLLECTION_NAME, vector_size=len(embeddings[0]))
-vectordb.upsert(collection_name=COLLECTION_NAME, points=points)
-
-# test
-while True:
-    query = input('Enter query: ')
-    query_embedding = embedder.embed(query)
-    search_result = vectordb.search(collection_name=COLLECTION_NAME, query_vector=query_embedding, with_payload=True)
-    print(search_result)
+#print(vector_store.client.scroll(collection_name='assistant'))
+print('Completed ingestion pipeline.')
