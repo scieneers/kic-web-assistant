@@ -12,13 +12,13 @@ documents.extend(courses)
 
 # loading pipeline
 vector_store = VectorDBQdrant(version='disk')
-vector_store.delete_collection(collection_name="assistant")
+vector_store.delete_collection(collection_name='assistant')
 pipeline = IngestionPipeline(
     transformations=[
         SentenceSplitter(chunk_size=256, chunk_overlap=16),
         MultilingualE5LargeEmbedder(),
     ],
-    vector_store=vector_store.as_llama_vector_store(collection_name="assistant"),
+    vector_store=vector_store.as_llama_vector_store(collection_name='assistant'),
 )
 
 pipeline.run(documents=documents)

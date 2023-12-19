@@ -82,7 +82,7 @@ def get_course_payloads() -> list[Payload]:
     return [create_payload(course) for course in course_data]
 
 if __name__ == '__main__':
-    course_data = fetch_data("https://moodle.ki-campus.org/local/open_api/courses.php")
+    course_data = fetch_data('https://moodle.ki-campus.org/local/open_api/courses.php')
     print(course_data)
 
     print(create_payload(course_data[0]))

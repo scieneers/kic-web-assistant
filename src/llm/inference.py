@@ -13,8 +13,9 @@ from llama_index.llms import ChatMessage, MessageRole, AzureOpenAI
 from llama_index import ServiceContext
 from llama_index import get_response_synthesizer
 import llama_index
+from llama_index.embeddings.base import BaseEmbedding
 
-llama_index.set_global_handler("simple")
+llama_index.set_global_handler('simple')
 
 condense_question_prompt = PromptTemplate("""\
 Given a conversation (between Human and Assistant) and a follow up message from Human, \
@@ -42,9 +43,9 @@ Dont add any additional information that is not in the context. Don't make up an
 Keep your answers short and simple, you are a chat bot!'''
 
 class KiCampusRetriever(BaseRetriever):
-    def __init__(self, embedder: MultilingualE5LargeEmbedder):    
+    def __init__(self, embedder:BaseEmbedding=MultilingualE5LargeEmbedder()):    
         self.embedder = embedder
-        self.vector_store = VectorDBQdrant('disk').as_llama_vector_store(collection_name="assistant")
+        self.vector_store = VectorDBQdrant('disk').as_llama_vector_store(collection_name='assistant')
         super().__init__()
 
     def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
@@ -54,6 +55,10 @@ class KiCampusRetriever(BaseRetriever):
 
         nodes_with_scores = []
         for index, node in enumerate(query_result.nodes):
+            # how node gets rendered as context for the llm
+            # alternatively create a custom node post-processor and pass to query engine https://docs.llamaindex.ai/en/stable/module_guides/querying/node_postprocessors/root.html
+            node.text_template = '{metadata_str}\nContent: {content}'
+
             score: list[float] = None
             if query_result.similarities is not None:
                 score = query_result.similarities[index]
@@ -61,32 +66,37 @@ class KiCampusRetriever(BaseRetriever):
 
         return nodes_with_scores
 
-
+# TODO alter system prompt,
 class KICampusAssistant():
-    def __init__(self):
-        self.embedder = MultilingualE5LargeEmbedder()
-        self.retriever = KiCampusRetriever(self.embedder)
+    def __init__(self, verbose:bool=False):
+        self.retriever = KiCampusRetriever()
 
-        #print(retriever.retrieve("what do you offer about ethical AI?"))
-
+        #print(retriever.retrieve('what do you offer about ethical AI?'))
         secrets = get_secrets()
         llm = AzureOpenAI(
-            model="gpt-35-turbo",
-            deployment_name="gpt-3_5",
+            model='gpt-35-turbo',
+            deployment_name='gpt-3_5',
             api_key=secrets['AZURE']['OPENAI_KEY'],
             azure_endpoint=secrets['AZURE']['OPENAI_ENDPOINT'],
             api_version='2023-05-15',
         )
-        service_context = ServiceContext.from_defaults(llm=llm, embed_model=self.embedder)
 
-        response_synthesizer = get_response_synthesizer(service_context=service_context, response_mode='compact')
-
+        service_context = ServiceContext.from_defaults(llm=llm, embed_model=None)#, embed_model=self.embedder)
+        response_synthesizer = get_response_synthesizer(service_context=service_context, 
+                                                        response_mode='compact')
         query_engine = RetrieverQueryEngine(retriever=self.retriever, response_synthesizer=response_synthesizer)
         
-        # Example list of `ChatMessage` objects
+        if verbose:
+            # only the text_qa_template is used for the query engine
+            for k, p in query_engine.get_prompts().items():
+                print(f'\n**Prompt Key**: {k}\n**Text:**:')
+                print(p.get_template())
+            print('*** Prompt Examples End ***')
+
+        # Wrap query_engine to fit the chat history and new query into a single message query containing all context
         chat_history = [
-            ChatMessage(role=MessageRole.USER, content="Hello assistant."),
-            ChatMessage(role=MessageRole.ASSISTANT, content="Hey there."),
+            ChatMessage(role=MessageRole.USER, content='Hello assistant.'),
+            ChatMessage(role=MessageRole.ASSISTANT, content='Hey there.'),
         ]
         self.chat_engine = CondenseQuestionChatEngine.from_defaults(
             query_engine=query_engine,
@@ -105,5 +115,6 @@ class KICampusAssistant():
         self.chat_engine.reset()
 
 if __name__ == '__main__':
-    assistant = KICampusAssistant()
+    assistant = KICampusAssistant(verbose=True)
     assistant.answer(query='Welche Kurse zu ethischer KI habt ihr im Angebot?')
+    print('wait')

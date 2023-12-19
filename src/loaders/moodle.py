@@ -3,16 +3,25 @@ from pydantic import BaseModel, field_validator
 from src.helpers import get_secrets
 from bs4 import BeautifulSoup
 from llama_index import Document
+import re
 
 ENVIRONMENT = 'STAGING'
 if ENVIRONMENT == 'PRODUCTION':
-    print("Danger Zone: You are using PRODUCTION environment")
+    print('Danger Zone: You are using PRODUCTION environment')
 
-def remove_html_tags(text:str) -> str:
+def process_html_summaries(text:str) -> str:
+    '''remove html tags from summaries, beautify poorly formatted texts'''
     if '<' not in text:
-        return text.strip()
-    soup = BeautifulSoup(text, 'html.parser')
-    return soup.get_text().strip()
+        new_text = text.strip()
+    else:
+        soup = BeautifulSoup(text, 'html.parser')
+        for br_tag in soup.find_all('br'):
+            br_tag.replace_with(' ')
+        new_text = soup.get_text().strip()
+    new_text = new_text.replace('\n', ' ').replace('\r', '')
+    #\r = carriage return character 
+    new_text = re.sub(r'\s{3,}', '  ', new_text)
+    return new_text
 
 class CourseTopic(BaseModel):
     id: int
@@ -24,15 +33,11 @@ class CourseTopic(BaseModel):
     def remove_html(cls, summary:str) -> str:
         if not summary:
             return None
-        return remove_html_tags(summary)
+        return process_html_summaries(summary)
     
     def __str__(self) -> str:
-        text = f'Topic name: {self.name}'
-        if self.summary is not None:
-            text += f'\nTopic summary: {self.summary}'
-        return text
+        return f'{self.name}: {self.summary}'
     
-
 class MoodleCourse(BaseModel):
     id: int
     shortname: str
@@ -48,51 +53,49 @@ class MoodleCourse(BaseModel):
     def remove_html(cls, summary:str) -> str:
         if not summary:
             raise ValueError('Summary should not be empty')
-        return remove_html_tags(summary)
+        return process_html_summaries(summary)
     
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.url = f"{self.url}{self.id}"
+        self.url = f'{self.url}{self.id}'
 
     def __str__(self) -> str:
-        topics = '\n'.join([str(topic) for topic in self.topics])
-        text = f"""
-        Course Summary: {self.summary}
-        Course Topics: 
-        {topics}"""
+        topics = '\n '.join([str(topic) for topic in self.topics])
+        text = (f'Course Summary: {self.summary}\n'
+                'Course Topics:\n'
+                f'{topics}')
         return text
 
     def to_document(self) -> Document:
         text = str(self)
-        metadata = {"id": self.id, 
-                    "shortname": self.shortname,
-                    "fullname": self.fullname, 
-                    "type": "course",
-                    "url": self.url}
+        metadata = {'id': self.id, 
+                    'shortname': self.shortname,
+                    'fullname': self.fullname, 
+                    'type': 'course',
+                    'url': self.url}
         if self.lang:
             metadata['lang'] = self.lang
         return Document(text=text, metadata=metadata)
         
 
 class Moodle():
-    """class for Moodle API clients
-        base_url: base url of moodle instance
-        token: token for moodle api
-    """
+    '''class for Moodle API clients
+       base_url: base url of moodle instance
+       token: token for moodle api'''
     def __init__(self, environment:str=ENVIRONMENT, base_url:str=None, token:str=None) -> None:
         if environment not in ['PRODUCTION', 'STAGING']:
             raise ValueError('Environment must be either PRODUCTION or STAGING.')
         
         secrets = get_secrets()
         self.base_url = secrets['DATA_SOURCES'][environment]['MOODLE_URL'] if base_url is None else base_url
-        self.api_endpoint = f"{self.base_url}webservice/rest/server.php"
+        self.api_endpoint = f'{self.base_url}webservice/rest/server.php'
         self.token = secrets['DATA_SOURCES'][environment]['MOODLE_TOKEN'] if token is None else token
     
     def api_call(self, function:str, **kwargs) -> list[dict]:
         params = {
-                "wstoken": self.token,
-                "wsfunction": function,
-                "moodlewsrestformat": "json",
+                'wstoken': self.token,
+                'wsfunction': function,
+                'moodlewsrestformat': 'json',
             } 
         params.update(kwargs)
         response = requests.get(url=self.api_endpoint, params=params)
@@ -111,7 +114,7 @@ class Moodle():
         return courses
         
     def get_course_contents(self, course_id:int) -> list[CourseTopic]:
-        """get all contents of a course"""
+        '''get all contents of a course'''
         course_contents = self.api_call('core_course_get_contents', courseid=course_id)
         course_contents = [CourseTopic(**topic) for topic in course_contents]
         return course_contents
@@ -124,6 +127,6 @@ class Moodle():
         return course_documents
 
 if __name__ == '__main__':
-    moodle = Moodle(environment="PRODUCTION")
+    moodle = Moodle(environment='PRODUCTION')
     courses = moodle.extract()
     print(courses)

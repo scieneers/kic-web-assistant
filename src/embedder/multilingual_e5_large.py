@@ -11,7 +11,7 @@ class MultilingualE5LargeEmbedder(BaseEmbedding):
 
     def __init__(self, **kwargs):
         # tokenizer is not thread-safe, chainlit uses multiple threads
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
         self._tokenizer = AutoTokenizer.from_pretrained('intfloat/multilingual-e5-large')
         self._model = AutoModel.from_pretrained('intfloat/multilingual-e5-large')
