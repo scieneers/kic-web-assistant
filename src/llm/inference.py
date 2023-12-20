@@ -8,39 +8,14 @@ from llama_index import QueryBundle
 from llama_index.schema import NodeWithScore
 from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
 from llama_index.chat_engine import CondenseQuestionChatEngine
-from llama_index.prompts import PromptTemplate
 from llama_index.llms import ChatMessage, MessageRole, AzureOpenAI
 from llama_index import ServiceContext
 from llama_index import get_response_synthesizer
 import llama_index
 from llama_index.embeddings.base import BaseEmbedding
+from src.llm.prompts import condense_question, text_qa_template
 
 llama_index.set_global_handler('simple')
-
-condense_question_prompt = PromptTemplate("""\
-Given a conversation (between Human and Assistant) and a follow up message from Human, \
-rewrite the message to be a standalone question that captures all relevant context \
-from the conversation.
-
-<Chat History>
-{chat_history}
-
-<Follow Up Message>
-{question}
-
-<Standalone question>
-"""
-)
-
-# TODO where to override the system prompt for chat engine?
-system_prompt = '''You are a chat bot on our website ki-campus.org helping and answering its user. We are a learning platform for artificial intelligence with free online courses, videos and podcasts in various topics of AI and data literacy. \
-As an research and development project, the AI Campus is funded by the German Federal Ministry of Education and Research (BMBF). \
-You audience speaks german or english, answer in the language the user asked the question in.
-
-You will be provided with a pre-selection of context to answer the question. You don't need to use all of it, choose what you think is relevant. 
-Dont add any additional information that is not in the context. Don't make up an answer! If you don't know the answer, just say that you don't know. 
-
-Keep your answers short and simple, you are a chat bot!'''
 
 class KiCampusRetriever(BaseRetriever):
     def __init__(self, embedder:BaseEmbedding=MultilingualE5LargeEmbedder()):    
@@ -66,12 +41,10 @@ class KiCampusRetriever(BaseRetriever):
 
         return nodes_with_scores
 
-# TODO alter system prompt,
 class KICampusAssistant():
     def __init__(self, verbose:bool=False):
         self.retriever = KiCampusRetriever()
 
-        #print(retriever.retrieve('what do you offer about ethical AI?'))
         secrets = get_secrets()
         llm = AzureOpenAI(
             model='gpt-35-turbo',
@@ -81,26 +54,26 @@ class KICampusAssistant():
             api_version='2023-05-15',
         )
 
-        service_context = ServiceContext.from_defaults(llm=llm, embed_model=None)#, embed_model=self.embedder)
+        service_context = ServiceContext.from_defaults(llm=llm, embed_model=None)
         response_synthesizer = get_response_synthesizer(service_context=service_context, 
-                                                        response_mode='compact')
+                                                        response_mode='compact', text_qa_template=text_qa_template)
         query_engine = RetrieverQueryEngine(retriever=self.retriever, response_synthesizer=response_synthesizer)
         
         if verbose:
-            # only the text_qa_template is used for the query engine
+            # the refine prompt templater is only used when compact prompting is too long for the llm
             for k, p in query_engine.get_prompts().items():
                 print(f'\n**Prompt Key**: {k}\n**Text:**:')
                 print(p.get_template())
             print('*** Prompt Examples End ***')
 
-        # Wrap query_engine to fit the chat history and new query into a single message query containing all context
+        # Wrap query_engine: Fits the chat history and the new query into a single query containing all previous context
         chat_history = [
             ChatMessage(role=MessageRole.USER, content='Hello assistant.'),
             ChatMessage(role=MessageRole.ASSISTANT, content='Hey there.'),
         ]
         self.chat_engine = CondenseQuestionChatEngine.from_defaults(
             query_engine=query_engine,
-            condense_question_prompt=condense_question_prompt,
+            condense_question_prompt=condense_question,
             verbose=True,
             service_context=service_context,
             chat_history=chat_history,
