@@ -11,7 +11,7 @@ task: `brew install go-task`
 
 ## Run frontent: streamlit
 Go into the src/frontend folder and run:
-`streamlit run frontend.py `
+`streamlit run frontend.py`
 
 
 ## Docker

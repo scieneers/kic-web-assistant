@@ -18,7 +18,9 @@ from src.llm.prompts import condense_question, text_qa_template
 llama_index.set_global_handler('simple')
 
 class KiCampusRetriever(BaseRetriever):
-    def __init__(self, embedder:BaseEmbedding=MultilingualE5LargeEmbedder()):    
+    def __init__(self, embedder:BaseEmbedding=None):
+        if embedder is None:
+            embedder = MultilingualE5LargeEmbedder()
         self.embedder = embedder
         self.vector_store = VectorDBQdrant('disk').as_llama_vector_store(collection_name='assistant')
         super().__init__()
@@ -67,20 +69,16 @@ class KICampusAssistant():
             print('*** Prompt Examples End ***')
 
         # Wrap query_engine: Fits the chat history and the new query into a single query containing all previous context
-        chat_history = [
-            ChatMessage(role=MessageRole.USER, content='Hello assistant.'),
-            ChatMessage(role=MessageRole.ASSISTANT, content='Hey there.'),
-        ]
         self.chat_engine = CondenseQuestionChatEngine.from_defaults(
             query_engine=query_engine,
             condense_question_prompt=condense_question,
             verbose=True,
             service_context=service_context,
-            chat_history=chat_history,
+            chat_history=None,
         )
 
-    def answer(self, query: str) -> str:
-        response = self.chat_engine.chat(query)
+    def chat(self, query: str, chat_history: list[ChatMessage] = None) -> str:
+        response = self.chat_engine.chat(query, chat_history=chat_history)
         print(response)
         return response
 
