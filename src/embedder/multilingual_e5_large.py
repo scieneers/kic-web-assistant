@@ -1,18 +1,26 @@
+from llama_index.embeddings.base import BaseEmbedding, Embedding
+from llama_index.bridge.pydantic import PrivateAttr
 from transformers import AutoTokenizer, AutoModel
 from torch import Tensor
 import torch.nn.functional as F
 import os
         
-class MultilingualE5LargeEmbedder:
-    def __init__(self):
-        # tokenizer is not thread-safe, chainlit uses multiple threads
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+class MultilingualE5LargeEmbedder(BaseEmbedding):
+    _tokenizer: AutoTokenizer = PrivateAttr()
+    _model: AutoModel = PrivateAttr()
 
-        self.tokenizer = AutoTokenizer.from_pretrained('intfloat/multilingual-e5-large')
-        self.model = AutoModel.from_pretrained('intfloat/multilingual-e5-large')
+    def __init__(self, **kwargs):
+        # tokenizer is not thread-safe, chainlit uses multiple threads
+        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+        self._tokenizer = AutoTokenizer.from_pretrained('intfloat/multilingual-e5-large')
+        self._model = AutoModel.from_pretrained('intfloat/multilingual-e5-large')
+
+        super().__init__(**kwargs)
+
 
     def tokenize(self, input_text:str) -> dict[str, Tensor]:        
-        token_dict = self.tokenizer(input_text, max_length=513, padding=True, truncation=True, return_tensors='pt')
+        token_dict = self._tokenizer(input_text, max_length=513, padding=True, truncation=True, return_tensors='pt')
         
         token_len = token_dict['input_ids'].shape[1]
         if token_len > 512:
@@ -35,13 +43,24 @@ class MultilingualE5LargeEmbedder:
             raise ValueError(f"Unknown value for 'type': {type}")
 
         tokens = self.tokenize(input_text)
-        outputs = self.model(**tokens)
+        outputs = self._model(**tokens)
         embeddings = average_pool(outputs.last_hidden_state, tokens['attention_mask'])
         embeddings_norm = F.normalize(embeddings, p=2, dim=1)
         return embeddings_norm.tolist()[0]
 
-if __name__ == '__main__':
+    def _get_query_embedding(self, query: str) -> list[float]:
+        '''Implementation for llama_index wrapper'''
+        return self.embed(query, type='query')
+    
+    def _aget_query_embedding(self, query: str) -> list[float]:
+        '''Implementation for llama_index wrapper'''
+        return self.embed(query, type='query')
 
+    def _get_text_embedding(self, text: str) -> list[float]:
+        '''Implementation for llama_index wrapper'''
+        return self.embed(text, type='passage')
+    
+if __name__ == '__main__':
     # Each input text should start with 'query: ' or 'passage: ', even for non-English texts.
     # For tasks other than retrieval, you can simply use the 'query: ' prefix.
     input_texts = ['how much protein should a female eat',

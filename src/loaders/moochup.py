@@ -1,7 +1,19 @@
 import requests
 from pydantic import BaseModel, Field, field_validator 
-from src.loaders.payload import Payload, Types
 from bs4 import BeautifulSoup
+from pydantic import BaseModel, ConfigDict
+from enum import Enum
+
+class Types(Enum):
+    course = 'course'
+    faq = 'faq'
+
+class Payload(BaseModel):
+    type: Types
+    vector_content: str
+    language: str|None
+
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class CourseAttributes(BaseModel):
@@ -70,7 +82,7 @@ def get_course_payloads() -> list[Payload]:
     return [create_payload(course) for course in course_data]
 
 if __name__ == '__main__':
-    course_data = fetch_data("https://moodle.ki-campus.org/local/open_api/courses.php")
+    course_data = fetch_data('https://moodle.ki-campus.org/local/open_api/courses.php')
     print(course_data)
 
     print(create_payload(course_data[0]))
