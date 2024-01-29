@@ -40,6 +40,7 @@ class CourseTopic(BaseModel):
 
 
 class MoodleCourse(BaseModel):
+    '''Highest level representation of a Moodle course. Has 1 to many topics (called modules in ki-campus frontend).'''
     id: int
     shortname: str
     fullname: str
