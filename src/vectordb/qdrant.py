@@ -4,7 +4,7 @@ from qdrant_client.http.models import Distance, VectorParams
 from qdrant_client.http.models import PointStruct
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from src.helpers import get_vectordb_api_key
+from env import EnvHelper
 
 class VectorDBQdrant():
     def __init__(self, version='disk'):
@@ -20,9 +20,9 @@ class VectorDBQdrant():
                 print('docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1')
                 raise e
         elif version == 'remote':
-            self.client = QdrantClient(url='https://dev.kic.vectordb.wuseligerwaschbaer.com', 
+            self.client = QdrantClient(url=EnvHelper().QDRANT_URL, 
                                        port=443,
-                                       api_key=get_vectordb_api_key())
+                                       api_key=EnvHelper().QDRANT_TOKEN)
             _ = self.client.get_collections()
         else:
             raise ValueError("Version must be either 'memory' or 'disk' or 'remote'")

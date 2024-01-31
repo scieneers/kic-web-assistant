@@ -1,13 +1,9 @@
 import requests
 from pydantic import BaseModel, field_validator
-from src.helpers import get_secrets
+from env import EnvHelper
 from bs4 import BeautifulSoup
 from llama_index import Document
 import re
-
-ENVIRONMENT = 'STAGING'
-if ENVIRONMENT == 'PRODUCTION':
-    print('Danger Zone: You are using PRODUCTION environment')
 
 def process_html_summaries(text:str) -> str:
     '''remove html tags from summaries, beautify poorly formatted texts'''
@@ -82,14 +78,11 @@ class Moodle():
     '''class for Moodle API clients
        base_url: base url of moodle instance
        token: token for moodle api'''
-    def __init__(self, environment:str=ENVIRONMENT, base_url:str=None, token:str=None) -> None:
-        if environment not in ['PRODUCTION', 'STAGING']:
-            raise ValueError('Environment must be either PRODUCTION or STAGING.')
-        
-        secrets = get_secrets()
-        self.base_url = secrets['DATA_SOURCES'][environment]['MOODLE_URL'] if base_url is None else base_url
+    def __init__(self, base_url:str=None, token:str=None) -> None:
+        secrets = EnvHelper()
+        self.base_url = secrets.DATA_SOURCE_MOODLE_URL if base_url is None else base_url
         self.api_endpoint = f'{self.base_url}webservice/rest/server.php'
-        self.token = secrets['DATA_SOURCES'][environment]['MOODLE_TOKEN'] if token is None else token
+        self.token = secrets.DATA_SOURCE_MOODLE_TOKEN if token is None else token
     
     def api_call(self, function:str, **kwargs) -> list[dict]:
         params = {
@@ -127,6 +120,6 @@ class Moodle():
         return course_documents
 
 if __name__ == '__main__':
-    moodle = Moodle(environment='PRODUCTION')
+    moodle = Moodle()
     courses = moodle.extract()
     print(courses)
