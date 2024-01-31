@@ -1,6 +1,6 @@
 from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
 from src.vectordb.qdrant import VectorDBQdrant
-from src.helpers import get_secrets
+from env import EnvHelper
 from llama_index.retrievers import BaseRetriever
 from llama_index.vector_stores import VectorStoreQuery
 from llama_index.query_engine import RetrieverQueryEngine
@@ -47,12 +47,12 @@ class KICampusAssistant():
     def __init__(self, verbose:bool=False):
         self.retriever = KiCampusRetriever()
 
-        secrets = get_secrets()
+        secrets = EnvHelper()
         llm = AzureOpenAI(
             model='gpt-35-turbo',
             deployment_name='gpt-3_5',
-            api_key=secrets['AZURE']['OPENAI_KEY'],
-            azure_endpoint=secrets['AZURE']['OPENAI_ENDPOINT'],
+            api_key=secrets.AZURE_OPENAI_KEY,
+            azure_endpoint=secrets.AZURE_OPENAI_URL,
             api_version='2023-05-15',
         )
 

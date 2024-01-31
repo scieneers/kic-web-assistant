@@ -6,6 +6,5 @@
 ## vector store
 **/qdrant_storage
 
-
-# Temp local keys
-src/keys.json
+# Local environment variables and keys
+.env

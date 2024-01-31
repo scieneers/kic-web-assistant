@@ -13,7 +13,6 @@ task: `brew install go-task`
 Go into the src/frontend folder and run:
 `streamlit run frontend.py`
 
-
 ## Docker
 ### Build and push Docker images locally
 Before pushing the docker image you need to be authenticated docker via `gcloud auth configure-docker europe-west3-docker.pkg.dev`.

@@ -6,6 +6,11 @@ vars:
   REGISTRY: "europe-west3-docker.pkg.dev/kic-chat-assistant/docker-registry"
 
 tasks:
+  decrypt-env:
+    desc: update the local .env file
+    cmds:
+      - sops --decrypt encrypted.env > .env
+
   print-vars:
     cmds:
       - | 

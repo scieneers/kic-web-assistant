@@ -1,0 +1,3 @@
+creation_rules:
+  - gcp_kms: projects/kic-chat-assistant/locations/europe-west3/keyRings/sops/cryptoKeys/sops
+    encrypted_regex: ".*"
