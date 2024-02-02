@@ -1,6 +1,6 @@
 import requests
 from pydantic import BaseModel, field_validator
-from env import EnvHelper
+from src.env import EnvHelper
 from bs4 import BeautifulSoup
 from llama_index import Document
 import re
@@ -113,6 +113,7 @@ class Moodle():
         return course_contents
 
     def extract(self) -> list[MoodleCourse]:
+        '''extracts all courses and their contents from moodle'''
         courses = self.get_courses()
         for course in courses:
             course.topics = self.get_course_contents(course.id)

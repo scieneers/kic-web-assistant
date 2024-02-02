@@ -1,6 +1,6 @@
 from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
 from src.vectordb.qdrant import VectorDBQdrant
-from env import EnvHelper
+from src.env import EnvHelper
 from llama_index.retrievers import BaseRetriever
 from llama_index.vector_stores import VectorStoreQuery
 from llama_index.query_engine import RetrieverQueryEngine

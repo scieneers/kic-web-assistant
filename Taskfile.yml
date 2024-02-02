@@ -6,6 +6,12 @@ vars:
   REGISTRY: "europe-west3-docker.pkg.dev/kic-chat-assistant/docker-registry"
 
 tasks:
+  add-secret:
+    requires:
+      vars: [KEY, VALUE]
+    cmds:
+      - sops --set '["{{.KEY}}"] "{{.VALUE}}"' encrypted.env
+
   decrypt-env:
     desc: update the local .env file
     cmds:

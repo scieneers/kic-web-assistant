@@ -23,6 +23,10 @@ class EnvHelper:
         else:
             self.DATA_SOURCE_MOODLE_URL = os.getenv("DATA_SOURCE_STAGING_MOODLE_URL", "")
             self.DATA_SOURCE_MOODLE_TOKEN = os.getenv("DATA_SOURCE_STAGING_MOODLE_TOKEN", "")
+        self.DATA_SOURCE_MOOCHUP_HPI_URL = os.getenv("DATA_SOURCE_MOOCHUP_HPI_URL", "")
+        self.DATA_SOURCE_MOOCHUP_MOODLE_URL = os.getenv("DATA_SOURCE_MOOCHUP_MOODLE_URL", "")
+        # Debug Setting
+        self.DEBUG = bool(os.getenv("DEBUG", "False"))
 
     @staticmethod
     def check_env():

@@ -1,5 +1,5 @@
 
-from src.loaders.moochup import CourseAttributes, CourseInfo, create_payload
+from src.loaders.moochup import CourseAttributes, CourseInfo
 import pytest
 
 @pytest.mark.parametrize('input, expected', 
@@ -63,5 +63,4 @@ def test_moochup_payload_creation():
     }
 
     course = CourseInfo(**course_example)
-    payload = create_payload(course)
-    assert True
+    course.to_document()

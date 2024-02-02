@@ -4,7 +4,7 @@ from qdrant_client.http.models import Distance, VectorParams
 from qdrant_client.http.models import PointStruct
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from env import EnvHelper
+from src.env import EnvHelper
 
 class VectorDBQdrant():
     def __init__(self, version='disk'):
@@ -29,9 +29,6 @@ class VectorDBQdrant():
     
     def as_llama_vector_store(self, collection_name) -> QdrantVectorStore:
         return QdrantVectorStore(client=self.client, collection_name=collection_name)
-
-    def delete_collection(self, collection_name) -> None:
-        self.client.delete_collection(collection_name=collection_name)
 
     def create_collection(self, collection_name, vector_size) -> None:
         try:

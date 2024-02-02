@@ -8,3 +8,6 @@
 
 # Local environment variables and keys
 .env
+
+## Local dev
+outputs

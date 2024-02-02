@@ -5,14 +5,17 @@ from src.vectordb.qdrant import VectorDBQdrant
 from llama_index.text_splitter import SentenceSplitter
 from llama_index.ingestion import IngestionPipeline
 
+# Index for chat with your course content
+
 # data extraction 
 documents:list[Document] = []
 courses = Moodle(environment='PRODUCTION').extract()
 documents.extend(courses)
 
+
 # loading pipeline
 vector_store = VectorDBQdrant(version='disk')
-vector_store.delete_collection(collection_name='assistant')
+vector_store.client.delete_collection(collection_name='assistant')
 pipeline = IngestionPipeline(
     transformations=[
         SentenceSplitter(chunk_size=256, chunk_overlap=16),
