@@ -19,14 +19,14 @@ tasks:
 
   print-vars:
     cmds:
-      - | 
+      - |
         echo "TARGET: {{ .TARGET }}"
         echo "REGISTRY: {{ .REGISTRY }}"
 
   build-frontend:
     desc: Build the docker image for the streamlit frontend
     cmds:
-      - | 
+      - |
         {{ if eq .TARGET "linux" }}
           docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/app:latest -f src/frontend/Dockerfile .
         {{ else }}
@@ -36,13 +36,13 @@ tasks:
   build-embedder:
     desc: Build the docker image for the embedder API
     cmds:
-      - | 
+      - |
         {{ if eq .TARGET "linux" }}
           docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/embedder:latest -f src/embedder/Dockerfile .
         {{ else }}
           docker build -t embedder:latest -f src/embedder/Dockerfile .
         {{ end }}
-        
+
   push-images:
     desc: Pushes the docker images. Make sure to only push amd64 images
     cmds:

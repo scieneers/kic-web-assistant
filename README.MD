@@ -1,11 +1,12 @@
 # Dependencies
-python 3.11
-poetry 1.7.1 
-task: `brew install go-task`
+- python 3.11
+- poetry 1.7.1 & `poetry install`
+- task: `brew install go-task`
+- install pre-commit hooks: [`pre-commit`](https://github.com/pre-commit/pre-commit) `install`
 
 # Local development
 
-## Install [Qdrant](https://github.com/qdrant/qdrant-client)
+## VectorDB [Qdrant](https://github.com/qdrant/qdrant-client)
 `docker pull qdrant/qdrant:v1.6.1`
 `docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1`
 
@@ -19,6 +20,7 @@ Before pushing the docker image you need to be authenticated docker via `gcloud 
 
 If you're working with a mac that is using an arm64 architecture, you specifically need to build a docker image based on an [amd architecture for cloud run](https://stackoverflow.com/questions/66920645/exec-format-error-when-running-containers-build-with-apple-m1-chip-arm-based).
 
+# Data Extraction
 
 # Moodle
 To access content from Moodle, you need access to Moodle courses via the REST API. To set up the integration, do the following steps:
@@ -28,8 +30,8 @@ To access content from Moodle, you need access to Moodle courses via the REST AP
 3. (Optional): Create a technical new user/roles
 4. Create a new external service _Site Administration_ -> _Server_ -> _External services_. Give it a name and enable _Enabled_, _Authorized users only_ and _Can download files_ (under _Show more..._).
 5. Add the user as an _Authorised User_ to the external service.
-6. Add the following functions to the external service: 
-    - 
+6. Add the following functions to the external service:
+    -
     -
 7. Create a token for the user and external service under _Site Administration_ -> _Server_ -> _Manage tokens_. This allows you to authenticate against the REST API.
 

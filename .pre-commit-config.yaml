@@ -1,0 +1,31 @@
+exclude: '.git'
+default_stages: [commit]
+fail_fast: false
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-added-large-files # 500kb
+      - id: trailing-whitespace
+        exclude: ^notebooks/.*$|^mlruns/.*$
+      - id: end-of-file-fixer # Checks for a newline at the end of the file
+        exclude: ^notebooks/.*$|^mlruns/.*$
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-yaml
+        args:
+        - --unsafe
+        exclude: ^helm
+  - repo: https://github.com/pre-commit/mirrors-isort
+    rev: v5.10.1
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+        types: [ python ]
+  - repo: https://github.com/ambv/black
+    rev: 23.11.0
+    hooks:
+      - id: black
+        language_version: python3
+        args: [--line-length=120]
