@@ -7,6 +7,9 @@ authors = [
     "Sebastian Drewke <sebastian.drewke@scieneers.de>",
 ]
 readme = "README.md"
+packages = [
+    { include = "src" },
+]
 
 packages = [
     { include = "src" }
