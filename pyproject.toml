@@ -7,9 +7,6 @@ authors = [
     "Sebastian Drewke <sebastian.drewke@scieneers.de>",
 ]
 readme = "README.md"
-packages = [
-    { include = "src" },
-]
 
 [tool.poetry.dependencies]
 python = "~3.11"
