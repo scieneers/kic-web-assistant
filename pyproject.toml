@@ -2,8 +2,14 @@
 name = "kic-web-assistant"
 version = "0.1.0"
 description = "System to guide the users of ki-campus.org"
-authors = ["Jonas Bremer <jonas.bremer@scieneers.de>"]
+authors = [
+    "Jonas Bremer <jonas.bremer@scieneers.de>",
+    "Sebastian Drewke <sebastian.drewke@scieneers.de>",
+]
 readme = "README.md"
+packages = [
+    { include = "src" },
+]
 
 [tool.poetry.dependencies]
 python = "~3.11"
