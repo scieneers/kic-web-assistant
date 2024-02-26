@@ -26,13 +26,18 @@ If you're working with a mac that is using an arm64 architecture, you specifical
 To access content from Moodle, you need access to Moodle courses via the REST API. To set up the integration, do the following steps:
 0. Get admin access to moodle.
 1. Enable Web Services: _Site Administration_ -> _General_ -> _Advanced Features_ -> _Enable web services_
-2. Enable REST Protocol: _Site Administration_ -> _Server_ -> _Web Services Manage Protocols_ -> Enable REST protocol
+2. Enable REST Protocol: _Site Administration_ -> _Server_ -> _Web Services_ -> _Manage Protocols_ -> _Enable REST protocol_
 3. (Optional): Create a technical new user/roles
 4. Create a new external service _Site Administration_ -> _Server_ -> _External services_. Give it a name and enable _Enabled_, _Authorized users only_ and _Can download files_ (under _Show more..._).
 5. Add the user as an _Authorised User_ to the external service.
 6. Add the following functions to the external service:
-    -
-    -
+    - core_block_get_course_blocks
+    - core_course_get_categories
+    - core_course_get_contents
+    - core_course_get_course_content_items
+    - core_course_get_course_module
+    - core_course_get_courses
+    - core_course_get_module
 7. Create a token for the user and external service under _Site Administration_ -> _Server_ -> _Manage tokens_. This allows you to authenticate against the REST API.
 
 You can try it out with a GET request against this url (swap TOKEN for your token und FUNCTION against the function to test):
