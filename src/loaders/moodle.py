@@ -1,11 +1,8 @@
 import re
-from io import StringIO
 
 from llama_index.core import Document
 from pydantic import BaseModel, Field, computed_field, field_validator
 from bs4 import BeautifulSoup
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.formatters import WebVTTFormatter
 
 from src.env import EnvHelper
 from src.loaders.APICaller import APICaller
