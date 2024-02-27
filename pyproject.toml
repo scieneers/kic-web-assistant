@@ -8,6 +8,10 @@ authors = [
 ]
 readme = "README.md"
 
+packages = [
+    { include = "src" }
+]
+
 [tool.poetry.dependencies]
 python = "~3.11"
 qdrant-client = "~1.6.9"
