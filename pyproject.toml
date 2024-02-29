@@ -2,15 +2,22 @@
 name = "kic-web-assistant"
 version = "0.1.0"
 description = "System to guide the users of ki-campus.org"
-authors = ["Jonas Bremer <jonas.bremer@scieneers.de>"]
+authors = [
+    "Jonas Bremer <jonas.bremer@scieneers.de>",
+    "Sebastian Drewke <sebastian.drewke@scieneers.de>",
+]
 readme = "README.md"
+
+packages = [
+    { include = "src" }
+]
 
 [tool.poetry.dependencies]
 python = "~3.11"
-qdrant-client = "~1.6.9"
+qdrant-client = "~1.7.3"
 fastapi = "~0.104.1"
 uvicorn = {extras = ["standard"], version = "~0.24.0.post1"}
-llama-index = "^0.9.40"
+llama-index = "~0.9.40"
 # Embedding
 torch = "~2.1.1"
 accelerate = "~0.24.1"
@@ -18,9 +25,9 @@ transformers = "~4.35.2"
 # Self hosting llms
 google-cloud-aiplatform = "~1.36.4"
 
-[tool.poetry.group.ingestion]
+[tool.poetry.group.embedder]
 optional = true
-[tool.poetry.group.ingestion.dependencies]
+[tool.poetry.group.embedder.dependencies]
 requests = "~2.31.0"
 pydantic = "~2.5.2"
 beautifulsoup4 = "~4.12.2"
