@@ -1,12 +1,16 @@
-from dotenv import load_dotenv, find_dotenv
-import os
 import logging
+import os
+
+from dotenv import find_dotenv, load_dotenv
+
 
 class EnvHelper:
-    def __init__(self, production:bool=False) -> None:
+    def __init__(self, production: bool = False) -> None:
         """Helper class for environment variables. Loads production variables if production=True, or env variable 'ENVIRONMENT' is set to 'PRODUCTION'"""
         if not find_dotenv():
-            logging.warning("No .env file found, using environment variables. Use task decrypt-env to generate a .env file.")
+            logging.warning(
+                "No .env file found, using environment variables. Use task decrypt-env to generate a .env file."
+            )
         load_dotenv()
         # Environment setup
         self.ENVIRONMENT = os.getenv("ENVIRONMENT", "STAGING")
@@ -25,6 +29,8 @@ class EnvHelper:
             self.DATA_SOURCE_MOODLE_TOKEN = os.getenv("DATA_SOURCE_STAGING_MOODLE_TOKEN", "")
         self.DATA_SOURCE_MOOCHUP_HPI_URL = os.getenv("DATA_SOURCE_MOOCHUP_HPI_URL", "")
         self.DATA_SOURCE_MOOCHUP_MOODLE_URL = os.getenv("DATA_SOURCE_MOOCHUP_MOODLE_URL", "")
+        # Vimeo
+        self.VIMEO_PAT = os.getenv("VIMEO_PAT", "")
         # Debug Setting
         self.DEBUG = bool(os.getenv("DEBUG", "False"))
 
@@ -41,5 +47,6 @@ class EnvHelper:
             raise AttributeError(f"{name} is requested but not set in the environment variables")
         return value
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     EnvHelper.check_env()
