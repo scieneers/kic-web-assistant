@@ -40,12 +40,13 @@ class CourseTopic(BaseModel):
 
 
 class MoodleCourse(BaseModel):
-    '''Highest level representation of a Moodle course. Has 1 to many topics (called modules in ki-campus frontend).'''
+    """Highest level representation of a Moodle course. Has 1 to many topics (called modules in ki-campus frontend)."""
+
     id: int
     shortname: str
     fullname: str
     displayname: str
-    summary: str
+    summary: str | None = None
     lang: str
     url: str
     topics: list[CourseTopic] = None
@@ -124,6 +125,11 @@ class Moodle:
         courses = self.get_courses()
         for course in courses:
             course.topics = self.get_course_contents(course.id)
+            for topic in course.topics:
+                vimeo = Vimeo()
+                for module in topic.modules:
+                    if module.modname == "videotime":
+                        module.transcript = vimeo.get_videotime_content(module.id)
         course_documents = [course.to_document() for course in courses]
         return course_documents
 
