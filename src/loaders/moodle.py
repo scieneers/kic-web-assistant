@@ -1,5 +1,3 @@
-import re
-from enum import StrEnum
 from io import StringIO
 
 from llama_index.core import Document
@@ -8,6 +6,14 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import WebVTTFormatter
 
 from src.env import EnvHelper
+from src.loaders.APICaller import APICaller
+from src.loaders.helper import convert_vtt_to_text
+from src.loaders.models.coursetopic import CourseTopic
+from src.loaders.models.module import ModuleTypes
+from src.loaders.models.moodlecourse import MoodleCourse
+from src.loaders.models.texttrack import TextTrack
+from src.loaders.models.videotime import VideoPlatforms, VideoTime
+from src.loaders.vimeo import Vimeo
 
 
 class TextTrack(BaseModel):
@@ -217,7 +223,7 @@ class Moodle:
         for module in topic.modules:
             if module.visible == 0:
                 continue
-            match module.modname:
+            match module.type:
                 case ModuleTypes.VIDEOTIME:
                     self.extract_videotime(module)
 
