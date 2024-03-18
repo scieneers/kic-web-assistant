@@ -31,6 +31,7 @@ google-cloud-aiplatform = "~1.36.4"
 webvtt-py = "^0.4.6"
 # Monitoring
 langfuse = "^2.22.0"
+youtube-transcript-api = "^0.6.2"
 
 [tool.poetry.group.embedder]
 optional = true

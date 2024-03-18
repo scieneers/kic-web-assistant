@@ -6,7 +6,7 @@ from src.loaders.moodle import CourseTopic, Moodle
 
 
 def update_course_contents(course_id: int):
-    course_contents = Moodle().api_call("core_course_get_contents", courseid=course_id)
+    course_contents = Moodle().vimeo_api_call("core_course_get_contents", courseid=course_id)
     with open(f"src/tests/data/core_course_get_contents.json", "w") as f:
         json.dump(course_contents, f, indent=4, ensure_ascii=False)
 
