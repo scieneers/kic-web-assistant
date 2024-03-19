@@ -161,11 +161,11 @@ class Moodle:
     base_url: base url of moodle instance
     token: token for moodle api"""
 
-    def __init__(self, base_url: str = None, token: str = None) -> None:
-        secrets = EnvHelper()
-        self.base_url = secrets.DATA_SOURCE_MOODLE_URL if base_url is None else base_url
+    def __init__(self, environment: str = "STAGING", base_url: str = "", token: str = "") -> None:
+        secrets = EnvHelper(production=True if environment == "PRODUCTION" else False)
+        self.base_url = secrets.DATA_SOURCE_MOODLE_URL if base_url == "" else base_url
         self.api_endpoint = f"{self.base_url}webservice/rest/server.php"
-        self.token = secrets.DATA_SOURCE_MOODLE_TOKEN if token is None else token
+        self.token = secrets.DATA_SOURCE_MOODLE_TOKEN if token == "" else token
         self.function_params = {
             "wstoken": self.token,
             "moodlewsrestformat": "json",

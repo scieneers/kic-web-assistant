@@ -43,5 +43,5 @@ class MoodleCourse(BaseModel):
             "url": self.url,
         }
         if self.lang:
-            metadata["language"] = self.lang
+            metadata.update({"language": self.lang})
         return Document(text=text, metadata=metadata)

@@ -1,4 +1,5 @@
 from io import StringIO
+from typing import Optional
 
 from pydantic import HttpUrl
 
@@ -17,7 +18,7 @@ class Vimeo:
             "Accept": "application/vnd.vimeo.*+json;version=3.4",
         }
 
-    def get_texttrack(self, video_id: int) -> dict:
+    def get_texttrack(self, video_id: str) -> Optional[dict]:
         url = self.api_endpoint + video_id + "/texttracks"
         texttrack_caller = APICaller(url=url, headers=self.headers)
         response_json = texttrack_caller.getJSON()["data"]

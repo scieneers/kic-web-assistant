@@ -53,6 +53,20 @@ ipykernel = "~6.26.0"
 ipywidgets = "~8.1.1"
 pytest = "~7.4.3"
 pre-commit = "^3.6.2"
+mypy = "^1.9.0"
+types-requests = "^2.31.0.20240311"
+
+[tool.mypy]
+plugins = [
+  "pydantic.mypy"
+]
+
+follow_imports = "silent"
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_any_generics = true
+check_untyped_defs = true
+no_implicit_reexport = true
 
 [build-system]
 requires = ["poetry-core"]

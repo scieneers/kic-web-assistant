@@ -3,7 +3,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, HttpUrl, computed_field
 
-from src.loaders.moodle import TextTrack
+from src.loaders.models.texttrack import TextTrack
 
 
 class VideoPlatforms(StrEnum):
@@ -17,7 +17,7 @@ class VideoTime(BaseModel):
     video_url: HttpUrl = Field(..., alias="vimeo_url")  # This Field can contain a Vimeo _or_ a Youtube URL
     texttrack: TextTrack | None = None
 
-    @computed_field
+    @computed_field  # type: ignore[misc]
     @property
     def type(self) -> VideoPlatforms:
         match self.video_url.host:
@@ -27,16 +27,20 @@ class VideoTime(BaseModel):
                 return VideoPlatforms.YOUTUBE
             case "ki-campus-test.fernuni-hagen.de" | "moodle.ki-campus.org":
                 return VideoPlatforms.SELF_HOSTED
+            case _:
+                raise NotImplementedError("Unknown VideoPlatform, implement me")
 
-    @computed_field
+    @computed_field  # type: ignore[misc]
     @property
-    def video_id(self) -> int:
+    def video_id(self) -> str:
         match self.type:
             case VideoPlatforms.VIMEO:
-                vimeo_video_id_pattern = re.compile(r"\d+")
-                return re.findall(vimeo_video_id_pattern, self.video_url.path)[0]
+                vimeo_video_id_pattern = r"\d+"
+                return re.findall(vimeo_video_id_pattern, str(self.video_url.path))[0]
             case VideoPlatforms.YOUTUBE:
                 youtube_video_id_pattern = (
                     r"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^\"&?\/\s]{11})"
                 )
                 return re.findall(youtube_video_id_pattern, str(self.video_url))[0]
+            case VideoPlatforms.SELF_HOSTED:
+                return ""
