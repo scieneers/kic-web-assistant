@@ -1,11 +1,10 @@
 from io import StringIO
 from typing import Optional
 
-from pydantic import HttpUrl
-
 from src.env import EnvHelper
 from src.loaders.APICaller import APICaller
 from src.loaders.helper import convert_vtt_to_text
+from src.loaders.models.texttrack import TextTrack
 
 
 class Vimeo:
@@ -18,13 +17,18 @@ class Vimeo:
             "Accept": "application/vnd.vimeo.*+json;version=3.4",
         }
 
-    def get_texttrack(self, video_id: str) -> Optional[dict]:
+    def get_metadata(self, video_id: str) -> Optional[dict]:
         url = self.api_endpoint + video_id + "/texttracks"
         texttrack_caller = APICaller(url=url, headers=self.headers)
         response_json = texttrack_caller.getJSON()["data"]
         # TODO: always the first track in data list?
         return response_json[0] if response_json else None
 
-    def get_transcript(self, transcript_url: HttpUrl) -> str:
-        transcript_caller = APICaller(url=transcript_url, headers=self.headers)
-        return convert_vtt_to_text(StringIO(transcript_caller.getText()))
+    def get_transcript(self, video_id: str) -> TextTrack:
+        texttrack_json = self.get_metadata(video_id)
+        if texttrack_json:  # If Video has an transcript
+            texttrack = TextTrack(**texttrack_json)
+
+            transcript_caller = APICaller(url=texttrack.link, headers=self.headers)
+            texttrack.transcript = convert_vtt_to_text(StringIO(transcript_caller.getText()))
+        return texttrack

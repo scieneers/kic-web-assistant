@@ -1,7 +1,9 @@
+import re
 from io import StringIO
 
 from llama_index.core import Document
 from pydantic import BaseModel, Field, computed_field, field_validator
+from bs4 import BeautifulSoup
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import WebVTTFormatter
 
@@ -11,7 +13,6 @@ from src.loaders.helper import convert_vtt_to_text
 from src.loaders.models.coursetopic import CourseTopic
 from src.loaders.models.module import ModuleTypes
 from src.loaders.models.moodlecourse import MoodleCourse
-from src.loaders.models.texttrack import TextTrack
 from src.loaders.models.videotime import VideoPlatforms, VideoTime
 from src.loaders.vimeo import Vimeo
 
@@ -226,29 +227,38 @@ class Moodle:
             match module.type:
                 case ModuleTypes.VIDEOTIME:
                     self.extract_videotime(module)
+                case ModuleTypes.PAGE:
+                    self.extract_page(module)
+                case ModuleTypes.H5P:
+                    # get contents of h5p page
+                    # extract video link(s)
+                    pass
+
+    def extract_page(self, module):
+        # TODO: multiple video on page, better parsing of video links
+
+        for content in module.contents:
+            page_content_caller = APICaller(url=content.fileurl, params=self.download_params)
+            soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
+            link_element = soup.find("a", {"class": "mediafallbacklink"})
+            if link_element is not None:
+                videotime = VideoTime(id=0, vimeo_url=link_element["href"])
+                youtube = Youtube()
+                texttrack = youtube.get_transcript(videotime.video_id)
+                module.transcripts.append(texttrack)
 
     def extract_videotime(self, module):  # TODO: rename method
-        module.videotime = VideoTime(**self.get_videotime_content(module.id))
-        match module.videotime.type:
+        videotime = VideoTime(**self.get_videotime_content(module.id))
+
+        match videotime.type:
             case VideoPlatforms.VIMEO:
                 vimeo = Vimeo()
-                texttrack_json = vimeo.get_texttrack(module.videotime.video_id)
-                if texttrack_json:  # If Video has an transcript
-                    module.videotime.texttrack = TextTrack(**texttrack_json)
-                    module.videotime.texttrack.transcript = vimeo.get_transcript(module.videotime.texttrack.link)
+                texttrack = vimeo.get_transcript(videotime.video_id)
+                module.transcripts.append(texttrack)
             case VideoPlatforms.YOUTUBE:
-                transcript_json = YouTubeTranscriptApi.get_transcript(
-                    module.videotime.video_id, languages=["de-DE", "de", "en"]
-                )
-                formatter = WebVTTFormatter()
-                transcript = convert_vtt_to_text(StringIO(formatter.format_transcript(transcript_json)))
-                module.videotime.texttrack = TextTrack(
-                    id=0,
-                    display_language="de",
-                    language="de",
-                    link=None,
-                    transcript=transcript,
-                )
+                youtube = Youtube()
+                texttrack = youtube.get_transcript(videotime.video_id)
+                module.transcripts.append(texttrack)
             case VideoPlatforms.SELF_HOSTED:
                 # no subtitles found in self-hosted videos, if this ever changes add code here
                 pass
