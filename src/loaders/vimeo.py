@@ -24,11 +24,12 @@ class Vimeo:
         # TODO: always the first track in data list?
         return response_json[0] if response_json else None
 
-    def get_transcript(self, video_id: str) -> TextTrack:
+    def get_transcript(self, video_id: str) -> Optional[TextTrack]:
         texttrack_json = self.get_metadata(video_id)
         if texttrack_json:  # If Video has an transcript
             texttrack = TextTrack(**texttrack_json)
 
             transcript_caller = APICaller(url=texttrack.link, headers=self.headers)
             texttrack.transcript = convert_vtt_to_text(StringIO(transcript_caller.getText()))
-        return texttrack
+            return texttrack
+        return None

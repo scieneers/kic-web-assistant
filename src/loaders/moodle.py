@@ -235,17 +235,23 @@ class Moodle:
                     pass
 
     def extract_page(self, module):
-        # TODO: multiple video on page, better parsing of video links
-
         for content in module.contents:
             page_content_caller = APICaller(url=content.fileurl, params=self.download_params)
             soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
-            link_element = soup.find("a", {"class": "mediafallbacklink"})
-            if link_element is not None:
-                videotime = VideoTime(id=0, vimeo_url=link_element["href"])
-                youtube = Youtube()
-                texttrack = youtube.get_transcript(videotime.video_id)
-                module.transcripts.append(texttrack)
+            links = soup.find_all("a")
+            for p_link in links:
+                src = p_link.get("href")
+                if src:
+                    videotime = VideoTime(id=0, vimeo_url=src)
+                    if src.find("vimeo") != -1:
+                        vimeo = Vimeo()
+                        texttrack = vimeo.get_transcript(videotime.video_id)
+                    elif src.find("youtu") != -1:
+                        youtube = Youtube()
+                        texttrack = youtube.get_transcript(videotime.video_id)
+                    else:
+                        texttrack = None
+                    module.transcripts.append(texttrack)
 
     def extract_videotime(self, module):  # TODO: rename method
         videotime = VideoTime(**self.get_videotime_content(module.id))
