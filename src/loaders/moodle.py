@@ -242,11 +242,12 @@ class Moodle:
             for p_link in links:
                 src = p_link.get("href")
                 if src:
-                    videotime = VideoTime(id=0, vimeo_url=src)
                     if src.find("vimeo") != -1:
+                        videotime = VideoTime(id=0, vimeo_url=src)
                         vimeo = Vimeo()
                         texttrack = vimeo.get_transcript(videotime.video_id)
                     elif src.find("youtu") != -1:
+                        videotime = VideoTime(id=0, vimeo_url=src)
                         youtube = Youtube()
                         texttrack = youtube.get_transcript(videotime.video_id)
                     else:
