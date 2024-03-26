@@ -3,8 +3,6 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, HttpUrl, computed_field
 
-from src.loaders.models.texttrack import TextTrack
-
 
 class VideoPlatforms(StrEnum):
     VIMEO = "vimeo"
@@ -12,10 +10,9 @@ class VideoPlatforms(StrEnum):
     SELF_HOSTED = "ki-campus"
 
 
-class VideoTime(BaseModel):
+class Video(BaseModel):
     id: int
     video_url: HttpUrl = Field(..., alias="vimeo_url")  # This Field can contain a Vimeo _or_ a Youtube URL
-    texttrack: TextTrack | None = None
 
     @computed_field  # type: ignore[misc]
     @property

@@ -1,5 +1,9 @@
+from pathlib import Path
+
 import requests
 from pydantic import HttpUrl
+
+from src.loaders.helper import TMP_DIR
 
 
 class APICaller:
@@ -27,6 +31,18 @@ class APICaller:
         self.get(**kwargs)
         return self.response.text
 
-    def getBuffeer(self, **kwargs) -> str:
+    def getBuffer(self, **kwargs) -> str:
         self.get(**kwargs)
         return self.response.text
+
+    def getFile(self, filename, tmp_dir):
+        local_filename = Path(f"{tmp_dir}/{filename}")
+        with requests.get(self.url, params=self.params, stream=True) as r:
+            r.raise_for_status()
+            with open(local_filename, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    # If you have chunk encoded response uncomment if
+                    # and set chunk_size parameter to None.
+                    # if chunk:
+                    f.write(chunk)
+        return local_filename

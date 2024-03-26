@@ -5,7 +5,7 @@ from pydantic import BaseModel, HttpUrl, computed_field
 
 from src.loaders.models.downloadablecontent import DownloadableContent
 from src.loaders.models.texttrack import TextTrack
-from src.loaders.models.videotime import VideoTime
+from src.loaders.models.videotime import Video
 
 
 class ModuleTypes(StrEnum):
@@ -23,7 +23,7 @@ class Module(BaseModel):
     url: HttpUrl | None = None
     modname: str  # content type
     contents: list[DownloadableContent] | None = None
-    videotime: VideoTime | None = None
+    videotime: Video | None = None
     transcripts: list[TextTrack] = []
 
     @computed_field  # type: ignore[misc]

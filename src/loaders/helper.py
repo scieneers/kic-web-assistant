@@ -1,8 +1,11 @@
 import re
 from io import StringIO
+from pathlib import Path
 
 import webvtt
 from bs4 import BeautifulSoup
+
+TMP_DIR = Path(__file__).parent.parent.parent.joinpath("tmp").resolve()
 
 
 def convert_vtt_to_text(vtt_buffer: StringIO) -> str:
