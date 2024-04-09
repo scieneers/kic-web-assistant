@@ -1,8 +1,8 @@
 import os
 
-from llama_index import Document
-from llama_index.ingestion import IngestionPipeline
-from llama_index.text_splitter import SentenceSplitter
+from llama_index.core import Document
+from llama_index.core.ingestion import IngestionPipeline
+from llama_index.core.node_parser import SentenceSplitter
 
 from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
 from src.env import EnvHelper

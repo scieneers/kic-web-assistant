@@ -1,28 +1,36 @@
-from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
-from src.vectordb.qdrant import VectorDBQdrant
-from src.env import EnvHelper
-from llama_index.retrievers import BaseRetriever
-from llama_index.vector_stores import VectorStoreQuery
-from llama_index.query_engine import RetrieverQueryEngine
-from llama_index import QueryBundle
-from llama_index.schema import NodeWithScore
-from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
-from llama_index.chat_engine import CondenseQuestionChatEngine
-from llama_index.llms import ChatMessage, MessageRole, AzureOpenAI
-from llama_index import ServiceContext
-from llama_index import get_response_synthesizer
-import llama_index
-from llama_index.embeddings.base import BaseEmbedding
-from src.llm.prompts import condense_question, text_qa_template
+from dotenv import load_dotenv
+from langfuse.llama_index import LlamaIndexCallbackHandler
+from llama_index.core import QueryBundle, Settings, get_response_synthesizer
+from llama_index.core.callbacks import CallbackManager
+from llama_index.core.chat_engine import CondenseQuestionChatEngine
+from llama_index.core.embeddings import BaseEmbedding
+from llama_index.core.llms import ChatMessage
+from llama_index.core.query_engine import RetrieverQueryEngine
+from llama_index.core.retrievers import BaseRetriever
+from llama_index.core.schema import NodeWithScore
+from llama_index.core.vector_stores import VectorStoreQuery
+from llama_index.llms.azure_openai import AzureOpenAI
 
-llama_index.set_global_handler('simple')
+from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
+from src.env import EnvHelper
+from src.llm.prompts import condense_question, text_qa_template
+from src.vectordb.qdrant import VectorDBQdrant
+
+load_dotenv()
+
+langfuse_callback_handler = LlamaIndexCallbackHandler()
+Settings.callback_manager = CallbackManager([langfuse_callback_handler])
+
+# llama_index.core.set_global_handler('simple')
+Settings.global_handler = "simple"
+
 
 class KiCampusRetriever(BaseRetriever):
-    def __init__(self, embedder:BaseEmbedding=None):
+    def __init__(self, embedder: BaseEmbedding = None):
         if embedder is None:
             embedder = MultilingualE5LargeEmbedder()
         self.embedder = embedder
-        self.vector_store = VectorDBQdrant('disk').as_llama_vector_store(collection_name='assistant')
+        self.vector_store = VectorDBQdrant("disk").as_llama_vector_store(collection_name="assistant")
         super().__init__()
 
     def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
@@ -34,7 +42,7 @@ class KiCampusRetriever(BaseRetriever):
         for index, node in enumerate(query_result.nodes):
             # how node gets rendered as context for the llm
             # alternatively create a custom node post-processor and pass to query engine https://docs.llamaindex.ai/en/stable/module_guides/querying/node_postprocessors/root.html
-            node.text_template = '{metadata_str}\nContent: {content}'
+            node.text_template = "{metadata_str}\nContent: {content}"
 
             score: list[float] = None
             if query_result.similarities is not None:
@@ -43,37 +51,40 @@ class KiCampusRetriever(BaseRetriever):
 
         return nodes_with_scores
 
-class KICampusAssistant():
-    def __init__(self, verbose:bool=False):
+
+class KICampusAssistant:
+    def __init__(self, verbose: bool = False):
         self.retriever = KiCampusRetriever()
 
         secrets = EnvHelper()
         llm = AzureOpenAI(
-            model='gpt-35-turbo',
-            deployment_name='gpt-3_5',
+            model="gpt-35-turbo",
+            engine="gpt-3_5",
             api_key=secrets.AZURE_OPENAI_KEY,
             azure_endpoint=secrets.AZURE_OPENAI_URL,
-            api_version='2023-05-15',
+            api_version="2023-05-15",
         )
 
-        service_context = ServiceContext.from_defaults(llm=llm, embed_model=None)
-        response_synthesizer = get_response_synthesizer(service_context=service_context, 
-                                                        response_mode='compact', text_qa_template=text_qa_template)
+        Settings.llm = llm
+        Settings.embed_model = None
+
+        response_synthesizer = get_response_synthesizer(
+            response_mode="compact", text_qa_template=text_qa_template, verbose=True
+        )
         query_engine = RetrieverQueryEngine(retriever=self.retriever, response_synthesizer=response_synthesizer)
-        
+
         if verbose:
             # the refine prompt templater is only used when compact prompting is too long for the llm
             for k, p in query_engine.get_prompts().items():
-                print(f'\n**Prompt Key**: {k}\n**Text:**:')
+                print(f"\n**Prompt Key**: {k}\n**Text:**:")
                 print(p.get_template())
-            print('*** Prompt Examples End ***')
+            print("*** Prompt Examples End ***")
 
         # Wrap query_engine: Fits the chat history and the new query into a single query containing all previous context
         self.chat_engine = CondenseQuestionChatEngine.from_defaults(
             query_engine=query_engine,
             condense_question_prompt=condense_question,
             verbose=True,
-            service_context=service_context,
             chat_history=None,
         )
 
@@ -85,7 +96,8 @@ class KICampusAssistant():
     def reset(self):
         self.chat_engine.reset()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     assistant = KICampusAssistant(verbose=True)
-    assistant.answer(query='Welche Kurse zu ethischer KI habt ihr im Angebot?')
-    print('wait')
+    assistant.answer(query="Welche Kurse zu ethischer KI habt ihr im Angebot?")
+    print("wait")
