@@ -24,7 +24,6 @@ accelerate = "~0.24.1"
 transformers = "~4.35.2"
 # Self hosting llms
 google-cloud-aiplatform = "~1.36.4"
-pre-commit = "^3.7.0"
 
 [tool.poetry.group.embedder]
 optional = true
@@ -45,7 +44,7 @@ optional = true
 ipykernel = "~6.26.0"
 ipywidgets = "~8.1.1"
 pytest = "~7.4.3"
-pre-commit = "^3.6.2"
+pre-commit = "^3.7.0"
 
 [build-system]
 requires = ["poetry-core"]
