@@ -1,6 +1,8 @@
-from src.vectordb.qdrant import VectorDBQdrant
-from qdrant_client.http.exceptions import UnexpectedResponse
 import pytest
+from qdrant_client.http.exceptions import UnexpectedResponse
+
+from src.vectordb.qdrant import VectorDBQdrant
+
 
 def test_collection_creation():
     remote_db = VectorDBQdrant(version="remote")
