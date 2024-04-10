@@ -60,6 +60,6 @@ class VectorDBQdrant:
 
 
 if __name__ == "__main__":
-    # test_connection = VectorDBQdrant(version='remote')
-    test_connection = VectorDBQdrant(version="disk")
+    test_connection = VectorDBQdrant(version="remote")
+    # test_connection = VectorDBQdrant(version="disk") # For local testing only
     print(test_connection.client.get_collections())

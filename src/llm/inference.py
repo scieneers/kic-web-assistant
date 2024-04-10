@@ -1,4 +1,6 @@
 from dotenv import load_dotenv
+from langfuse import Langfuse
+from langfuse.decorators import langfuse_context, observe
 from langfuse.llama_index import LlamaIndexCallbackHandler
 from llama_index.core import QueryBundle, Settings, get_response_synthesizer
 from llama_index.core.callbacks import CallbackManager
@@ -17,6 +19,8 @@ from src.llm.prompts import condense_question, text_qa_template
 from src.vectordb.qdrant import VectorDBQdrant
 
 load_dotenv()
+
+langfuse = Langfuse()
 
 langfuse_callback_handler = LlamaIndexCallbackHandler()
 Settings.callback_manager = CallbackManager([langfuse_callback_handler])
@@ -89,9 +93,19 @@ class KICampusAssistant:
         )
 
     def chat(self, query: str, chat_history: list[ChatMessage] = None) -> str:
+        root_trace = langfuse.trace(name="llamaindex-rag-chat")
+        trace_id = root_trace.trace_id
+        langfuse_callback_handler.set_root(root_trace)
+
         response = self.chat_engine.chat(query, chat_history=chat_history)
-        print(response)
-        return response
+
+        return response, trace_id
+
+    def submit_feedback(self, feedback_response: dict, trace_id: str):
+        value = 1 if feedback_response["score"] == "👍" else -1
+        comment = feedback_response["text"]
+
+        langfuse.score(trace_id=trace_id, name="user-explicit-feedback", value=value, comment=comment)
 
     def reset(self):
         self.chat_engine.reset()
