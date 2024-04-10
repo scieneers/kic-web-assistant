@@ -1,16 +1,11 @@
 import json
-import re
 import tempfile
 import zipfile
-from enum import StrEnum
 
 from bs4 import BeautifulSoup
-from llama_index.core import Document
-from pydantic import BaseModel, Field, HttpUrl, computed_field, field_validator
 
 from src.env import EnvHelper
 from src.loaders.APICaller import APICaller
-from src.loaders.helper import process_html_summaries
 from src.loaders.models.coursetopic import CourseTopic
 from src.loaders.models.hp5activities import H5PActivities
 from src.loaders.models.module import ModuleTypes
@@ -18,146 +13,6 @@ from src.loaders.models.moodlecourse import MoodleCourse
 from src.loaders.models.videotime import Video, VideoPlatforms
 from src.loaders.vimeo import Vimeo
 from src.loaders.youtube import Youtube
-
-
-class TextTrack(BaseModel):
-    """Vimeo TextTrack"""
-
-    id: int
-    display_language: str
-    language: str
-    link: HttpUrl | None = None
-    transcript: str | None = None
-
-
-class VideoPlatforms(StrEnum):
-    VIMEO = "vimeo"
-    YOUTUBE = "youtube"
-    SELF_HOSTED = "ki-campus"
-
-
-class VideoTime(BaseModel):
-    id: int
-    video_url: HttpUrl = Field(..., alias="vimeo_url")  # This Field can contain a Vimeo _or_ a Youtube URL
-    texttrack: TextTrack | None = None
-
-    @computed_field
-    @property
-    def type(self) -> VideoPlatforms:
-        match self.video_url.host:
-            case "vimeo.com" | "player.vimeo.com":
-                return VideoPlatforms.VIMEO
-            case "www.youtube.com" | "youtu.be":
-                return VideoPlatforms.YOUTUBE
-            case "ki-campus-test.fernuni-hagen.de" | "moodle.ki-campus.org":
-                return VideoPlatforms.SELF_HOSTED
-
-    @computed_field
-    @property
-    def video_id(self) -> int:
-        match self.type:
-            case VideoPlatforms.VIMEO:
-                vimeo_video_id_pattern = re.compile(r"\d+")
-                return re.findall(vimeo_video_id_pattern, self.video_url.path)[0]
-            case VideoPlatforms.YOUTUBE:
-                youtube_video_id_pattern = (
-                    r"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^\"&?\/\s]{11})"
-                )
-                return re.findall(youtube_video_id_pattern, str(self.video_url))[0]
-
-
-class DownloadableContent(BaseModel):
-    filename: str | None = None
-    fileurl: str | None = None
-    type: str | None = None
-
-    @field_validator("type", mode="before")
-    def set_type(cls, type, values):
-        fileurl = values.data.get("fileurl")
-
-        file_extension = fileurl.split(".")[-1] if fileurl is not None else ""
-        if file_extension not in ["html", "hp5"]:
-            # raise ValueError(f'File extension {file_extension} is not supported.')
-            return file_extension
-
-
-class Module(BaseModel):
-    """Lowest level content block of a course. Can be a file, video, hp5, etc."""
-
-    id: int
-    visible: int
-    name: str
-    url: HttpUrl | None = None
-    modname: str  # content type
-    contents: list[DownloadableContent] | None = None
-    videotime: VideoTime | None = None
-
-
-class ModuleTypes(StrEnum):
-    VIDEOTIME = "videotime"
-    PAGE = "page"
-    H5P = "h5pactivity"
-
-
-class CourseTopic(BaseModel):
-    id: int
-    name: str
-    summary: str | None
-
-    @field_validator("summary")
-    @classmethod
-    def remove_html(cls, summary: str) -> str:
-        if not summary:
-            return None
-        return process_html_summaries(summary)
-
-    def __str__(self) -> str:
-        # add transcripts
-        modules = "\n ".join([str(module) for module in self.modules])
-        text = f"Topic Summary: {self.summary}\n" "Topic Modules :\n" f"{modules}"
-        return text
-
-
-class MoodleCourse(BaseModel):
-    """Highest level representation of a Moodle course. Has 1 to many topics (called modules in ki-campus frontend)."""
-
-    id: int
-    shortname: str
-    fullname: str
-    displayname: str
-    summary: str | None = None
-    lang: str
-    url: str
-    topics: list[CourseTopic] = None
-
-    @field_validator("summary")
-    @classmethod
-    def remove_html(cls, summary: str) -> str:
-        if not summary:
-            raise ValueError("Summary should not be empty")
-        return process_html_summaries(summary)
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.url = f"{self.url}{self.id}"
-
-    def __str__(self) -> str:
-        topics = "\n ".join([str(topic) for topic in self.topics])
-        text = f"Course Summary: {self.summary}\n" "Course Topics:\n" f"{topics}"
-        return text
-
-    def to_document(self) -> Document:
-        text = str(self)
-        metadata = {
-            "id": self.id,
-            "shortname": self.shortname,
-            "fullname": self.fullname,
-            "type": "course",
-            "url": self.url,
-        }
-        if self.lang:
-            metadata["lang"] = self.lang
-        return Document(text=text, metadata=metadata)
 
 
 class Moodle:
