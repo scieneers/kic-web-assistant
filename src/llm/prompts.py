@@ -1,7 +1,8 @@
-from llama_index.prompts import PromptTemplate, ChatPromptTemplate
-from llama_index.llms import ChatMessage, MessageRole, AzureOpenAI
+from llama_index.core import ChatPromptTemplate, PromptTemplate
+from llama_index.core.llms import ChatMessage, MessageRole
 
-condense_question= PromptTemplate("""\
+condense_question = PromptTemplate(
+    """\
 Given a conversation (between Human and Assistant) and a follow up message from Human, \
 rewrite the message to be a standalone question that captures all relevant context \
 from the conversation.

@@ -1,32 +1,32 @@
-
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
-from qdrant_client.http.models import PointStruct
-from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from llama_index.vector_stores.qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
 from src.env import EnvHelper
 
-class VectorDBQdrant():
-    def __init__(self, version='disk'):
+
+class VectorDBQdrant:
+    def __init__(self, version="disk"):
         self.version = version
-        if version == 'memory':
-            self.client = QdrantClient(':memory:')
-        elif version == 'disk':
-            self.client = QdrantClient('localhost', port=6333)
+        if version == "memory":
+            self.client = QdrantClient(":memory:")
+        elif version == "disk":
+            self.client = QdrantClient("localhost", port=6333)
             try:
                 _ = self.client.get_collections()
             except ResponseHandlingException as e:
-                print('Qdrant container not running? Run:')
-                print('docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1')
+                print("Qdrant container not running? Run:")
+                print(
+                    "docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1"
+                )
                 raise e
-        elif version == 'remote':
-            self.client = QdrantClient(url=EnvHelper().QDRANT_URL, 
-                                       port=443,
-                                       api_key=EnvHelper().QDRANT_TOKEN)
+        elif version == "remote":
+            self.client = QdrantClient(url=EnvHelper().QDRANT_URL, port=443, api_key=EnvHelper().QDRANT_TOKEN)
             _ = self.client.get_collections()
         else:
             raise ValueError("Version must be either 'memory' or 'disk' or 'remote'")
-    
+
     def as_llama_vector_store(self, collection_name) -> QdrantVectorStore:
         return QdrantVectorStore(client=self.client, collection_name=collection_name)
 
@@ -57,8 +57,9 @@ class VectorDBQdrant():
             limit=limit,
         )
         return search_result
-    
 
-if __name__ == '__main__':
-    test_connection = VectorDBQdrant(version='remote')
+
+if __name__ == "__main__":
+    test_connection = VectorDBQdrant(version="remote")
+    # test_connection = VectorDBQdrant(version="disk") # For local testing only
     print(test_connection.client.get_collections())
