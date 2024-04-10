@@ -5,6 +5,13 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python Debugger: KI Campus courses pipeline",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/loaders/courses_pipeline.py",
+            "console": "integratedTerminal"
+        },
+        {
             "name": "Python: Current File",
             "type": "python",
             "request": "launch",

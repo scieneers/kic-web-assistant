@@ -3,5 +3,9 @@
         "."
     ],
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
+    "python.testing.pytestEnabled": true,
+
+    "launches": {
+        "KIC-CoursesPipeline": "Python Debugger: KI Campus courses pipeline",
+      }
 }

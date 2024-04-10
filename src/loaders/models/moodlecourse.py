@@ -1,4 +1,4 @@
-from llama_index import Document
+from llama_index.core import Document
 from pydantic import BaseModel, field_validator
 
 from src.loaders.helper import process_html_summaries

@@ -1,24 +1,23 @@
 import json
-import os
 import re
-import shutil
 import tempfile
 import zipfile
-from io import StringIO
+from enum import StrEnum
 
-from llama_index.core import Document
-from pydantic import BaseModel, Field, computed_field, field_validator
 from bs4 import BeautifulSoup
+from llama_index.core import Document
+from pydantic import BaseModel, Field, HttpUrl, computed_field, field_validator
 
 from src.env import EnvHelper
 from src.loaders.APICaller import APICaller
-from src.loaders.helper import TMP_DIR, convert_vtt_to_text
+from src.loaders.helper import process_html_summaries
 from src.loaders.models.coursetopic import CourseTopic
 from src.loaders.models.hp5activities import H5PActivities
 from src.loaders.models.module import ModuleTypes
 from src.loaders.models.moodlecourse import MoodleCourse
 from src.loaders.models.videotime import Video, VideoPlatforms
 from src.loaders.vimeo import Vimeo
+from src.loaders.youtube import Youtube
 
 
 class TextTrack(BaseModel):
