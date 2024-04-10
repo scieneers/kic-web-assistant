@@ -11,14 +11,6 @@ packages = [
     { include = "src" },
 ]
 
-packages = [
-    { include = "src" }
-]
-
-packages = [
-    { include = "src" }
-]
-
 [tool.poetry.dependencies]
 python = "~3.11"
 qdrant-client = "~1.7.3"
