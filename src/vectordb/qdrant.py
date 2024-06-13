@@ -1,3 +1,6 @@
+import os
+import sys
+
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
@@ -5,9 +8,15 @@ from qdrant_client.http.models import Distance, PointStruct, VectorParams
 
 from src.env import EnvHelper
 
+current = os.path.dirname(os.path.realpath(__file__))
+parent = os.path.dirname(current)
+sys.path.append(parent)
+
 
 class VectorDBQdrant:
     def __init__(self, version="disk"):
+        self.secrets = EnvHelper()
+
         self.version = version
         if version == "memory":
             self.client = QdrantClient(":memory:")
@@ -22,7 +31,7 @@ class VectorDBQdrant:
                 )
                 raise e
         elif version == "remote":
-            self.client = QdrantClient(url=EnvHelper().QDRANT_URL, port=443, api_key=EnvHelper().QDRANT_TOKEN)
+            self.client = QdrantClient(url=self.secrets.QDRANT_URL, port=443, api_key=self.secrets.QDRANT_TOKEN)
             _ = self.client.get_collections()
         else:
             raise ValueError("Version must be either 'memory' or 'disk' or 'remote'")

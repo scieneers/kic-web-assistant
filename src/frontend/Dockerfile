@@ -33,7 +33,6 @@ RUN poetry install --with frontend --no-interaction --no-ansi
 
 USER appuser
 WORKDIR /home/appuser
-
 COPY --chown=appuser:appuser . ./
 
 #  ╭──────────────────────────────────────────────────────────╮
@@ -42,7 +41,8 @@ COPY --chown=appuser:appuser . ./
 FROM base as runtime
 
 USER appuser
-WORKDIR /home/appuser
 COPY --from=build $VENV_PATH $VENV_PATH
 COPY --from=build --chown=appuser:appuser /home/appuser /home/appuser
+WORKDIR /home/appuser
+
 CMD python -m streamlit run src/frontend/frontend.py

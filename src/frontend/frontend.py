@@ -16,9 +16,9 @@ st.title("KI-Campus Assistant")
 
 # Initialize assistant
 with st.chat_message("assistant"):
-    st.write("Please wait...")
+    st.write("Bitte warten...")
     assistant = instantiate_assistant()
-    st.write("Hello 👋 How can I help you?")
+    st.write("Hallo 👋 Wie kann ich Ihnen helfen?")
 
 # Initialize chat history & display chat messages from history on app rerun
 if "messages" not in st.session_state:
@@ -29,7 +29,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # React to user input
-if query := st.chat_input("What is up?"):
+if query := st.chat_input("Wie lautet Ihre Frage?"):
     with st.chat_message("user"):
         st.markdown(query)
 

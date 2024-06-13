@@ -15,8 +15,32 @@ class EnvHelper:
         # Environment setup
         self.ENVIRONMENT = os.getenv("ENVIRONMENT", "STAGING")
         # Azure Search
-        self.AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY", "")
-        self.AZURE_OPENAI_URL = os.getenv("AZURE_OPENAI_URL", "")
+        self.AZURE_OPENAI_GPT4_KEY = os.getenv("AZURE_OPENAI_GPT4_KEY", "")
+        self.AZURE_OPENAI_GPT4_URL = os.getenv("AZURE_OPENAI_GPT4_URL", "")
+        self.AZURE_OPENAI_GPT4_API_VERSION = os.getenv("AZURE_OPENAI_GPT4_API_VERSION", "")
+        self.AZURE_OPENAI_GPT4_DEPLOYMENT = os.getenv("AZURE_OPENAI_GPT4_DEPLOYMENT", "")
+        self.AZURE_OPENAI_GPT4_MODEL = os.getenv("AZURE_OPENAI_GPT4_MODEL", "")
+
+        # Azure Embedder
+        self.AZURE_OPENAI_EMBEDDER_API_VERSION = os.getenv("AZURE_OPENAI_EMBEDDER_API_VERSION", "")
+        self.AZURE_OPENAI_EMBEDDER_API_KEY = os.getenv("AZURE_OPENAI_EMBEDDER_API_KEY", "")
+        self.AZURE_OPENAI_EMBEDDER_ENDPOINT = os.getenv("AZURE_OPENAI_EMBEDDER_ENDPOINT", "")
+        self.AZURE_OPENAI_EMBEDDER_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMBEDDER_DEPLOYMENT", "")
+        self.AZURE_OPENAI_EMBEDDER_MODEL = os.getenv("AZURE_OPENAI_EMBEDDER_MODEL", "")
+
+        # Langfuse
+        self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "")
+        self.LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+        self.LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
+
+        # Drupal
+        self.DRUPAL_URL = os.getenv("DRUPAL_URL", "")
+        self.DRUPAL_CLIENT_ID = os.getenv("DRUPAL_CLIENT_ID", "")
+        self.DRUPAL_CLIENT_SECRET = os.getenv("DRUPAL_CLIENT_SECRET", "")
+        self.DRUPAL_USERNAME = os.getenv("DRUPAL_USERNAME", "")
+        self.DRUPAL_PASSWORD = os.getenv("DRUPAL_PASSWORD", "")
+        self.DRUPAL_GRANT_TYPE = os.getenv("DRUPAL_GRANT_TYPE", "")
+
         # Vector db
         self.QDRANT_TOKEN = os.getenv("QDRANT_TOKEN", "")
         self.QDRANT_URL = os.getenv("QDRANT_URL", "")

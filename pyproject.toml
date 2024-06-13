@@ -19,14 +19,9 @@ uvicorn = {extras = ["standard"], version = "~0.24.0.post1"}
 llama-index-embeddings-azure-openai = "^0.1.6"
 llama-index-vector-stores-qdrant = "^0.1.6"
 llama-index-llms-azure-openai = "^0.1.5"
-llama-index = "^0.10.27"
+llama-index = "0.10.45"
 openai = "^1.16.2"
-# Embedding
-torch = "~2.1.1"
-accelerate = "~0.24.1"
-transformers = "~4.35.2"
 # Self hosting llms
-google-cloud-aiplatform = "~1.36.4"
 webvtt-py = "^0.4.6"
 # Monitoring
 langfuse = "^2.22.0"
