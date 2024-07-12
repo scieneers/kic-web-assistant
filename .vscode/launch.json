@@ -33,5 +33,22 @@
             "justMyCode": true,
             "cwd": "${fileDirname}"
         },
+        {
+            "name": "FastAPI",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "api.rest:app",
+                "--reload",
+                "--port=8000"
+            ],
+            "cwd": "${workspaceFolder}/src",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "env": {
+                "DEBUG_LANGCHAIN": "True",
+            },
+            "jinja": true
+        },
     ]
 }
