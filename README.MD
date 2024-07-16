@@ -10,11 +10,26 @@
 `docker pull qdrant/qdrant:v1.6.1`
 `docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1`
 
+`client = QdrantClient(host =QDRANT_URL, api_key=QDRANT_TOKEN, port=6333, grpc_port=6334 , https=False, prefer_grpc=True)`
+
 ## Run frontent: streamlit
 Go into the src/frontend folder and run:
 `streamlit run frontend.py`
 
 ## Docker
+
+## How to build and run Image
+`docker login` <br />
+`docker build -t fatemeh001/kicampus_chatbot:0.0.1 .` <br />
+`docker images` <br />
+`docker run -p 8501 fatemeh001/kicampus_chatbot:0.0.1` <br />
+
+
+`docker login kicwaacrdev.azurecr.io` <br />
+`docker tag fatemeh001/kicamp_chatbot:0.0.1 kicwaacrdev.azurecr.io/fatemeh001/kicampus_chatbot:0.0.1` <br />
+`docker push kicwaacrdev.azurecr.io/fatemeh001/kicampus_chatbot:0.0.1` <br />
+
+
 ### Build and push Docker images locally
 Before pushing the docker image you need to be authenticated docker via `gcloud auth configure-docker europe-west3-docker.pkg.dev`.
 

@@ -7,5 +7,5 @@
 
     "launches": {
         "KIC-CoursesPipeline": "Python Debugger: KI Campus courses pipeline",
-      }
+    },
 }

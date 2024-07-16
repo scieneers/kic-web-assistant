@@ -163,4 +163,3 @@ class Moodle:
 if __name__ == "__main__":
     moodle = Moodle()
     courses = moodle.extract()
-    print(courses)

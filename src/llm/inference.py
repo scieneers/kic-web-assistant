@@ -1,9 +1,6 @@
-from dotenv import load_dotenv
 from langfuse import Langfuse
-from langfuse.decorators import langfuse_context, observe
 from langfuse.llama_index import LlamaIndexCallbackHandler
 from llama_index.core import QueryBundle, Settings, get_response_synthesizer
-from llama_index.core.callbacks import CallbackManager
 from llama_index.core.chat_engine import CondenseQuestionChatEngine
 from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.llms import ChatMessage
@@ -11,30 +8,29 @@ from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore
 from llama_index.core.vector_stores import VectorStoreQuery
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from llama_index.llms.azure_openai import AzureOpenAI
 
-from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
 from src.env import EnvHelper
-from src.llm.prompts import condense_question, text_qa_template
-from src.vectordb.qdrant import VectorDBQdrant
+from src.LlamaIndex.qdrant import VectorDBQdrant
+from src.llm.prompts import condense_question, system, text_qa_template
 
-load_dotenv()
-
-langfuse = Langfuse()
-
-langfuse_callback_handler = LlamaIndexCallbackHandler()
-Settings.callback_manager = CallbackManager([langfuse_callback_handler])
-
-# llama_index.core.set_global_handler('simple')
 Settings.global_handler = "simple"
 
 
 class KiCampusRetriever(BaseRetriever):
     def __init__(self, embedder: BaseEmbedding = None):
-        if embedder is None:
-            embedder = MultilingualE5LargeEmbedder()
-        self.embedder = embedder
-        self.vector_store = VectorDBQdrant("disk").as_llama_vector_store(collection_name="assistant")
+        secrets = EnvHelper()
+
+        self.embedder = AzureOpenAIEmbedding(
+            model=secrets.AZURE_OPENAI_EMBEDDER_MODEL,
+            deployment_name=secrets.AZURE_OPENAI_EMBEDDER_DEPLOYMENT,
+            api_key=secrets.AZURE_OPENAI_EMBEDDER_API_KEY,
+            azure_endpoint=secrets.AZURE_OPENAI_EMBEDDER_ENDPOINT,
+            api_version=secrets.AZURE_OPENAI_EMBEDDER_API_VERSION,
+        )
+
+        self.vector_store = VectorDBQdrant("remote").as_llama_vector_store(collection_name="web_assistant")
         super().__init__()
 
     def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
@@ -59,17 +55,27 @@ class KiCampusRetriever(BaseRetriever):
 class KICampusAssistant:
     def __init__(self, verbose: bool = False):
         self.retriever = KiCampusRetriever()
-
         secrets = EnvHelper()
-        llm = AzureOpenAI(
-            model="gpt-35-turbo",
-            engine="gpt-3_5",
-            api_key=secrets.AZURE_OPENAI_KEY,
-            azure_endpoint=secrets.AZURE_OPENAI_URL,
-            api_version="2023-05-15",
+
+        self.langfuse = Langfuse(
+            secret_key=secrets.LANGFUSE_SECRET_KEY, public_key=secrets.LANGFUSE_PUBLIC_KEY, host=secrets.LANGFUSE_HOST
+        )
+        self.langfuse_callback_handler = LlamaIndexCallbackHandler(
+            secret_key=secrets.LANGFUSE_SECRET_KEY, public_key=secrets.LANGFUSE_PUBLIC_KEY
         )
 
-        Settings.llm = llm
+        self.llm_gpt = AzureOpenAI(
+            temperature=0.0,
+            model=secrets.AZURE_OPENAI_GPT4_MODEL,
+            api_version=secrets.AZURE_OPENAI_GPT4_API_VERSION,
+            engine=secrets.AZURE_OPENAI_GPT4_DEPLOYMENT,
+            api_key=secrets.AZURE_OPENAI_GPT4_KEY,
+            azure_endpoint=secrets.AZURE_OPENAI_GPT4_URL,
+        )
+
+        print("CHAT MODEL IS READY -------------------------------------------------------------------------")
+
+        Settings.llm = self.llm_gpt
         Settings.embed_model = None
 
         response_synthesizer = get_response_synthesizer(
@@ -93,9 +99,9 @@ class KICampusAssistant:
         )
 
     def chat(self, query: str, chat_history: list[ChatMessage] = None) -> str:
-        root_trace = langfuse.trace(name="llamaindex-rag-chat")
+        root_trace = self.langfuse.trace(name="llamaindex-rag-chat")
         trace_id = root_trace.trace_id
-        langfuse_callback_handler.set_root(root_trace)
+        self.langfuse_callback_handler.set_root(root_trace)
 
         response = self.chat_engine.chat(query, chat_history=chat_history)
 
@@ -105,7 +111,7 @@ class KICampusAssistant:
         value = 1 if feedback_response["score"] == "👍" else -1
         comment = feedback_response["text"]
 
-        langfuse.score(trace_id=trace_id, name="user-explicit-feedback", value=value, comment=comment)
+        self.langfuse.score(trace_id=trace_id, name="user-explicit-feedback", value=value, comment=comment)
 
     def reset(self):
         self.chat_engine.reset()
@@ -113,5 +119,4 @@ class KICampusAssistant:
 
 if __name__ == "__main__":
     assistant = KICampusAssistant(verbose=True)
-    assistant.answer(query="Welche Kurse zu ethischer KI habt ihr im Angebot?")
-    print("wait")
+    assistant.chat(query="Eklär über den Kurs Deep Learning mit Tensorflow, Keras und Tensorflow.js")

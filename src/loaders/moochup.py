@@ -1,16 +1,18 @@
 import requests
 from bs4 import BeautifulSoup
 from llama_index.core import Document
+from llama_index.core.ingestion import IngestionPipeline
+from llama_index.core.node_parser import SentenceSplitter
 from pydantic import AliasChoices, BaseModel, Field, field_validator
-
-from src.env import EnvHelper
 
 
 class CourseAttributes(BaseModel):
     name: str
     abstract: str
     # TODO tell cornelia where apis differ
-    language: str | None = Field(alias="languages")
+    languages: str | None = Field(
+        alias=AliasChoices("inLanguage", "languages")
+    )  # inLanguage"  Field(validation_alias=AliasChoices('first_name', 'fname'))
     url: str = Field(validation_alias=AliasChoices("url", "uniformResourceLocator"))
 
     # moochup does not always provide a language, learn.ki-campus.org does
@@ -23,9 +25,9 @@ class CourseAttributes(BaseModel):
         soup = BeautifulSoup(abstract, "html.parser")
         return soup.get_text()
 
-    @field_validator("language", mode="before")
+    @field_validator("languages", mode="before")
     @classmethod
-    def single_language(cls, languages: list[str | None]) -> str:
+    def single_language(cls, languages: list[str]) -> str:
         if len(languages) > 1:
             raise ValueError("Only one language is expected.")
         elif len(languages) == 0:
@@ -41,15 +43,19 @@ class CourseInfo(BaseModel):
     @field_validator("type")
     @classmethod
     def name_be_course(cls, type: str) -> str:
-        if type != "courses":
-            raise ValueError("Only courses are expected.")
-        return type
+        if type.lower() == "courses" or type == "Course":
+            type = "course"
+
+        # print(type.lower())
+        if type != "course":
+            raise ValueError("Only type 'course' is expected.")
+        return type.lower()
 
     def to_document(self) -> Document:
         text = f"Kursname: {self.attributes.name}\n Kursbeschreibung: {self.attributes.abstract}"
-        metadata = {"type": "course", "url": self.attributes.url}
-        if self.attributes.language:
-            metadata["lang"] = (self.attributes.language,)
+        metadata = {"type": "courses", "url": self.attributes.url}
+        if self.attributes.languages:
+            metadata["lang"] = (self.attributes.languages,)
         return Document(text=text, metadata=metadata)
 
 
@@ -66,7 +72,7 @@ class Moochup:
 
         def fetch_pages(api_url) -> dict:
             response = requests.get(
-                api_url, headers={"Accept": "application/vnd.api+json; moochub-version=2.1, application/problem+json"}
+                api_url, headers={"Accept": "application/vnd.api+json; moochub-version=3.0, application/problem+json"}
             )
             response.raise_for_status()
             return response.json()
@@ -85,10 +91,3 @@ class Moochup:
         """Returns a list of all course payloads."""
         course_data = self.fetch_data()
         return [course.to_document() for course in course_data]
-
-
-if __name__ == "__main__":
-    moochup_client = Moochup(EnvHelper().DATA_SOURCE_MOOCHUP_MOODLE_URL)
-    course_data = moochup_client.fetch_data()
-    print(course_data)
-    print(course_data[0].to_document())
