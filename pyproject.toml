@@ -14,8 +14,6 @@ packages = [
 [tool.poetry.dependencies]
 python = "~3.11"
 qdrant-client = "~1.7.3"
-fastapi = "~0.104.1"
-uvicorn = {extras = ["standard"], version = "~0.24.0.post1"}
 llama-index-embeddings-azure-openai = "^0.1.6"
 llama-index-vector-stores-qdrant = "^0.1.6"
 llama-index-llms-azure-openai = "^0.1.5"
@@ -26,12 +24,19 @@ webvtt-py = "^0.4.6"
 # Monitoring
 langfuse = "^2.22.0"
 youtube-transcript-api = "^0.6.2"
+pydantic = "~2.5.2"
+
+[tool.poetry.group.api]
+optional = true
+[tool.poetry.group.api.dependencies]
+fastapi = "~0.104.1"
+uvicorn = {extras = ["standard"], version = "~0.24.0.post1"}
+gunicorn = "^22.0.0"
 
 [tool.poetry.group.embedder]
 optional = true
 [tool.poetry.group.embedder.dependencies]
 requests = "~2.31.0"
-pydantic = "~2.5.2"
 beautifulsoup4 = "~4.12.2"
 
 [tool.poetry.group.frontend]

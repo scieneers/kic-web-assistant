@@ -33,6 +33,16 @@ tasks:
           docker build -t app:latest -f src/frontend/Dockerfile .
         {{ end }}
 
+  build-api:
+    desc: Build the docker image for the chatbot Rest API
+    cmds:
+      - |
+        {{ if eq .TARGET "linux" }}
+          docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/rest-api:latest -f src/api/Dockerfile .
+        {{ else }}
+          docker build -t rest-api:latest -f src/api/Dockerfile .
+        {{ end }}
+
   build-embedder:
     desc: Build the docker image for the embedder API
     cmds:
@@ -48,3 +58,8 @@ tasks:
     cmds:
       - docker push {{ .REGISTRY }}/app:latest
       - docker push {{ .REGISTRY }}/embedder:latest
+
+  az-login:
+    desc: Login to azure using azure-cli
+    cmds:
+      - az login --tenant c6ff58bc-993e-4bdb-8d10-6013e2cd361f --scope https://graph.microsoft.com/.default

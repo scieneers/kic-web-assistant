@@ -12,9 +12,6 @@ ENV PYTHONUNBUFFERED=1 \
     VENV_PATH="/opt/pysetup/.venv"
 
 ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
-
-EXPOSE 8501
-
 RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 -ms /bin/bash appuser
 
@@ -29,7 +26,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR $PYSETUP_PATH
 COPY poetry.lock pyproject.toml ./
-RUN poetry install --with frontend --no-interaction --no-ansi
+RUN poetry install --with api --no-interaction --no-ansi
 
 USER appuser
 WORKDIR /home/appuser
@@ -45,4 +42,6 @@ USER appuser
 WORKDIR /home/appuser
 COPY --from=build $VENV_PATH $VENV_PATH
 COPY --from=build --chown=appuser:appuser /home/appuser /home/appuser
-CMD python -m streamlit run src/frontend/frontend.py
+
+EXPOSE 80
+CMD ["gunicorn" , "-b", "0.0.0.0:80", "-c", "src/api/gunicorn.conf.py", "src.api.rest:app"]

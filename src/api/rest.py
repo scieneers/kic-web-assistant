@@ -4,10 +4,11 @@ import logging
 from enum import Enum
 
 # Fixing MIME types for static files under Windows
-from typing import Any
+from typing import Annotated
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import APIKeyHeader
 from langfuse import Langfuse
 from llama_index.core.llms import ChatMessage, MessageRole
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -17,7 +18,18 @@ from src.api.models.serializable_chat_message import SerializableChatMessage
 
 app = FastAPI()
 
+# authentication with OAuth2
+api_key_hearder = APIKeyHeader(name="Api-Key")
 
+
+async def api_key_auth(api_key: Annotated[str, Depends(api_key_hearder)]):
+    ALLOWED_API_KEYS = ["example_todelete_123"]
+
+    if api_key not in ALLOWED_API_KEYS:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
+
+
+# Rest API Endpoints
 class ModelChoices(str, Enum):
     GPT_4 = "gpt-4"
     MISTRAL = "mistral"
@@ -58,7 +70,7 @@ class RetrievalRequest(BaseModel):
         return self
 
 
-@app.post("/api/retrieval")
+@app.post("/api/retrieval", dependencies=[Depends(api_key_auth)])
 def retrieval(retrieval_request: RetrievalRequest):
     """Returns the most similar documents from the Search Index."""
     pass
@@ -100,7 +112,7 @@ class ChatResponse(BaseModel):
     response_id: str = Field(description="An ID for the response, that is needed for using the feedback endpoint.")
 
 
-@app.post("/api/chat")
+@app.post("/api/chat", dependencies=[Depends(api_key_auth)])
 def chat(chat_request: ChatRequest) -> ChatResponse:
     """Returns the response to the user message in one response (no streaming)."""
     pass
@@ -112,7 +124,7 @@ class FeedbackRequest(BaseModel):
     score: int = Field(default="Score between 0 and 1, where 1 is good and 0 is bad.")
 
 
-@app.post("/api/feedback")
+@app.post("/api/feedback", dependencies=[Depends(api_key_auth)])
 def track_feedback(feedback_request: FeedbackRequest):
     """Update feedback in langfuse logs."""
     pass
