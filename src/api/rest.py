@@ -1,6 +1,4 @@
-import datetime
-import json
-import logging
+from contextlib import asynccontextmanager
 from enum import Enum
 
 # Fixing MIME types for static files under Windows
@@ -14,6 +12,7 @@ from llama_index.core.llms import ChatMessage, MessageRole
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.responses import FileResponse
 
+from llm.assistant import KICampusAssistant
 from src.api.models.serializable_chat_message import SerializableChatMessage
 
 app = FastAPI()
@@ -92,7 +91,7 @@ class ChatRequest(BaseModel):
         description="The course identifier to restrict the search on.",
         examples=[79, 102, 91],
     )
-    module_id: str | None = Field(
+    module_id: int | None = Field(
         default=None,
         description="The course module / topic / unit to restrict the search on. course_id is required when module_id is set.",
         examples=[1, 102, 33],
@@ -115,6 +114,9 @@ class ChatResponse(BaseModel):
 @app.post("/api/chat", dependencies=[Depends(api_key_auth)])
 def chat(chat_request: ChatRequest) -> ChatResponse:
     """Returns the response to the user message in one response (no streaming)."""
+    assistant = KICampusAssistant()
+
+    assistant.chat(query=chat_request)
     pass
 
 

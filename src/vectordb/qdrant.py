@@ -14,7 +14,7 @@ sys.path.append(parent)
 
 
 class VectorDBQdrant:
-    def __init__(self, version="disk"):
+    def __init__(self, version: str = "disk"):
         self.secrets = EnvHelper()
 
         self.version = version

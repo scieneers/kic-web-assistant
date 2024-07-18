@@ -3,7 +3,7 @@ version: '3'
 vars:
   # Build for different architecture in case of arm processors
   TARGET: "linux"
-  REGISTRY: "europe-west3-docker.pkg.dev/kic-chat-assistant/docker-registry"
+  REGISTRY: "kicwaacrdev.azurecr.io"
 
 tasks:
   add-secret:
