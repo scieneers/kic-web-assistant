@@ -22,16 +22,15 @@
         },
         {
             "name": "Streamlit",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "streamlit",
             "args": [
                 "run",
-                "${file}"
+                "src/frontend/frontend.py"
             ],
             "console": "integratedTerminal",
             "justMyCode": true,
-            "cwd": "${fileDirname}"
         },
         {
             "name": "FastAPI",

@@ -14,12 +14,24 @@ class EnvHelper:
         load_dotenv()
         # Environment setup
         self.ENVIRONMENT = os.getenv("ENVIRONMENT", "STAGING")
-        # Azure Search
+
+        # Azure / GPT-4
         self.AZURE_OPENAI_GPT4_KEY = os.getenv("AZURE_OPENAI_GPT4_KEY", "")
         self.AZURE_OPENAI_GPT4_URL = os.getenv("AZURE_OPENAI_GPT4_URL", "")
         self.AZURE_OPENAI_GPT4_API_VERSION = os.getenv("AZURE_OPENAI_GPT4_API_VERSION", "")
         self.AZURE_OPENAI_GPT4_DEPLOYMENT = os.getenv("AZURE_OPENAI_GPT4_DEPLOYMENT", "")
         self.AZURE_OPENAI_GPT4_MODEL = os.getenv("AZURE_OPENAI_GPT4_MODEL", "")
+
+        # Azure / Mistral
+        self.AZURE_OPENAI_MISTRAL_URL = os.getenv("AZURE_OPENAI_MISTRAL_URL", "")
+        self.AZURE_OPENAI_MISTRAL_KEY = os.getenv("AZURE_OPENAI_MISTRAL_KEY", "")
+
+        # Azure / Llama3
+        self.AZURE_OPENAI_LLAMA3_URL = os.getenv("AZURE_OPENAI_LLAMA3_URL", "")
+        self.AZURE_OPENAI_LLAMA3_KEY = os.getenv("AZURE_OPENAI_LLAMA3_KEY", "")
+
+        # Aleph Alpha
+        self.AA_TOKEN = os.getenv("AA_TOKEN", "")
 
         # Azure Embedder
         self.AZURE_OPENAI_EMBEDDER_API_VERSION = os.getenv("AZURE_OPENAI_EMBEDDER_API_VERSION", "")
