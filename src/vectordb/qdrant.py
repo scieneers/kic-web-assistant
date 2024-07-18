@@ -31,7 +31,9 @@ class VectorDBQdrant:
                 )
                 raise e
         elif version == "remote":
-            self.client = QdrantClient(url=self.secrets.QDRANT_URL, port=443, api_key=self.secrets.QDRANT_TOKEN)
+            self.client = QdrantClient(
+                url=self.secrets.QDRANT_URL, port=443, https=True, timeout=30, api_key=self.secrets.QDRANT_TOKEN
+            )
             _ = self.client.get_collections()
         else:
             raise ValueError("Version must be either 'memory' or 'disk' or 'remote'")
@@ -69,6 +71,7 @@ class VectorDBQdrant:
 
 
 if __name__ == "__main__":
-    test_connection = VectorDBQdrant(version="remote")
+    pass
+    # test_connection = VectorDBQdrant(version="remote")
     # test_connection = VectorDBQdrant(version="disk") # For local testing only
-    print(test_connection.client.get_collections())
+    # print(test_connection.client.get_collections())

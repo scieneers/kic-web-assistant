@@ -9,11 +9,14 @@ from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore
 from llama_index.core.vector_stores import VectorStoreQuery
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.llms.alephalpha import AlephAlpha
 from llama_index.llms.azure_openai import AzureOpenAI
+from llama_index.llms.mistralai import MistralAI
 
 from src.env import EnvHelper
-from src.LlamaIndex.qdrant import VectorDBQdrant
-from src.llm.prompts import condense_question, system, text_qa_template
+from src.frontend.LLMs import LLM
+from src.llm.prompts import condense_question, text_qa_template
+from src.vectordb.qdrant import VectorDBQdrant
 
 Settings.global_handler = "simple"
 
@@ -53,8 +56,8 @@ class KiCampusRetriever(BaseRetriever):
 
 
 class KICampusAssistant:
-    def __init__(self, verbose: bool = False):
-        self.retriever = KiCampusRetriever()
+    def __init__(self, model: LLM, retriever: KiCampusRetriever, verbose: bool = False):
+        self.retriever = retriever
         secrets = EnvHelper()
 
         self.langfuse = Langfuse(
@@ -64,18 +67,32 @@ class KICampusAssistant:
             secret_key=secrets.LANGFUSE_SECRET_KEY, public_key=secrets.LANGFUSE_PUBLIC_KEY
         )
 
-        self.llm_gpt = AzureOpenAI(
-            temperature=0.0,
-            model=secrets.AZURE_OPENAI_GPT4_MODEL,
-            api_version=secrets.AZURE_OPENAI_GPT4_API_VERSION,
-            engine=secrets.AZURE_OPENAI_GPT4_DEPLOYMENT,
-            api_key=secrets.AZURE_OPENAI_GPT4_KEY,
-            azure_endpoint=secrets.AZURE_OPENAI_GPT4_URL,
-        )
+        match model:
+            case LLM.gpt4:
+                llm = AzureOpenAI(
+                    model=secrets.AZURE_OPENAI_GPT4_MODEL,
+                    engine=secrets.AZURE_OPENAI_GPT4_DEPLOYMENT,
+                    api_key=secrets.AZURE_OPENAI_GPT4_KEY,
+                    azure_endpoint=secrets.AZURE_OPENAI_GPT4_URL,
+                    api_version="2023-05-15",
+                )
+            case LLM.mistral:
+                llm = MistralAI(
+                    api_key=secrets.AZURE_OPENAI_MISTRAL_KEY,
+                    endpoint=secrets.AZURE_OPENAI_MISTRAL_URL,
+                )
+            case LLM.llama3:
+                # TODO: auf streaming umbauen?
+                pass
+                # llm = AzureAIStudioLlama2(
+                #     api_key=secrets.AZURE_OPENAI_LLAMA2_KEY, endpoint=secrets.AZURE_OPENAI_LLAMA2_URL
+                # )
+            case LLM.luminous:
+                llm = AlephAlpha(model="luminous-base-control")
 
         print("CHAT MODEL IS READY -------------------------------------------------------------------------")
 
-        Settings.llm = self.llm_gpt
+        Settings.llm = llm
         Settings.embed_model = None
 
         response_synthesizer = get_response_synthesizer(

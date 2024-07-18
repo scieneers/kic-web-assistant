@@ -1,23 +1,42 @@
 import streamlit as st
-from langfuse import Langfuse
-from llama_index.core import Settings
 from llama_index.core.llms import ChatMessage, MessageRole
 from streamlit_feedback import streamlit_feedback
 
-from src.llm.inference import KICampusAssistant
+from src.frontend.LLMs import LLM
+from src.llm.inference import KICampusAssistant, KiCampusRetriever
 
 
 @st.cache_resource
-def instantiate_assistant() -> KICampusAssistant:
-    return KICampusAssistant()
+def instantiate_embedder():
+    return KiCampusRetriever()
+
+
+def instantiate_assistant(model) -> KICampusAssistant:
+    return KICampusAssistant(model, instantiate_embedder())
+
+
+def empty_history():
+    st.session_state.messages = []
 
 
 st.title("KI-Campus Assistant")
 
+if "llm_select" not in st.session_state:
+    st.session_state["llm_select"] = LLM.gpt4
+with st.sidebar:
+    st.session_state["llm_select"] = st.selectbox(
+        "Bitte wählen Sie das LLM aus",
+        options=(model for model in LLM),
+        index=0,
+        on_change=empty_history,
+        format_func=lambda model: model.value,
+        placeholder=LLM.gpt4.name,
+    )
+
 # Initialize assistant
 with st.chat_message("assistant"):
     st.write("Bitte warten...")
-    assistant = instantiate_assistant()
+    assistant = instantiate_assistant(st.session_state.llm_select)
     st.write("Hallo 👋 Wie kann ich Ihnen helfen?")
 
 # Initialize chat history & display chat messages from history on app rerun

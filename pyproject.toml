@@ -13,12 +13,16 @@ packages = [
 
 [tool.poetry.dependencies]
 python = "~3.11"
-qdrant-client = "~1.7.3"
+qdrant-client = "~1.8.2"
 llama-index-embeddings-azure-openai = "^0.1.6"
 llama-index-vector-stores-qdrant = "^0.1.6"
 llama-index-llms-azure-openai = "^0.1.5"
 llama-index = "0.10.45"
+llama-index-llms-mistralai = "^0.1.10"
+llamaapi = "^0.1.36"
+llama-index-llms-alephalpha = "^0.1.0"
 openai = "^1.16.2"
+python-dotenv = "^1.0.1"
 # Self hosting llms
 webvtt-py = "^0.4.6"
 # Monitoring
