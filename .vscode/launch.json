@@ -5,10 +5,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python Debugger: KI Campus courses pipeline",
+            "name": "Python Debugger: Loader",
             "type": "debugpy",
             "request": "launch",
-            "program": "src/loaders/courses_pipeline.py",
+            "program": "src/loaders/get_data.py",
             "console": "integratedTerminal"
         },
         {

@@ -1,14 +1,21 @@
 import streamlit as st
 from llama_index.core.llms import ChatMessage, MessageRole
+from st_ant_tree import st_ant_tree
 from streamlit_feedback import streamlit_feedback
 
 from src.llm.assistant import KICampusAssistant
 from src.llm.LLMs import Models
+from src.vectordb.qdrant import VectorDBQdrant
 
 
 @st.cache_resource
 def instantiate_assistant() -> KICampusAssistant:
     return KICampusAssistant()
+
+
+@st.cache_resource
+def load_tree() -> list:
+    return VectorDBQdrant().get_tree_of_courses("web_assistant")
 
 
 def empty_history():
@@ -32,8 +39,15 @@ with st.sidebar:
 # Initialize assistant
 with st.chat_message("assistant"):
     st.write("Bitte warten...")
+    tree_of_courses = load_tree()
     assistant = instantiate_assistant()
     st.write("Hallo 👋 Wie kann ich Ihnen helfen?")
+
+selected_course = st_ant_tree(
+    treeData=tree_of_courses,
+    placeholder="Hier können Sie Antworten auf einen Kurs oder Modul begrenzen",
+    treeCheckable=False,
+)
 
 # Initialize chat history & display chat messages from history on app rerun
 if "messages" not in st.session_state:
@@ -51,7 +65,12 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
     chat_history = [
         ChatMessage(role=message["role"], content=message["content"]) for message in st.session_state.messages
     ]
-    response = assistant.chat(query=query, chat_history=chat_history, model=st.session_state.llm_select)
+    if not selected_course:
+        response = assistant.chat(query=query, chat_history=chat_history, model=st.session_state.llm_select)
+    else:
+        response = assistant.chat_with_course(
+            query=query, chat_history=chat_history, model=st.session_state.llm_select, course=selected_course
+        )
 
     with st.chat_message("assistant"):
         st.markdown(response)

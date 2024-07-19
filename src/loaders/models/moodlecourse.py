@@ -36,7 +36,7 @@ class MoodleCourse(BaseModel):
     def to_document(self) -> Document:
         text = str(self)
         metadata = {
-            "id": self.id,
+            "course_id": self.id,
             "shortname": self.shortname,
             "fullname": self.fullname,
             "type": "course",
