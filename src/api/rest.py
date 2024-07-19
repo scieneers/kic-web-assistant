@@ -1,21 +1,24 @@
-from contextlib import asynccontextmanager
-from enum import Enum
-
-# Fixing MIME types for static files under Windows
 from typing import Annotated
 
-import requests
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import APIKeyHeader
 from langfuse import Langfuse
+from langfuse.decorators import langfuse_context, observe
+from langfuse.llama_index import LlamaIndexCallbackHandler
+from llama_index.core import Settings
+from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import ChatMessage, MessageRole
 from pydantic import BaseModel, Field, field_validator, model_validator
-from starlette.responses import FileResponse
 
-from llm.assistant import KICampusAssistant
 from src.api.models.serializable_chat_message import SerializableChatMessage
+from src.llm.assistant import KICampusAssistant
+from src.llm.LLMs import Models
 
 app = FastAPI()
+
+# Langfuse tracing
+langfuse_handler = LlamaIndexCallbackHandler()
+Settings.callback_manager = CallbackManager([langfuse_handler])
 
 # authentication with OAuth2
 api_key_hearder = APIKeyHeader(name="Api-Key")
@@ -28,12 +31,7 @@ async def api_key_auth(api_key: Annotated[str, Depends(api_key_hearder)]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
 
 
-# Rest API Endpoints
-class ModelChoices(str, Enum):
-    GPT_4 = "gpt-4"
-    MISTRAL = "mistral"
-
-
+# APIs
 @app.get("/health")
 def health() -> str:
     """Health check endpoint. Returns 'OK' if the service is running."""
@@ -96,15 +94,28 @@ class ChatRequest(BaseModel):
         description="The course module / topic / unit to restrict the search on. course_id is required when module_id is set.",
         examples=[1, 102, 33],
     )
-    model: ModelChoices = Field(
-        default=ModelChoices.GPT_4,
+    model: Models = Field(
+        default=Models.GPT4,
         description="The LLM to use for the conversation.",
-        examples=[ModelChoices.GPT_4, ModelChoices.MISTRAL],
+        examples=[Models.GPT4, Models.MISTRAL],
     )
+
+    @field_validator("messages", mode="after")
+    @classmethod
+    def final_message_is_user(cls, messages: list[SerializableChatMessage]) -> list[SerializableChatMessage]:
+        if messages[-1].role != MessageRole.USER:
+            raise ValueError("The last message must be a user message.")
+        return messages
+
+    def get_chat_history(self) -> list[ChatMessage]:
+        return [message.to_chat_message() for message in self.messages[:-1]]
+
+    def get_user_query(self) -> str:
+        return self.messages[-1].content
 
 
 class ChatResponse(BaseModel):
-    message: str = Field(
+    message: SerializableChatMessage = Field(
         description="The assistant response to the user message.",
         examples=["I can help you with that. What is the assignment about?"],
     )
@@ -112,12 +123,20 @@ class ChatResponse(BaseModel):
 
 
 @app.post("/api/chat", dependencies=[Depends(api_key_auth)])
+@observe()
 def chat(chat_request: ChatRequest) -> ChatResponse:
     """Returns the response to the user message in one response (no streaming)."""
     assistant = KICampusAssistant()
 
-    assistant.chat(query=chat_request)
-    pass
+    llm_response = assistant.chat(
+        query=chat_request.get_user_query(), chat_history=chat_request.get_chat_history(), model=chat_request.model
+    )
+
+    trace_id = langfuse_context.get_current_trace_id()
+    if not trace_id:
+        trace_id = "TRACING_UNAVAILABLE"
+    chat_response = ChatResponse(message=SerializableChatMessage.from_chat_message(llm_response), response_id=trace_id)
+    return chat_response
 
 
 class FeedbackRequest(BaseModel):
@@ -125,8 +144,20 @@ class FeedbackRequest(BaseModel):
     feedback: str = Field(description="Feedback on the conversation.")
     score: int = Field(default="Score between 0 and 1, where 1 is good and 0 is bad.")
 
+    @field_validator("score", mode="after")
+    @classmethod
+    def validate_score(cls, score: int) -> int:
+        if 0 <= score <= 1:
+            raise ValueError("Score must be between 0 and 1.")
+        return score
+
 
 @app.post("/api/feedback", dependencies=[Depends(api_key_auth)])
 def track_feedback(feedback_request: FeedbackRequest):
     """Update feedback in langfuse logs."""
-    pass
+    Langfuse().score(
+        trace_id=feedback_request.response_id,
+        name="user-explicit-feedback",
+        value=feedback_request.score,
+        comment=feedback_request.feedback,
+    )

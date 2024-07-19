@@ -1,3 +1,4 @@
+from langfuse.decorators import observe
 from llama_index.core.llms import ChatMessage, MessageRole
 
 from src.llm.LLMs import LLM, Models
@@ -15,6 +16,7 @@ class Contextualizer:
     def __init__(self):
         self.llm = LLM()
 
+    @observe()
     def contextualize(self, query: str, chat_history: list[ChatMessage], model: Models) -> str:
         """Contextualize a message based on the chat history, so that it can effectively used as input for RAG retrieval."""
 

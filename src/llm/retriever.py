@@ -1,3 +1,4 @@
+from langfuse.decorators import observe
 from llama_index.core import QueryBundle
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore
@@ -24,7 +25,12 @@ class KiCampusRetriever(BaseRetriever):
         self.vector_store = VectorDBQdrant("remote").as_llama_vector_store(collection_name="web_assistant")
         super().__init__()
 
+<<<<<<< HEAD
     def _retrieve(self, query_bundle: QueryBundle, course_id: int) -> list[NodeWithScore]:
+=======
+    @observe()
+    def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
+>>>>>>> f0366e1 (rest api uses assistant)
         embedding = self.embedder.get_query_embedding(query_bundle.query_str)
 
         filters = MetadataFilters(filters=[], condition=FilterCondition.AND)

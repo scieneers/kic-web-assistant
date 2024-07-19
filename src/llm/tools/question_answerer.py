@@ -1,3 +1,4 @@
+from langfuse.decorators import observe
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.schema import NodeWithScore
 
@@ -30,9 +31,10 @@ class QuestionAnswerer:
         self.name = "QuestionAnswer"
         self.llm = LLM()
 
+    @observe()
     def answer_question(
         self, query: str, chat_history: list[ChatMessage], sources: list[NodeWithScore], model: Models
-    ) -> str:
+    ) -> ChatMessage:
         sources_text = "\n".join([source.get_text() for source in sources])
         prompted_user_query = USER_QUERY_WITH_SOURCES_PROMPT.format(context=sources_text, query=query)
 
@@ -42,4 +44,4 @@ class QuestionAnswerer:
         if response.content is None:
             raise ValueError(f"LLM produced no response. Please check the LLM implementation. Response: {response}")
 
-        return response.content
+        return response

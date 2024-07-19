@@ -1,5 +1,6 @@
 from enum import Enum
 
+from langfuse.decorators import observe
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 from llama_index.llms.azure_openai import AzureOpenAI
@@ -9,8 +10,8 @@ from src.env import EnvHelper
 
 
 class Models(Enum):
-    gpt4 = "GPT 4"
-    mistral = "Mistral"
+    GPT4 = "GPT-4"
+    MISTRAL = "Mistral"
     # llama3 = "Llama3"
     # luminous = "Luminous"
 
@@ -21,7 +22,7 @@ class LLM:
 
     def get_model(self, model: Models) -> FunctionCallingLLM:
         match model:
-            case Models.gpt4:
+            case Models.GPT4:
                 llm = AzureOpenAI(
                     model=self.secrets.AZURE_OPENAI_GPT4_MODEL,
                     engine=self.secrets.AZURE_OPENAI_GPT4_DEPLOYMENT,
@@ -29,7 +30,7 @@ class LLM:
                     azure_endpoint=self.secrets.AZURE_OPENAI_GPT4_URL,
                     api_version="2023-05-15",
                 )
-            case Models.mistral:
+            case Models.MISTRAL:
                 llm = MistralAI(
                     api_key=self.secrets.AZURE_OPENAI_MISTRAL_KEY,
                     endpoint=self.secrets.AZURE_OPENAI_MISTRAL_URL,
@@ -47,6 +48,7 @@ class LLM:
             #     llm = AlephAlpha(model="luminous-base-control")
         return llm
 
+    @observe()
     def chat(self, query: str, chat_history: list[ChatMessage], model: Models) -> ChatMessage:
         llm = self.get_model(model)
 
