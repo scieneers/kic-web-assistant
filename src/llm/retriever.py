@@ -10,7 +10,7 @@ from src.env import EnvHelper
 from src.vectordb.qdrant import VectorDBQdrant
 
 
-class KiCampusRetriever(BaseRetriever):
+class KiCampusRetriever:
     def __init__(self):
         secrets = EnvHelper()
 
@@ -25,16 +25,12 @@ class KiCampusRetriever(BaseRetriever):
         self.vector_store = VectorDBQdrant("remote").as_llama_vector_store(collection_name="web_assistant")
         super().__init__()
 
-<<<<<<< HEAD
-    def _retrieve(self, query_bundle: QueryBundle, course_id: int) -> list[NodeWithScore]:
-=======
     @observe()
-    def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
->>>>>>> f0366e1 (rest api uses assistant)
-        embedding = self.embedder.get_query_embedding(query_bundle.query_str)
+    def retrieve(self, query: str, course_id: int|None=None) -> list[NodeWithScore]:
+        embedding = self.embedder.get_query_embedding(query)
 
         filters = MetadataFilters(filters=[], condition=FilterCondition.AND)
-        if course_id:
+        if course_id is not None:
             filters.filters.append(MetadataFilter(key="course_id", value=course_id))
 
         vector_store_query = VectorStoreQuery(query_embedding=embedding, similarity_top_k=3, filters=filters)

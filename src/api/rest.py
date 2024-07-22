@@ -128,6 +128,11 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
     """Returns the response to the user message in one response (no streaming)."""
     assistant = KICampusAssistant()
 
+    # if chat_request.course_id:
+    #     llm_response = assistant.chat_with_course(
+    #         query=chat_request.get_user_query(), chat_history=chat_request.get_chat_history(), model=chat_request.model, course=chat_request.course_id, module=chat_request.module_id
+    #     )
+    # else:
     llm_response = assistant.chat(
         query=chat_request.get_user_query(), chat_history=chat_request.get_chat_history(), model=chat_request.model
     )
