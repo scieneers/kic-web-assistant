@@ -15,7 +15,20 @@ def instantiate_assistant() -> KICampusAssistant:
 
 @st.cache_resource
 def load_tree() -> list:
-    return VectorDBQdrant().get_tree_of_courses("web_assistant")
+    return [
+        {
+            "value": "18",
+            "title": "Testkurs 1",
+            "children": [
+                {"value": "422", "title": "Testmodul 1"},
+                {"value": "423", "title": "Testmodul 2"},
+            ],
+        },
+        {
+            "value": "19",
+            "title": "Testkurs 2",
+        },
+    ]
 
 
 def empty_history():
@@ -65,12 +78,7 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
     chat_history = [
         ChatMessage(role=message["role"], content=message["content"]) for message in st.session_state.messages
     ]
-    if not selected_course:
-        response = assistant.chat(query=query, chat_history=chat_history, model=st.session_state.llm_select)
-    else:
-        response = assistant.chat_with_course(
-            query=query, chat_history=chat_history, model=st.session_state.llm_select, course=selected_course
-        )
+    response = assistant.chat(query=query, chat_history=chat_history, model=st.session_state.llm_select)
 
     with st.chat_message("assistant"):
         st.markdown(response)
