@@ -43,7 +43,7 @@ class Moodle:
         )
         courses = caller.getJSON()
         course_url = self.base_url + "course/view.php?id="
-        courses = [MoodleCourse(url=course_url, **course) for course in courses if course["id"] == 18]
+        courses = [MoodleCourse(url=course_url, **course) for course in courses]
         return courses
 
     def get_course_contents(self, course_id: int) -> list[CourseTopic]:
@@ -60,13 +60,15 @@ class Moodle:
 
     def get_h5p_module_ids(self, course_id: int) -> list[H5PActivities]:
         h5p_activities: list[H5PActivities] = []
-        h5p_module_ids_caller = APICaller(
-            url=self.api_endpoint,
-            params={**self.function_params, "courseids[0]": course_id},
-            wsfunction="mod_h5pactivity_get_h5pactivities_by_courses",
-        )
-        ids_json = h5p_module_ids_caller.getJSON()
-        h5p_activities = [H5PActivities(**activity) for activity in ids_json["h5pactivities"]]
+        # TODO: fix these courses
+        if course_id != 16 and course_id != 21:
+            h5p_module_ids_caller = APICaller(
+                url=self.api_endpoint,
+                params={**self.function_params, "courseids[0]": course_id},
+                wsfunction="mod_h5pactivity_get_h5pactivities_by_courses",
+            )
+            ids_json = h5p_module_ids_caller.getJSON()
+            h5p_activities = [H5PActivities(**activity) for activity in ids_json["h5pactivities"]]
         return h5p_activities
 
     def get_videotime_content(self, cmid: int):

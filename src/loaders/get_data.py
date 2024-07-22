@@ -1,9 +1,11 @@
 import json
+from json import encoder
 
 from llama_index.core import Document
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from qdrant_client import models
 
 from src.env import EnvHelper
 from src.loaders.drupal import Drupal
@@ -57,7 +59,8 @@ class Fetch_Data:
             vector_store=vector_store.as_llama_vector_store(collection_name="web_assistant"),
         )
 
-        pipeline.run(documents=documents)
+        # TODO: warum nur text in die DB und nicht die Documente komplett
+        pipeline.run(documents=moodle_courses2)
 
         # file = open(f'{self.DATA_PATH}/course_data.txt', 'w', encoding="utf8")
 
@@ -70,3 +73,17 @@ class Fetch_Data:
 
 if __name__ == "__main__":
     docs = Fetch_Data().extract()
+
+#     vector_store = VectorDBQdrant(version="disk")
+#     print(vector_store.client.scroll(
+#         collection_name="web_assistant",
+#         scroll_filter=models.Filter(
+#             must=[
+#                 models.FieldCondition(
+#                     key="id",
+#                     match=models.MatchValue(value=18),
+#                 ),
+#             ]
+#     ),
+# ))
+#     print("bla")
