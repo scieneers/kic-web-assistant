@@ -83,6 +83,7 @@ class ChatRequest(BaseModel):
                 SerializableChatMessage(content="I need help with my assignment", role=MessageRole.USER),
             ]
         ],
+        min_length=1,
     )
     course_id: int | None = Field(
         default=None,
@@ -115,7 +116,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    message: SerializableChatMessage = Field(
+    message: str = Field(
         description="The assistant response to the user message.",
         examples=["I can help you with that. What is the assignment about?"],
     )
@@ -140,7 +141,9 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
     trace_id = langfuse_context.get_current_trace_id()
     if not trace_id:
         trace_id = "TRACING_UNAVAILABLE"
-    chat_response = ChatResponse(message=SerializableChatMessage.from_chat_message(llm_response), response_id=trace_id)
+    chat_response = ChatResponse(
+        message=SerializableChatMessage.from_chat_message(llm_response).content, response_id=trace_id
+    )
     return chat_response
 
 

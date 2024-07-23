@@ -4064,6 +4064,19 @@ watchdog = {version = ">=2.1.5", markers = "platform_system != \"Darwin\""}
 snowflake = ["snowflake-connector-python (>=2.8.0)", "snowflake-snowpark-python (>=0.9.0)"]
 
 [[package]]
+name = "streamlit-antd-components"
+version = "0.3.2"
+description = "streamlit customer components of Antd Design and Mantine"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "streamlit_antd_components-0.3.2-py3-none-any.whl", hash = "sha256:5ae28496127202ed266ea167649436a15f3d548a4805ee5d992c6fc0fe103fd6"},
+]
+
+[package.dependencies]
+streamlit = ">=1.12.0"
+
+[[package]]
 name = "streamlit-feedback"
 version = "0.1.2"
 description = "Streamlit component that allows you to collect user feedback in your apps"
@@ -5051,4 +5064,4 @@ test = ["big-O", "importlib-resources", "jaraco.functools", "jaraco.itertools", 
 [metadata]
 lock-version = "2.0"
 python-versions = "~3.11"
-content-hash = "b32e935e809ee37ce135272d3fb07042e5db9af17986d66ef9718eb6590f1b02"
+content-hash = "4a7a6a0280f0410de9786135ff8ff78bd3244f41c40855aaf2419e2a85689e26"

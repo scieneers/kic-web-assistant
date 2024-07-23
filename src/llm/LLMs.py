@@ -9,7 +9,7 @@ from llama_index.llms.mistralai import MistralAI
 from src.env import EnvHelper
 
 
-class Models(Enum):
+class Models(str, Enum):
     GPT4 = "GPT-4"
     MISTRAL = "Mistral"
     # llama3 = "Llama3"
