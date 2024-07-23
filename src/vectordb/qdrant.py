@@ -65,8 +65,8 @@ class VectorDBQdrant:
         )
         return search_result
 
-    def get_tree_of_courses(self, collection_name) -> dict:
-        current_records = []
+    def get_course_module_records(self, collection_name):
+        all_records = []
 
         next_page_offset = "first"
         offset = None
@@ -76,28 +76,28 @@ class VectorDBQdrant:
                 offset = next_page_offset
 
             records = self.client.scroll(
-                collection_name=collection_name, with_payload=True, with_vectors=False, limit=10, offset=offset
+                collection_name=collection_name,
+                with_payload=True,
+                with_vectors=False,
+                limit=10,
+                offset=offset,
             )
 
             next_page_offset = records[1]
-            current_records.extend(records[0])
 
-        set_of_courses = set()
-        for record in current_records:
-            set_of_courses.add((record.payload["course_id"], record.payload["fullname"]))
+            all_records.extend(records[0])
 
-        sorted_courses_set = sorted(set_of_courses, key=lambda x: x[0])
+        courses_records = sorted(
+            [record for record in all_records if "module_id" not in record.payload],
+            key=lambda x: x.payload["course_id"],
+        )
+        modules_records = sorted(
+            [record for record in all_records if "module_id" in record.payload], key=lambda x: x.payload["module_id"]
+        )
 
-        tree_data = []
-        for value, title in sorted_courses_set:
-            node = {"value": value, "title": title}
-            tree_data.append(node)
-
-        return tree_data
+        return courses_records, modules_records
 
 
 if __name__ == "__main__":
-    pass
-    # test_connection = VectorDBQdrant(version="remote")
     test_connection = VectorDBQdrant(version="disk")  # For local testing only
     print(test_connection.get_metadata("web_assistant"))

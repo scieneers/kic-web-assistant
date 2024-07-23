@@ -10,6 +10,22 @@ from streamlit_feedback import streamlit_feedback
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.api.rest import app
 from src.llm.LLMs import Models
+from vectordb.qdrant import VectorDBQdrant
+
+
+def parse_selected_course(selected_course):
+    if selected_course is None:
+        return
+
+    if "_" in selected_course:
+        if selected_course.startswith("cid_"):
+            st.session_state["course_id"] = int(selected_course[4:])
+        elif selected_course.startswith("mid_"):
+            st.session_state["module_id"] = int(selected_course[4:])
+        else:
+            raise Exception(f"Unknown id format: {selected_course}")
+    else:
+        raise Exception(f"Unknown id format: {selected_course}")
 
 
 @st.cache_resource
@@ -17,23 +33,54 @@ def instantiate_assistant() -> TestClient:
     return TestClient(app)
 
 
+# The st_ant_tree component doesn't accept parent and child nodes with the same value.
+# So we prepend every course_id with "cid_" and every module_id with "mid_". After the
+# selection is done, we remove the prefix.
 @st.cache_resource
-def get_course_tree() -> Any:
-    return [
-        sac.TreeItem(
-            label="Testkurs 1",
-            description="18",
-            children=[
-                sac.TreeItem(label="Testmodul 1", description="422"),
-                sac.TreeItem(label="Testmodul 2", description="423"),
-            ],
-        ),
-        sac.TreeItem(label="Testkurs 2", description="19"),
-    ]
+def create_courses_modules_tree() -> list:
+    course_records, module_records = VectorDBQdrant().get_course_module_records("web_assistant")
+    tree_dict = {}
+
+    # Sets to track unique course_ids and module_ids
+    seen_courses = set()
+    seen_modules = set()
+
+    # Add Courses
+    for record in course_records:
+        payload = record.payload
+        course_id = payload["course_id"]
+        fullname = payload["fullname"]
+
+        # If course_id is unique, create a parent node
+        if course_id not in seen_courses:
+            tree_dict[course_id] = {"value": f"cid_{course_id}", "title": fullname, "children": []}
+            seen_courses.add(course_id)
+
+    # Add Modules
+    for record in module_records:
+        payload = record.payload
+        course_id = payload["course_id"]
+        fullname = payload["fullname"]
+        module_id = payload.get("module_id")
+
+        if module_id not in seen_modules:
+            child_node = {"value": f"mid_{module_id}", "title": fullname}
+            tree_dict[course_id]["children"].append(child_node)
+            seen_modules.add(module_id)
+
+    # Convert the dictionary to a list
+    tree_data = list(tree_dict.values())
+
+    # Remove 'children' key if it is empty
+    for item in tree_data:
+        if not item["children"]:
+            del item["children"]
+
+    return tree_data
 
 
 def get_course_module(course_or_module_index: int) -> dict:
-    tree = get_course_tree()
+    tree = create_courses_modules_tree()
 
     course_id = None
     course_name = None
@@ -125,9 +172,15 @@ with st.sidebar:
     )
 
     st.divider()
+# Initialize assistant
+with st.chat_message("assistant"):
+    st.write("Bitte warten...")
+    tree_of_courses = create_courses_modules_tree()
+    assistant = instantiate_assistant()
+    st.write("Hallo 👋 Wie kann ich Ihnen helfen?")
 
     sac.tree(
-        items=get_course_tree(),
+        items=tree_of_courses,
         on_change=set_course_selection,
         key="course_selection",
         size="lg",
