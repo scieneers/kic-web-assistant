@@ -44,4 +44,13 @@ class MoodleCourse(BaseModel):
         }
         if self.lang:
             metadata.update({"language": self.lang})
-        return Document(text=text, metadata=metadata)
+
+        course_document = Document(text=text, metadata=metadata)
+
+        list_module_documents = []
+
+        for topic in self.topics:
+            for module in topic.modules:
+                list_module_documents.append(module.to_document(self.id))
+
+        return [course_document] + list_module_documents

@@ -88,7 +88,7 @@ class Moodle:
             h5p_activity_ids = self.get_h5p_module_ids(course.id)
             for topic in course.topics:
                 self.get_module_contents(topic, h5p_activity_ids)
-        course_documents = [course.to_document() for course in courses]
+        course_documents = [doc for course in courses for doc in course.to_document()]
         return course_documents
 
     def get_module_contents(self, topic, h5p_activities):
@@ -158,7 +158,6 @@ class Moodle:
                 vimeo = Vimeo()
                 texttrack = vimeo.get_transcript(video.video_id)
                 module.transcripts.append(texttrack)
-        pass
 
 
 if __name__ == "__main__":

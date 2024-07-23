@@ -9,3 +9,6 @@ class TextTrack(BaseModel):
     language: str
     link: HttpUrl | None = None
     transcript: str | None = None
+
+    def __str__(self) -> str:
+        return self.transcript

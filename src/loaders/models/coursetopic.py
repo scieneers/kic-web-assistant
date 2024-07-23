@@ -21,7 +21,6 @@ class CourseTopic(BaseModel):
         return process_html_summaries(summary)
 
     def __str__(self) -> str:
-        # add transcripts
-        modules = "\n ".join([str(module) for module in self.modules])
-        text = f"Topic Summary: {self.summary}\n" "Topic Modules :\n" f"{modules}"
+        # modules = "\n ".join([str(module) for module in self.modules])
+        text = f"Topic Summary: {self.summary}\n"  # "Topic Modules :\n" f"{modules}"
         return text

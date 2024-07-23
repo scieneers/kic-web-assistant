@@ -1,6 +1,9 @@
+<<<<<<< HEAD
 import json
 
 from llama_index.core import Document
+=======
+>>>>>>> ff295b9 (loader writes module_id as a metadate to vector db)
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
@@ -22,21 +25,12 @@ class Fetch_Data:
     def extract(
         self,
     ):
-        hpi_courses = Moochup(env.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
-        hpi_text_list = [json.loads(doc.json())["text"] for doc in hpi_courses]
+        hpi_courses = Moochup(self.secrets.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
+        moodle_courses1 = Moochup(self.secrets.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
+        moodle_docs = Moodle(environment=self.secrets.ENVIRONMENT).extract()
+        drupal_courses = Drupal(base_url=self.secrets.DRUPAL_URL).extract()
 
-        moodle_courses1 = Moochup(env.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
-        moodle_text_list1 = [json.loads(doc.json())["text"] for doc in moodle_courses1]
-
-        moodle_courses2 = Moodle(environment=env.ENVIRONMENT).extract()
-        moodle_text_list2 = [json.loads(doc.json())["text"] for doc in moodle_courses2]
-
-        # drupal_courses = Drupal(base_url=env.DRUPAL_URL).extract()
-        # drupal_text_list = [json.loads(doc.json())["text"] for doc in drupal_courses]
-
-        all_text = hpi_text_list + moodle_text_list1 + moodle_text_list2  # + drupal_text_list
-
-        documents = [Document(text=t) for t in all_text]
+        all_docs = hpi_courses + moodle_courses1 + moodle_docs + drupal_courses
 
         vector_store = VectorDBQdrant(version="remote")
         vector_store.client.delete_collection(collection_name="web_assistant")
@@ -49,31 +43,10 @@ class Fetch_Data:
             vector_store=vector_store.as_llama_vector_store(collection_name="web_assistant"),
         )
 
-        # TODO: warum nur text in die DB und nicht die Documente komplett
-        pipeline.run(documents=moodle_courses2)
+        pipeline.run(documents=all_docs)
 
-        # file = open(f'{self.DATA_PATH}/course_data.txt', 'w', encoding="utf8")
-
-        # for text in all_text:
-        #     file.write(text)
-        #     file.write("\n")
-
-        return documents
+        return all_docs
 
 
 if __name__ == "__main__":
     docs = Fetch_Data().extract()
-
-#     vector_store = VectorDBQdrant(version="disk")
-#     print(vector_store.client.scroll(
-#         collection_name="web_assistant",
-#         scroll_filter=models.Filter(
-#             must=[
-#                 models.FieldCondition(
-#                     key="id",
-#                     match=models.MatchValue(value=18),
-#                 ),
-#             ]
-#     ),
-# ))
-#     print("bla")
