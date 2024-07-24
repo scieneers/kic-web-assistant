@@ -67,10 +67,10 @@ class RetrievalRequest(BaseModel):
         return self
 
 
-@app.post("/api/retrieval", dependencies=[Depends(api_key_auth)])
-def retrieval(retrieval_request: RetrievalRequest):
-    """Returns the most similar documents from the Search Index."""
-    pass
+# @app.post("/api/retrieval", dependencies=[Depends(api_key_auth)])
+# def retrieval(retrieval_request: RetrievalRequest):
+#     """Returns the most similar documents from the Search Index."""
+#     pass
 
 
 class ChatRequest(BaseModel):
@@ -129,14 +129,18 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
     """Returns the response to the user message in one response (no streaming)."""
     assistant = KICampusAssistant()
 
-    # if chat_request.course_id:
-    #     llm_response = assistant.chat_with_course(
-    #         query=chat_request.get_user_query(), chat_history=chat_request.get_chat_history(), model=chat_request.model, course=chat_request.course_id, module=chat_request.module_id
-    #     )
-    # else:
-    llm_response = assistant.chat(
-        query=chat_request.get_user_query(), chat_history=chat_request.get_chat_history(), model=chat_request.model
-    )
+    if chat_request.course_id:
+        llm_response = assistant.chat_with_course(
+            query=chat_request.get_user_query(),
+            chat_history=chat_request.get_chat_history(),
+            model=chat_request.model,
+            course=chat_request.course_id,
+            module=chat_request.module_id,
+        )
+    else:
+        llm_response = assistant.chat(
+            query=chat_request.get_user_query(), chat_history=chat_request.get_chat_history(), model=chat_request.model
+        )
 
     trace_id = langfuse_context.get_current_trace_id()
     if not trace_id:

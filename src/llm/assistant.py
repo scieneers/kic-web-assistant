@@ -43,25 +43,24 @@ class KICampusAssistant:
     ) -> ChatMessage:
         """Chat with the contents of a specific course and optionally submodule. For frontend hosted on moodle."""
 
-        pass
-        # limited_chat_history = self.limit_chat_history(chat_history, 10)
+        limited_chat_history = self.limit_chat_history(chat_history, 10)
 
-        # rag_query = self.contextualizer.contextualize(query=query, chat_history=limited_chat_history, model=model)
+        rag_query = self.contextualizer.contextualize(query=query, chat_history=limited_chat_history, model=model)
 
-        # retrieved_chunks = self.retriever.retrieve(rag_query, course=course, module=module)
+        retrieved_chunks = self.retriever.retrieve(rag_query, course_id=course)  # , module=module)
         # course_name = self.retriever.get_course_name(course)
         # module_name = self.retriever.get_module_name(course, module) if module is not None else None
 
-        # response = self.question_answerer.answer_course_question(
-        #     query=query,
-        #     chat_history=limited_chat_history,
-        #     sources=retrieved_chunks,
-        #     model=model,
-        #     course_name=course_name,
-        #     module_name=module_name
-        # )
+        response = self.question_answerer.answer_course_question(
+            query=query,
+            chat_history=limited_chat_history,
+            sources=retrieved_chunks,
+            model=model,
+            course_name="example_course_name",
+            # module_name=module_name
+        )
 
-        # return response
+        return response
 
 
 if __name__ == "__main__":
