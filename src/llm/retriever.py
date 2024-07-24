@@ -1,6 +1,4 @@
 from langfuse.decorators import observe
-from llama_index.core import QueryBundle
-from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore
 from llama_index.core.vector_stores import VectorStoreQuery
 from llama_index_client import FilterCondition, MetadataFilter, MetadataFilters
@@ -16,12 +14,14 @@ class KiCampusRetriever:
         super().__init__()
 
     @observe()
-    def retrieve(self, query: str, course_id: int | None = None) -> list[NodeWithScore]:
+    def retrieve(self, query: str, course_id: int | None = None, module_id: int | None = None) -> list[NodeWithScore]:
         embedding = self.embedder.get_query_embedding(query)
 
         filters = MetadataFilters(filters=[], condition=FilterCondition.AND)
         if course_id is not None:
             filters.filters.append(MetadataFilter(key="course_id", value=course_id))
+        if module_id is not None:
+            filters.filters.append(MetadataFilter(key="module_id", value=module_id))
 
         vector_store_query = VectorStoreQuery(query_embedding=embedding, similarity_top_k=3, filters=filters)
 
