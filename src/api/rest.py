@@ -149,19 +149,19 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
 
 class FeedbackRequest(BaseModel):
     response_id: str = Field(description="The ID of the response that the feedback belongs to.")
-    feedback: str = Field(description="Feedback on the conversation.")
+    feedback: str | None = Field(description="Feedback on the conversation.", default=None)
     score: int = Field(default="Score between 0 and 1, where 1 is good and 0 is bad.")
 
     @field_validator("score", mode="after")
     @classmethod
     def validate_score(cls, score: int) -> int:
-        if 0 <= score <= 1:
+        if not 0 <= score <= 1:
             raise ValueError("Score must be between 0 and 1.")
         return score
 
 
 @app.post("/api/feedback", dependencies=[Depends(api_key_auth)])
-def track_feedback(feedback_request: FeedbackRequest):
+def track_feedback(feedback_request: FeedbackRequest) -> None:
     """Update feedback in langfuse logs."""
     Langfuse().score(
         trace_id=feedback_request.response_id,

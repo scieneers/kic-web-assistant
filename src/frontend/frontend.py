@@ -5,6 +5,7 @@ import streamlit as st
 import streamlit_antd_components as sac
 from fastapi.testclient import TestClient
 from llama_index.core.llms import ChatMessage, MessageRole
+from streamlit_feedback import streamlit_feedback
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.api.rest import app
@@ -94,6 +95,20 @@ def set_course_selection():
         st.write(f"Talk to a course is activated for course: {talk_to_course['course_name']}")
 
 
+def submit_feedback(feedback: dict, trace_id: str):
+    score = 1 if feedback["score"] == "👍" else 0
+
+    response = st.session_state.assistant.post(
+        "/api/feedback",
+        headers={"Api-Key": "example_todelete_123"},
+        json={"response_id": trace_id, "feedback": feedback["text"], "score": score},
+    )
+
+    if response.status_code != 200:
+        raise ValueError(f"Error: {response}")
+
+
+# Starting Bot ---------
 st.title("KI-Campus Assistant")
 
 if "llm_select" not in st.session_state:
@@ -160,16 +175,14 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
     with st.chat_message("assistant"):
         st.markdown(response_content["message"])
 
-    # st.session_state["trace_id"] = trace_id
+    st.session_state["trace_id"] = response_content["response_id"]
     st.session_state.messages.append({"role": MessageRole.ASSISTANT, "content": response_content["message"]})
 
-# # Implement feedback system
-# # if st.session_state.get("trace_id"):
-# #     trace_id = st.session_state.get("trace_id")
-# #     feedback = streamlit_feedback(
-# #         feedback_type="thumbs",
-# #         optional_text_label="[Optional] Please provide an explanation",
-# #         on_submit=assistant.submit_feedback,
-# #         kwargs={"trace_id": trace_id},
-# #         key=f"run-{trace_id}",
-# #     )
+if trace_id := st.session_state.get("trace_id"):
+    streamlit_feedback(
+        feedback_type="thumbs",
+        optional_text_label="[Optional] Please provide an explanation",
+        on_submit=submit_feedback,
+        kwargs={"trace_id": trace_id},
+        key=f"run-{trace_id}",
+    )

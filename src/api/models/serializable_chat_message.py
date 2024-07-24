@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 
 class SerializableChatMessage(BaseModel):
-    "The ChatMessage from llama_index is not serializable"
+    # The ChatMessage from llama_index are not serializable
     role: MessageRole
     content: str
 
