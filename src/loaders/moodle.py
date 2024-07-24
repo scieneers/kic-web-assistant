@@ -59,15 +59,13 @@ class Moodle:
 
     def get_h5p_module_ids(self, course_id: int) -> list[H5PActivities]:
         h5p_activities: list[H5PActivities] = []
-        # TODO: fix these courses
-        if course_id != 16 and course_id != 21:
-            h5p_module_ids_caller = APICaller(
-                url=self.api_endpoint,
-                params={**self.function_params, "courseids[0]": course_id},
-                wsfunction="mod_h5pactivity_get_h5pactivities_by_courses",
-            )
-            ids_json = h5p_module_ids_caller.getJSON()
-            h5p_activities = [H5PActivities(**activity) for activity in ids_json["h5pactivities"]]
+        h5p_module_ids_caller = APICaller(
+            url=self.api_endpoint,
+            params={**self.function_params, "courseids[0]": course_id},
+            wsfunction="mod_h5pactivity_get_h5pactivities_by_courses",
+        )
+        ids_json = h5p_module_ids_caller.getJSON()
+        h5p_activities = [H5PActivities(**activity) for activity in ids_json["h5pactivities"]]
         return h5p_activities
 
     def get_videotime_content(self, cmid: int):
@@ -97,10 +95,8 @@ class Moodle:
                 continue
             match module.type:
                 case ModuleTypes.VIDEOTIME:
-                    continue
                     self.extract_videotime(module)
                 case ModuleTypes.PAGE:
-                    continue
                     self.extract_page(module)
                 case ModuleTypes.H5P:
                     for activity in h5p_activities:
@@ -143,6 +139,11 @@ class Moodle:
                 # found no subtitles in self-hosted videos, if this ever changes add code here
                 pass
 
+    # A H5P Module is a zipped bundle of js, css and a content.json, describing the content.
+    # If a video is wrapped in a H5P Module we are only interested in the content.json.
+    # In the content.json we find the link to the video. Based on that link we can construct
+    # the link to the transcript of that video. Then we download that transcript and add it to the
+    # module.transcripts list.
     def extract_h5p(self, module, activity):
         h5pfile_call = APICaller(url=activity.fileurl, params=self.download_params)
         with tempfile.TemporaryDirectory() as tmp_dir:
