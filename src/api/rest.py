@@ -1,3 +1,11 @@
+import os
+
+from src.env import env
+
+os.environ["LANGFUSE_PUBLIC_KEY"] = env.LANGFUSE_PUBLIC_KEY
+os.environ["LANGFUSE_SECRET_KEY"] = env.LANGFUSE_SECRET_KEY
+os.environ["LANGFUSE_HOST"] = env.LANGFUSE_HOST
+
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -14,12 +22,11 @@ from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.assistant import KICampusAssistant
 from src.llm.LLMs import Models
 
-app = FastAPI()
-
-# Langfuse tracing
+# Langfuse tracing global initialization
 langfuse_handler = LlamaIndexCallbackHandler()
 Settings.callback_manager = CallbackManager([langfuse_handler])
 
+app = FastAPI()
 # authentication with OAuth2
 api_key_hearder = APIKeyHeader(name="Api-Key")
 

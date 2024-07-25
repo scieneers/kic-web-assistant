@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class EnvHelper(BaseModel):
-    """Environment helper. Loads a variable from (1) .env file, (2) environment, (3) key vault.
+    """Environment helper. Loads a variable from (1) .env file, (2) environment, (3) key vault, (4) pydantic default.
     If a variable without a default value retrieved, an error is raised."""
 
     ENVIRONMENT: str = Field(
@@ -63,7 +63,7 @@ class EnvHelper(BaseModel):
         Use class_variable to set a different class variable in the kwargs dictionary, than the variable_key name."""
         kwargs_key = class_variable if class_variable else variable_key
 
-        if kwargs.get(variable_key) is not None:
+        if os.getenv(variable_key) is not None:
             kwargs[kwargs_key] = os.getenv(variable_key)
         else:
             try:
@@ -73,12 +73,13 @@ class EnvHelper(BaseModel):
                 kwargs[kwargs_key] = secret.value
             except ResourceNotFoundError:
                 logging.debug(f"Secret {variable_key} not found in the key vault, it will be unset.")
+        # otherwise default value from pydantic model is used
         return kwargs
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Helper class for environment variables. Loads production variables if production=True, or env variable 'ENVIRONMENT' is set to 'PRODUCTION'"""
         if find_dotenv():
-            load_dotenv()
+            load_dotenv(override=True)
         else:
             logging.warning("No .env file found.")
 
@@ -90,7 +91,8 @@ class EnvHelper(BaseModel):
 
         # Environment setup
         for key in self.model_json_schema()["properties"].keys():
-            self.append_variable(kwargs, variable_key=key, secret_client=secret_client)
+            if key not in kwargs.keys():
+                self.append_variable(kwargs, variable_key=key, secret_client=secret_client)
 
         # Variables with different names
         if kwargs.get("ENVIRONMENT") == "PRODUCTION":
