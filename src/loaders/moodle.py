@@ -3,6 +3,7 @@ import tempfile
 import zipfile
 
 from bs4 import BeautifulSoup
+from llama_index.core import Document
 
 from src.env import env
 from src.loaders.APICaller import APICaller
@@ -20,10 +21,10 @@ class Moodle:
     base_url: base url of moodle instance
     token: token for moodle api"""
 
-    def __init__(self, base_url: str = "", token: str = "") -> None:
-        self.base_url = env.DATA_SOURCE_MOODLE_URL if base_url == "" else base_url
+    def __init__(self) -> None:
+        self.base_url = env.DATA_SOURCE_MOODLE_URL
         self.api_endpoint = f"{self.base_url}webservice/rest/server.php"
-        self.token = env.DATA_SOURCE_MOODLE_TOKEN if token == "" else token
+        self.token = env.DATA_SOURCE_MOODLE_TOKEN
         self.function_params = {
             "wstoken": self.token,
             "moodlewsrestformat": "json",
@@ -78,7 +79,7 @@ class Moodle:
         videotime_content = caller.getJSON()
         return videotime_content
 
-    def extract(self) -> list[MoodleCourse]:
+    def extract(self) -> list[Document]:
         """extracts all courses and their contents from moodle"""
         courses = self.get_courses()
         for course in courses:
