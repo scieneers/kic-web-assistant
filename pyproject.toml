@@ -29,6 +29,7 @@ webvtt-py = "^0.4.6"
 langfuse = "^2.22.0"
 youtube-transcript-api = "^0.6.2"
 pydantic = "~2.8.2"
+azure-keyvault-secrets = "^4.8.0"
 
 [tool.poetry.group.api]
 optional = true

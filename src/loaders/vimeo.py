@@ -1,7 +1,7 @@
 from io import StringIO
 from typing import Optional
 
-from src.env import EnvHelper
+from src.env import env
 from src.loaders.APICaller import APICaller
 from src.loaders.helper import convert_vtt_to_text
 from src.loaders.models.texttrack import TextTrack
@@ -9,9 +9,8 @@ from src.loaders.models.texttrack import TextTrack
 
 class Vimeo:
     def __init__(self) -> None:
-        secrets = EnvHelper()
         self.api_endpoint = "https://api.vimeo.com/videos/"
-        self.vimeo_token = secrets.VIMEO_PAT
+        self.vimeo_token = env.VIMEO_PAT
         self.headers = {
             "Authorization": f"Bearer {self.vimeo_token}",
             "Accept": "application/vnd.vimeo.*+json;version=3.4",

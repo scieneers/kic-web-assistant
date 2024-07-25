@@ -5,23 +5,21 @@ from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 
 from src.embedder.multilingual_e5_large import MultilingualE5LargeEmbedder
-from src.env import EnvHelper
+from src.env import env
 from src.loaders.moochup import Moochup
 from src.vectordb.qdrant import VectorDBQdrant
 
 # Overview of courses (moochup), website contents (drupal) and support (zammad helpdesk)
-env_settings = EnvHelper()
 
 # data extraction
 documents: list[Document] = []
-hpi_courses = Moochup(env_settings.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
+hpi_courses = Moochup(env.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
 documents.extend(hpi_courses)
-moodle_courses = Moochup(env_settings.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
+moodle_courses = Moochup(env.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
 documents.extend(moodle_courses)
 
-if env_settings.DEBUG:
+if env.DEBUG_MODE:
     # save documents to local file
-
     if not os.path.exists("outputs"):
         os.makedirs("outputs")
     with open("outputs/course_documents.json", "w") as file:

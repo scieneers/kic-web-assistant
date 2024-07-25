@@ -1,74 +1,126 @@
 import logging
 import os
+from typing import Any
 
+from azure.core.exceptions import ResourceNotFoundError
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
 from dotenv import find_dotenv, load_dotenv
+from pydantic import BaseModel, Field, field_validator
 
 
-class EnvHelper:
-    def __init__(self, production: bool = False) -> None:
-        """Helper class for environment variables. Loads production variables if production=True, or env variable 'ENVIRONMENT' is set to 'PRODUCTION'"""
-        if not find_dotenv():
-            logging.warning(
-                "No .env file found, using environment variables. Use task decrypt-env to generate a .env file."
-            )
-        load_dotenv()
-        # Environment setup
-        self.ENVIRONMENT = os.getenv("ENVIRONMENT", "STAGING")
+class EnvHelper(BaseModel):
+    """Environment helper. Loads a variable from (1) .env file, (2) environment, (3) key vault.
+    If a variable without a default value retrieved, an error is raised."""
 
-        # Azure / GPT-4
-        self.AZURE_OPENAI_GPT4_KEY = os.getenv("AZURE_OPENAI_GPT4_KEY", "")
-        self.AZURE_OPENAI_GPT4_URL = os.getenv("AZURE_OPENAI_GPT4_URL", "")
-        self.AZURE_OPENAI_GPT4_API_VERSION = os.getenv("AZURE_OPENAI_GPT4_API_VERSION", "")
-        self.AZURE_OPENAI_GPT4_DEPLOYMENT = os.getenv("AZURE_OPENAI_GPT4_DEPLOYMENT", "")
-        self.AZURE_OPENAI_GPT4_MODEL = os.getenv("AZURE_OPENAI_GPT4_MODEL", "")
+    ENVIRONMENT: str = Field(
+        default="STAGING", description="Whether to use production or staging APIs from ki-campus sites "
+    )
+    DEBUG_MODE: bool = False
 
-        # Azure / Mistral
-        self.AZURE_OPENAI_MISTRAL_URL = os.getenv("AZURE_OPENAI_MISTRAL_URL", "")
-        self.AZURE_OPENAI_MISTRAL_KEY = os.getenv("AZURE_OPENAI_MISTRAL_KEY", "")
+    AZURE_OPENAI_URL: str = "UNSET"
+    AZURE_OPENAI_API_KEY: str = "UNSET"
 
-        # Azure / Llama3
-        self.AZURE_OPENAI_LLAMA3_URL = os.getenv("AZURE_OPENAI_LLAMA3_URL", "")
-        self.AZURE_OPENAI_LLAMA3_KEY = os.getenv("AZURE_OPENAI_LLAMA3_KEY", "")
+    AZURE_OPENAI_GPT4_DEPLOYMENT: str = "UNSET"
+    AZURE_OPENAI_GPT4_MODEL: str = "UNSET"
+    AZURE_OPENAI_EMBEDDER_DEPLOYMENT: str = "UNSET"
+    AZURE_OPENAI_EMBEDDER_MODEL: str = "UNSET"
 
-        # Aleph Alpha
-        self.AA_TOKEN = os.getenv("AA_TOKEN", "")
+    AZURE_MISTRAL_URL: str = "UNSET"
+    AZURE_MISTRAL_KEY: str = "UNSET"
 
-        # Azure Embedder
-        self.AZURE_OPENAI_EMBEDDER_API_VERSION = os.getenv("AZURE_OPENAI_EMBEDDER_API_VERSION", "")
-        self.AZURE_OPENAI_EMBEDDER_API_KEY = os.getenv("AZURE_OPENAI_EMBEDDER_API_KEY", "")
-        self.AZURE_OPENAI_EMBEDDER_ENDPOINT = os.getenv("AZURE_OPENAI_EMBEDDER_ENDPOINT", "")
-        self.AZURE_OPENAI_EMBEDDER_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMBEDDER_DEPLOYMENT", "")
-        self.AZURE_OPENAI_EMBEDDER_MODEL = os.getenv("AZURE_OPENAI_EMBEDDER_MODEL", "")
+    LANGFUSE_HOST: str = "UNSET"
+    LANGFUSE_PUBLIC_KEY: str = "UNSET"
+    LANGFUSE_SECRET_KEY: str = "UNSET"
 
-        # Langfuse
-        self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "")
-        self.LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-        self.LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
+    DRUPAL_URL: str = "https://ki-campus.org"
+    DRUPAL_CLIENT_ID: str = "UNSET"
+    DRUPAL_CLIENT_SECRET: str = "UNSET"
+    DRUPAL_USERNAME: str = "UNSET"
+    DRUPAL_PASSWORD: str = "UNSET"
+    DRUPAL_GRANT_TYPE: str = "password"
 
-        # Drupal
-        self.DRUPAL_URL = os.getenv("DRUPAL_URL", "")
-        self.DRUPAL_CLIENT_ID = os.getenv("DRUPAL_CLIENT_ID", "")
-        self.DRUPAL_CLIENT_SECRET = os.getenv("DRUPAL_CLIENT_SECRET", "")
-        self.DRUPAL_USERNAME = os.getenv("DRUPAL_USERNAME", "")
-        self.DRUPAL_PASSWORD = os.getenv("DRUPAL_PASSWORD", "")
-        self.DRUPAL_GRANT_TYPE = os.getenv("DRUPAL_GRANT_TYPE", "")
+    QDRANT_API_KEY: str = "UNSET"
+    QDRANT_URL: str = "UNSET"
 
-        # Vector db
-        self.QDRANT_TOKEN = os.getenv("QDRANT_TOKEN", "")
-        self.QDRANT_URL = os.getenv("QDRANT_URL", "")
-        # Data sources
-        if production or self.ENVIRONMENT == "PRODUCTION":
-            self.DATA_SOURCE_MOODLE_URL = os.getenv("DATA_SOURCE_PRODUCTION_MOODLE_URL", "")
-            self.DATA_SOURCE_MOODLE_TOKEN = os.getenv("DATA_SOURCE_PRODUCTION_MOODLE_TOKEN", "")
+    DATA_SOURCE_MOODLE_URL: str = "UNSET"
+    DATA_SOURCE_MOODLE_TOKEN: str = "UNSET"
+
+    DATA_SOURCE_MOOCHUP_HPI_URL: str = "UNSET"
+    DATA_SOURCE_MOOCHUP_MOODLE_URL: str = "UNSET"
+
+    VIMEO_PAT: str = "UNSET"
+
+    @field_validator("ENVIRONMENT")
+    def validate_environment(cls, value: str) -> str:
+        if value not in ["STAGING", "PRODUCTION"]:
+            raise ValueError("ENVIRONMENT must be LOCAL, STAGING, or PRODUCTION")
+        return value
+
+    @staticmethod
+    def append_variable(kwargs: Any, variable_key: str, secret_client: SecretClient, class_variable: str = "") -> Any:
+        """Appends a variable to the kwargs dictionary. If the variable is not set in the environment, it will be fetched from the key vault.
+        Use class_variable to set a different class variable in the kwargs dictionary, than the variable_key name."""
+        kwargs_key = class_variable if class_variable else variable_key
+
+        if kwargs.get(variable_key) is not None:
+            kwargs[kwargs_key] = os.getenv(variable_key)
         else:
-            self.DATA_SOURCE_MOODLE_URL = os.getenv("DATA_SOURCE_STAGING_MOODLE_URL", "")
-            self.DATA_SOURCE_MOODLE_TOKEN = os.getenv("DATA_SOURCE_STAGING_MOODLE_TOKEN", "")
-        self.DATA_SOURCE_MOOCHUP_HPI_URL = os.getenv("DATA_SOURCE_MOOCHUP_HPI_URL", "")
-        self.DATA_SOURCE_MOOCHUP_MOODLE_URL = os.getenv("DATA_SOURCE_MOOCHUP_MOODLE_URL", "")
-        # Vimeo
-        self.VIMEO_PAT = os.getenv("VIMEO_PAT", "")
-        # Debug Setting
-        self.DEBUG = bool(os.getenv("DEBUG", "False"))
+            try:
+                # Azure Key Vault does not allow underscores in the key name but hyphens
+                variable_key = variable_key.replace("_", "-")
+                secret = secret_client.get_secret(variable_key)
+                kwargs[kwargs_key] = secret.value
+            except ResourceNotFoundError:
+                logging.debug(f"Secret {variable_key} not found in the key vault, it will be unset.")
+        return kwargs
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Helper class for environment variables. Loads production variables if production=True, or env variable 'ENVIRONMENT' is set to 'PRODUCTION'"""
+        if find_dotenv():
+            load_dotenv()
+        else:
+            logging.warning("No .env file found.")
+
+        # Using Azure Key Vault when secrets are not set through environment variables
+        key_vault_name = os.environ.get("KEY_VAULT_NAME", "kicwa-keyvault-dev")
+        key_vault_uri = f"https://{key_vault_name}.vault.azure.net/"
+        credential = DefaultAzureCredential()
+        secret_client = SecretClient(vault_url=key_vault_uri, credential=credential)
+
+        # Environment setup
+        for key in self.model_json_schema()["properties"].keys():
+            self.append_variable(kwargs, variable_key=key, secret_client=secret_client)
+
+        # Variables with different names
+        if kwargs.get("ENVIRONMENT") == "PRODUCTION":
+            self.append_variable(
+                kwargs,
+                variable_key="DATA_SOURCE_PRODUCTION_MOODLE_URL",
+                secret_client=secret_client,
+                class_variable="DATA_SOURCE_MOODLE_URL",
+            )
+            self.append_variable(
+                kwargs,
+                variable_key="DATA_SOURCE_PRODUCTION_MOODLE_TOKEN",
+                secret_client=secret_client,
+                class_variable="DATA_SOURCE_MOODLE_TOKEN",
+            )
+        else:
+            self.append_variable(
+                kwargs,
+                variable_key="DATA_SOURCE_STAGING_MOODLE_URL",
+                secret_client=secret_client,
+                class_variable="DATA_SOURCE_MOODLE_URL",
+            )
+            self.append_variable(
+                kwargs,
+                variable_key="DATA_SOURCE_STAGING_MOODLE_TOKEN",
+                secret_client=secret_client,
+                class_variable="DATA_SOURCE_MOODLE_TOKEN",
+            )
+
+        super().__init__(*args, **kwargs)
 
     @staticmethod
     def check_env():
@@ -76,13 +128,16 @@ class EnvHelper:
             if value == "":
                 logging.warning(f"{attr} is not set in the environment variables.")
 
-    def __getattribute__(self, name):
+    def __getattribute__(self, name: str):
         """Since not all environment variables are always required or set, this will raise an error if the attribute is not set during runtime."""
         value = object.__getattribute__(self, name)
-        if value == "":
-            raise AttributeError(f"{name} is requested but not set in the environment variables")
+        if value == "UNSET":
+            raise AttributeError(f"{name} is requested but no value was provided.")
         return value
 
 
+env = EnvHelper()
+
 if __name__ == "__main__":
-    EnvHelper.check_env()
+    env = EnvHelper()
+    print(env.ENVIRONMENT)

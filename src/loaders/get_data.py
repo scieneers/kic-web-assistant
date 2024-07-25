@@ -1,13 +1,12 @@
 import json
-from json import encoder
 
 from llama_index.core import Document
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-from qdrant_client import models
 
-from src.env import EnvHelper
+from src.env import env
+from src.llm.LLMs import LLM
 from src.loaders.drupal import Drupal
 from src.loaders.moochup import Moochup
 from src.loaders.moodle import Moodle
@@ -16,32 +15,23 @@ from src.vectordb.qdrant import VectorDBQdrant
 
 # A full run takes about 2 hours and 8 minutes (2024-07-16)
 class Fetch_Data:
-    def __init__(self, path=None):
-        self.secrets = EnvHelper()
-
+    def __init__(self):
         self.DATA_PATH = "./data"
-
-        self.embedder = AzureOpenAIEmbedding(
-            model=self.secrets.AZURE_OPENAI_EMBEDDER_MODEL,
-            deployment_name=self.secrets.AZURE_OPENAI_EMBEDDER_DEPLOYMENT,
-            api_key=self.secrets.AZURE_OPENAI_EMBEDDER_API_KEY,
-            azure_endpoint=self.secrets.AZURE_OPENAI_EMBEDDER_ENDPOINT,
-            api_version=self.secrets.AZURE_OPENAI_EMBEDDER_API_VERSION,
-        )
+        self.embedder = LLM().get_embedder()
 
     def extract(
         self,
     ):
-        hpi_courses = Moochup(self.secrets.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
+        hpi_courses = Moochup(env.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
         hpi_text_list = [json.loads(doc.json())["text"] for doc in hpi_courses]
 
-        moodle_courses1 = Moochup(self.secrets.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
+        moodle_courses1 = Moochup(env.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
         moodle_text_list1 = [json.loads(doc.json())["text"] for doc in moodle_courses1]
 
-        moodle_courses2 = Moodle(environment=self.secrets.ENVIRONMENT).extract()
+        moodle_courses2 = Moodle(environment=env.ENVIRONMENT).extract()
         moodle_text_list2 = [json.loads(doc.json())["text"] for doc in moodle_courses2]
 
-        # drupal_courses = Drupal(base_url=self.secrets.DRUPAL_URL).extract()
+        # drupal_courses = Drupal(base_url=env.DRUPAL_URL).extract()
         # drupal_text_list = [json.loads(doc.json())["text"] for doc in drupal_courses]
 
         all_text = hpi_text_list + moodle_text_list1 + moodle_text_list2  # + drupal_text_list

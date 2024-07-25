@@ -6,17 +6,6 @@ vars:
   REGISTRY: "kicwaacrdev.azurecr.io"
 
 tasks:
-  add-secret:
-    requires:
-      vars: [KEY, VALUE]
-    cmds:
-      - sops --set '["{{.KEY}}"] "{{.VALUE}}"' encrypted.env
-
-  decrypt-env:
-    desc: update the local .env file
-    cmds:
-      - sops --decrypt encrypted.env > .env
-
   print-vars:
     cmds:
       - |

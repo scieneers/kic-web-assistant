@@ -114,6 +114,15 @@ class ChatRequest(BaseModel):
     def get_user_query(self) -> str:
         return self.messages[-1].content
 
+    @model_validator(mode="after")
+    def validate_module_id(self):
+        if self.course_id and not self.module_id:
+            raise HTTPException(
+                status_code=400,
+                detail="module_id is required when course_id is set.",
+            )
+        return self
+
 
 class ChatResponse(BaseModel):
     message: str = Field(

@@ -308,6 +308,22 @@ msal-extensions = ">=0.3.0"
 typing-extensions = ">=4.0.0"
 
 [[package]]
+name = "azure-keyvault-secrets"
+version = "4.8.0"
+description = "Microsoft Azure Key Vault Secrets Client Library for Python"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "azure-keyvault-secrets-4.8.0.tar.gz", hash = "sha256:5636c0a1d8a20e3c5799cb3ccffd4ebf3f0d1acb7cae9526861833af8b0fe814"},
+    {file = "azure_keyvault_secrets-4.8.0-py3-none-any.whl", hash = "sha256:e5898c87cef95e54a8c4aa48cdbf4717ee30543a10b793c95bd57a476554a893"},
+]
+
+[package.dependencies]
+azure-core = ">=1.29.5,<2.0.0"
+isodate = ">=0.6.1"
+typing-extensions = ">=4.0.1"
+
+[[package]]
 name = "backoff"
 version = "2.2.1"
 description = "Function decoration for backoff and retry"
@@ -1520,6 +1536,20 @@ widgetsnbextension = ">=4.0.11,<4.1.0"
 
 [package.extras]
 test = ["ipykernel", "jsonschema", "pytest (>=3.6.0)", "pytest-cov", "pytz"]
+
+[[package]]
+name = "isodate"
+version = "0.6.1"
+description = "An ISO 8601 date/time/duration parser and formatter"
+optional = false
+python-versions = "*"
+files = [
+    {file = "isodate-0.6.1-py2.py3-none-any.whl", hash = "sha256:0751eece944162659049d35f4f549ed815792b38793f07cf73381c1c87cbed96"},
+    {file = "isodate-0.6.1.tar.gz", hash = "sha256:48c5881de7e8b0a0d648cb024c8062dc84e7b840ed81e864c7614fd3c127bde9"},
+]
+
+[package.dependencies]
+six = "*"
 
 [[package]]
 name = "jedi"
@@ -3976,19 +4006,6 @@ pymysql = ["pymysql"]
 sqlcipher = ["sqlcipher3_binary"]
 
 [[package]]
-name = "st-ant-tree"
-version = "0.0.12"
-description = "Streamlit Component for ANT Tree"
-optional = false
-python-versions = ">=3.6"
-files = [
-    {file = "st_ant_tree-0.0.12-py3-none-any.whl", hash = "sha256:06b724166df3f3da6dcfdd2b7ac9ffea71509f7280f89d626c5d61ace9786987"},
-]
-
-[package.dependencies]
-streamlit = ">=0.63"
-
-[[package]]
 name = "stack-data"
 version = "0.6.3"
 description = "Extract data from python stack frames and tracebacks for informative displays"
@@ -5064,4 +5081,4 @@ test = ["big-O", "importlib-resources", "jaraco.functools", "jaraco.itertools", 
 [metadata]
 lock-version = "2.0"
 python-versions = "~3.11"
-content-hash = "4a7a6a0280f0410de9786135ff8ff78bd3244f41c40855aaf2419e2a85689e26"
+content-hash = "6f038e8f9229825eabd92218de86d0b313ff383ea6c3b62fc34a294b16511b9b"

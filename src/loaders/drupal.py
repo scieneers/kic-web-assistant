@@ -2,25 +2,24 @@ import requests
 from bs4 import BeautifulSoup
 from llama_index.core import Document
 
-from src.env import EnvHelper
+from src.env import env
 
 
 class Drupal:
     def __init__(
         self, base_url: str = "", username: str = "", client_id: str = "", client_secret: str = "", grant_type: str = ""
     ) -> None:
-        self.secrets = EnvHelper()
         self.oauth_token = self.get_oauth_token("https://ki-campus.org")
 
     def get_oauth_token(self, base_url: str):
         response = requests.post(
             f"{base_url}/oauth/token",
             data={
-                "client_id": self.secrets.DRUPAL_CLIENT_ID,
-                "client_secret": self.secrets.DRUPAL_CLIENT_SECRET,
-                "username": self.secrets.DRUPAL_USERNAME,
-                "password": self.secrets.DRUPAL_PASSWORD,
-                "grant_type": self.secrets.DRUPAL_GRANT_TYPE,
+                "client_id": env.DRUPAL_CLIENT_ID,
+                "client_secret": env.DRUPAL_CLIENT_SECRET,
+                "username": env.DRUPAL_USERNAME,
+                "password": env.DRUPAL_PASSWORD,
+                "grant_type": env.DRUPAL_GRANT_TYPE,
             },
         )
 

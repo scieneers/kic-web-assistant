@@ -3,30 +3,20 @@ from llama_index.core import QueryBundle
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore
 from llama_index.core.vector_stores import VectorStoreQuery
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from llama_index_client import FilterCondition, MetadataFilter, MetadataFilters
 
-from src.env import EnvHelper
+from src.llm.LLMs import LLM
 from src.vectordb.qdrant import VectorDBQdrant
 
 
 class KiCampusRetriever:
     def __init__(self):
-        secrets = EnvHelper()
-
-        self.embedder = AzureOpenAIEmbedding(
-            model=secrets.AZURE_OPENAI_EMBEDDER_MODEL,
-            deployment_name=secrets.AZURE_OPENAI_EMBEDDER_DEPLOYMENT,
-            api_key=secrets.AZURE_OPENAI_EMBEDDER_API_KEY,
-            azure_endpoint=secrets.AZURE_OPENAI_EMBEDDER_ENDPOINT,
-            api_version=secrets.AZURE_OPENAI_EMBEDDER_API_VERSION,
-        )
-
+        self.embedder = LLM().get_embedder()
         self.vector_store = VectorDBQdrant("remote").as_llama_vector_store(collection_name="web_assistant")
         super().__init__()
 
     @observe()
-    def retrieve(self, query: str, course_id: int|None=None) -> list[NodeWithScore]:
+    def retrieve(self, query: str, course_id: int | None = None) -> list[NodeWithScore]:
         embedding = self.embedder.get_query_embedding(query)
 
         filters = MetadataFilters(filters=[], condition=FilterCondition.AND)
