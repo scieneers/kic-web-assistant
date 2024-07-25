@@ -22,7 +22,7 @@ class Video(BaseModel):
                 return VideoPlatforms.VIMEO
             case "www.youtube.com" | "youtu.be":
                 return VideoPlatforms.YOUTUBE
-            case "ki-campus-test.fernuni-hagen.de" | "moodle.ki-campus.org":
+            case "ki-campus-test.fernuni-hagen.de" | "ki-campus.moodle.staging.fernuni-hagen.de" | "moodle.ki-campus.org":
                 return VideoPlatforms.SELF_HOSTED
             case _:
                 raise NotImplementedError("Unknown VideoPlatform, implement me")

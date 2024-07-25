@@ -143,8 +143,14 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             query=chat_request.get_user_query(),
             chat_history=chat_request.get_chat_history(),
             model=chat_request.model,
-            course=chat_request.course_id,
-            module=chat_request.module_id,
+            course_id=chat_request.course_id,
+        )
+    elif chat_request.module_id:
+        llm_response = assistant.chat_with_course(
+            query=chat_request.get_user_query(),
+            chat_history=chat_request.get_chat_history(),
+            model=chat_request.model,
+            module_id=chat_request.module_id,
         )
     else:
         llm_response = assistant.chat(

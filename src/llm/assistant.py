@@ -39,7 +39,12 @@ class KICampusAssistant:
 
     @observe()
     def chat_with_course(
-        self, query: str, model: Models, course: int, chat_history: list[ChatMessage] = [], module: int | None = None
+        self,
+        query: str,
+        model: Models,
+        course_id: int | None = None,
+        chat_history: list[ChatMessage] = [],
+        module_id: int | None = None,
     ) -> ChatMessage:
         """Chat with the contents of a specific course and optionally submodule. For frontend hosted on moodle."""
 
@@ -47,9 +52,7 @@ class KICampusAssistant:
 
         rag_query = self.contextualizer.contextualize(query=query, chat_history=limited_chat_history, model=model)
 
-        retrieved_chunks = self.retriever.retrieve(rag_query, course_id=course)  # , module=module)
-        # course_name = self.retriever.get_course_name(course)
-        # module_name = self.retriever.get_module_name(course, module) if module is not None else None
+        retrieved_chunks = self.retriever.retrieve(rag_query, course_id=course_id, module_id=module_id)
 
         response = self.question_answerer.answer_course_question(
             query=query,

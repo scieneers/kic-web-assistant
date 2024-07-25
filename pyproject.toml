@@ -49,7 +49,7 @@ optional = true
 [tool.poetry.group.frontend.dependencies]
 streamlit = "~1.29.0"
 trubrics = {extras = ["streamlit"], version = "^1.6.2"}
-streamlit-antd-components = "^0.3.2"
+st-ant-tree = "^0.0.12"
 
 [tool.poetry.group.dev]
 optional = true

@@ -1,6 +1,7 @@
 from enum import StrEnum
 from typing import Optional
 
+from llama_index.core import Document
 from pydantic import BaseModel, HttpUrl, computed_field
 
 from src.loaders.models.downloadablecontent import DownloadableContent
@@ -38,3 +39,15 @@ class Module(BaseModel):
                 return ModuleTypes.H5P
             case _:
                 return None
+
+    def to_document(self, course_id) -> Document:
+        text = "\n ".join([str(transcript) for transcript in self.transcripts])
+        metadata = {
+            "course_id": course_id,
+            "module_id": self.id,
+            "fullname": self.name,
+            "type": "module",
+            "url": str(self.url),
+        }
+
+        return Document(text=text, metadata=metadata)

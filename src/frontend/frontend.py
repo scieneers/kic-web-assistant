@@ -4,12 +4,13 @@ from typing import Any
 import streamlit as st
 import streamlit_antd_components as sac
 from fastapi.testclient import TestClient
-from llama_index.core.llms import ChatMessage, MessageRole
+from llama_index.core.llms import MessageRole
+from streamlit_antd_components import AntIcon
 from streamlit_feedback import streamlit_feedback
 
-from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.api.rest import app
 from src.llm.LLMs import Models
+from vectordb.qdrant import VectorDBQdrant
 
 
 @st.cache_resource
@@ -17,23 +18,53 @@ def instantiate_assistant() -> TestClient:
     return TestClient(app)
 
 
+# The st_ant_tree component doesn't accept parent and child nodes with the same value.
+# So we prepend every course_id with "cid_" and every module_id with "mid_". After the
+# selection is done, we remove the prefix.
 @st.cache_resource
-def get_course_tree() -> Any:
-    return [
-        sac.TreeItem(
-            label="Testkurs 1",
-            description="18",
-            children=[
-                sac.TreeItem(label="Testmodul 1", description="422"),
-                sac.TreeItem(label="Testmodul 2", description="423"),
-            ],
-        ),
-        sac.TreeItem(label="Testkurs 2", description="19"),
-    ]
+def create_courses_modules_tree() -> list:
+    course_records, module_records = VectorDBQdrant().get_course_module_records("web_assistant")
+    tree_dict = {}
+
+    # Sets to track unique course_ids and module_ids
+    seen_courses = set()
+    seen_modules = set()
+
+    tree_dict[0] = sac.TreeItem(
+        "Alle Inhalte (Moodle & Drupal)",
+        icon=AntIcon(name="GlobalOutlined"),
+        description=None,
+    )
+
+    # Add Courses
+    for record in course_records:
+        payload = record.payload
+        course_id = payload["course_id"]
+        fullname = payload["fullname"]
+
+        if course_id not in seen_courses:
+            tree_dict[course_id] = sac.TreeItem(fullname, description=course_id, children=[])
+            seen_courses.add(course_id)
+
+    # Add Modules
+    for record in module_records:
+        payload = record.payload
+        course_id = payload["course_id"]
+        fullname = payload["fullname"]
+        module_id = payload.get("module_id")
+
+        if module_id not in seen_modules:
+            child_node = sac.TreeItem(fullname, description=module_id)
+            tree_dict[course_id].children.append(child_node)
+            seen_modules.add(module_id)
+
+    # Convert the dictionary to a list of TreeItem
+    tree_items = list(tree_dict.values())
+    return tree_items
 
 
 def get_course_module(course_or_module_index: int) -> dict:
-    tree = get_course_tree()
+    tree = create_courses_modules_tree()
 
     course_id = None
     course_name = None
@@ -72,27 +103,22 @@ def get_course_module(course_or_module_index: int) -> dict:
     return response
 
 
-def reset_history():
-    st.session_state.messages = []
-
-
-def reset_course_selection():
-    st.session_state.course_selection = None
-
-
 def set_course_selection():
-    if type(st.session_state.course_selection) == list:
+    if st.session_state.course_selection == 0:
+        reset_history()
+        return
+    if type(st.session_state.course_selection) is list:
         index_selected = st.session_state.course_selection[0]
     else:
         index_selected = st.session_state.course_selection
 
     talk_to_course = get_course_module(index_selected)
-    if talk_to_course["module_level"]:
-        st.write(
-            f"Talk to a module is activated for course: {talk_to_course['course_name']} and module: {talk_to_course['module_name']}"
-        )
-    else:
-        st.write(f"Talk to a course is activated for course: {talk_to_course['course_name']}")
+    st.session_state["course_id"] = talk_to_course["course_id"]
+    st.session_state["module_id"] = talk_to_course["module_id"]
+
+
+def reset_history():
+    st.session_state.messages = []
 
 
 def submit_feedback(feedback: dict, trace_id: str):
@@ -123,20 +149,19 @@ with st.sidebar:
         format_func=lambda model: model.value,
         placeholder=Models.GPT4.name,
     )
-
     st.divider()
 
     sac.tree(
-        items=get_course_tree(),
-        on_change=set_course_selection,
+        items=create_courses_modules_tree(),
+        index=0,
         key="course_selection",
-        size="lg",
+        size="sm",
+        show_line=False,
+        checkbox=False,
         return_index=True,
+        on_change=set_course_selection,
         label="Make a selection to talk to a course - or module",
     )
-
-    st.button("Deactivate talk to a course", on_click=reset_course_selection)
-
 
 # Initialize assistant
 if "assistant" not in st.session_state or not st.session_state.assistant:
@@ -166,7 +191,12 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
     response = st.session_state.assistant.post(
         "/api/chat",
         headers={"Api-Key": "example_todelete_123"},
-        json={"messages": st.session_state.messages, "model": st.session_state.llm_select},
+        json={
+            "messages": st.session_state.messages,
+            "model": st.session_state.llm_select,
+            "course_id": st.session_state.course_id if hasattr(st.session_state, "course_id") else None,
+            "module_id": st.session_state.module_id if hasattr(st.session_state, "module_id") else None,
+        },
     )
     if response.status_code != 200:
         raise ValueError(f"Error: {response}")

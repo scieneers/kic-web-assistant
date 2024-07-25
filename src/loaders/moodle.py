@@ -3,6 +3,7 @@ import tempfile
 import zipfile
 
 from bs4 import BeautifulSoup
+from llama_index.core import Document
 
 from src.env import env
 from src.loaders.APICaller import APICaller
@@ -20,10 +21,10 @@ class Moodle:
     base_url: base url of moodle instance
     token: token for moodle api"""
 
-    def __init__(self, base_url: str = "", token: str = "") -> None:
-        self.base_url = env.DATA_SOURCE_MOODLE_URL if base_url == "" else base_url
+    def __init__(self) -> None:
+        self.base_url = env.DATA_SOURCE_MOODLE_URL
         self.api_endpoint = f"{self.base_url}webservice/rest/server.php"
-        self.token = env.DATA_SOURCE_MOODLE_TOKEN if token == "" else token
+        self.token = env.DATA_SOURCE_MOODLE_TOKEN
         self.function_params = {
             "wstoken": self.token,
             "moodlewsrestformat": "json",
@@ -42,7 +43,7 @@ class Moodle:
         )
         courses = caller.getJSON()
         course_url = self.base_url + "course/view.php?id="
-        courses = [MoodleCourse(url=course_url, **course) for course in courses]
+        courses = [MoodleCourse(url=course_url, **course) for course in courses if course["visible"] == 1]
         return courses
 
     def get_course_contents(self, course_id: int) -> list[CourseTopic]:
@@ -59,15 +60,13 @@ class Moodle:
 
     def get_h5p_module_ids(self, course_id: int) -> list[H5PActivities]:
         h5p_activities: list[H5PActivities] = []
-        # TODO: fix these courses
-        if course_id != 16 and course_id != 21:
-            h5p_module_ids_caller = APICaller(
-                url=self.api_endpoint,
-                params={**self.function_params, "courseids[0]": course_id},
-                wsfunction="mod_h5pactivity_get_h5pactivities_by_courses",
-            )
-            ids_json = h5p_module_ids_caller.getJSON()
-            h5p_activities = [H5PActivities(**activity) for activity in ids_json["h5pactivities"]]
+        h5p_module_ids_caller = APICaller(
+            url=self.api_endpoint,
+            params={**self.function_params, "courseids[0]": course_id},
+            wsfunction="mod_h5pactivity_get_h5pactivities_by_courses",
+        )
+        ids_json = h5p_module_ids_caller.getJSON()
+        h5p_activities = [H5PActivities(**activity) for activity in ids_json["h5pactivities"]]
         return h5p_activities
 
     def get_videotime_content(self, cmid: int):
@@ -80,7 +79,7 @@ class Moodle:
         videotime_content = caller.getJSON()
         return videotime_content
 
-    def extract(self) -> list[MoodleCourse]:
+    def extract(self) -> list[Document]:
         """extracts all courses and their contents from moodle"""
         courses = self.get_courses()
         for course in courses:
@@ -88,7 +87,7 @@ class Moodle:
             h5p_activity_ids = self.get_h5p_module_ids(course.id)
             for topic in course.topics:
                 self.get_module_contents(topic, h5p_activity_ids)
-        course_documents = [course.to_document() for course in courses]
+        course_documents = [doc for course in courses for doc in course.to_document()]
         return course_documents
 
     def get_module_contents(self, topic, h5p_activities):
@@ -97,10 +96,8 @@ class Moodle:
                 continue
             match module.type:
                 case ModuleTypes.VIDEOTIME:
-                    continue
                     self.extract_videotime(module)
                 case ModuleTypes.PAGE:
-                    continue
                     self.extract_page(module)
                 case ModuleTypes.H5P:
                     for activity in h5p_activities:
@@ -143,6 +140,11 @@ class Moodle:
                 # found no subtitles in self-hosted videos, if this ever changes add code here
                 pass
 
+    # A H5P Module is a zipped bundle of js, css and a content.json, describing the content.
+    # If a video is wrapped in a H5P Module we are only interested in the content.json.
+    # In the content.json we find the link to the video. Based on that link we can construct
+    # the link to the transcript of that video. Then we download that transcript and add it to the
+    # module.transcripts list.
     def extract_h5p(self, module, activity):
         h5pfile_call = APICaller(url=activity.fileurl, params=self.download_params)
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -158,7 +160,6 @@ class Moodle:
                 vimeo = Vimeo()
                 texttrack = vimeo.get_transcript(video.video_id)
                 module.transcripts.append(texttrack)
-        pass
 
 
 if __name__ == "__main__":
