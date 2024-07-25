@@ -31,7 +31,7 @@ def create_courses_modules_tree() -> list:
     seen_modules = set()
 
     tree_dict[0] = sac.TreeItem(
-        "Alle Kurse & Module",
+        "Alle Inhalte (Moodle & Drupal)",
         icon=AntIcon(name="GlobalOutlined"),
         description=None,
     )

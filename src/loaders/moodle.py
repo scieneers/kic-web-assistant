@@ -42,7 +42,7 @@ class Moodle:
         )
         courses = caller.getJSON()
         course_url = self.base_url + "course/view.php?id="
-        courses = [MoodleCourse(url=course_url, **course) for course in courses]
+        courses = [MoodleCourse(url=course_url, **course) for course in courses if course["visible"] == 1]
         return courses
 
     def get_course_contents(self, course_id: int) -> list[CourseTopic]:

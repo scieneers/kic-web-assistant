@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR $PYSETUP_PATH
 COPY poetry.lock pyproject.toml ./
-RUN poetry install --with frontend --no-interaction --no-ansi
+RUN poetry install --with frontend,api --no-interaction --no-ansi
 
 USER appuser
 WORKDIR /home/appuser
