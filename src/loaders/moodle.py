@@ -44,6 +44,7 @@ class Moodle:
         courses = caller.getJSON()
         course_url = self.base_url + "course/view.php?id="
         courses = [MoodleCourse(url=course_url, **course) for course in courses if course["visible"] == 1]
+
         return courses
 
     def get_course_contents(self, course_id: int) -> list[CourseTopic]:
@@ -158,7 +159,12 @@ class Moodle:
                 videourl = content["interactiveVideo"]["video"]["files"][0]["path"]
                 video = Video(id=0, vimeo_url=videourl)
                 vimeo = Vimeo()
-                texttrack = vimeo.get_transcript(video.video_id)
+                fallback_transcript_file = (
+                    f"content/{content['interactiveVideo']['video']['textTracks']['videoTrack'][0]['track']['path']}"
+                )
+                with zipfile.ZipFile(local_filename, "r") as zip_ref:
+                    zip_ref.extract(fallback_transcript_file, tmp_dir)
+                texttrack = vimeo.get_transcript(f"{tmp_dir}/{fallback_transcript_file}", video.video_id)
                 module.transcripts.append(texttrack)
 
 
