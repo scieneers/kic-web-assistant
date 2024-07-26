@@ -32,7 +32,7 @@ api_key_hearder = APIKeyHeader(name="Api-Key")
 
 
 async def api_key_auth(api_key: Annotated[str, Depends(api_key_hearder)]):
-    ALLOWED_API_KEYS = ["example_todelete_123"]
+    ALLOWED_API_KEYS = env.REST_API_KEYS
 
     if api_key not in ALLOWED_API_KEYS:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")

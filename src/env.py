@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from typing import Any
@@ -17,6 +18,7 @@ class EnvHelper(BaseModel):
         default="STAGING", description="Whether to use production or staging APIs from ki-campus sites "
     )
     DEBUG_MODE: bool = False
+    REST_API_KEYS: list[str] = []
 
     AZURE_OPENAI_URL: str = "UNSET"
     AZURE_OPENAI_API_KEY: str = "UNSET"
@@ -52,9 +54,18 @@ class EnvHelper(BaseModel):
     VIMEO_PAT: str = "UNSET"
 
     @field_validator("ENVIRONMENT")
-    def validate_environment(cls, value: str) -> str:
+    def validate_ENVIRONMENT(cls, value: str) -> str:
         if value not in ["STAGING", "PRODUCTION"]:
             raise ValueError("ENVIRONMENT must be LOCAL, STAGING, or PRODUCTION")
+        return value
+
+    @field_validator("REST_API_KEYS", mode="before")
+    def transform_REST_API_KEYS(cls, value: list[str] | str) -> list[str]:
+        if type(value) == str:
+            # json elements must be double quoted, but are single quoted through terraform
+            value = json.loads(value.replace("'", '"'))
+        if type(value) != list:
+            raise ValueError("REST_API_KEYS must be a list of strings.")
         return value
 
     @staticmethod
@@ -137,9 +148,13 @@ class EnvHelper(BaseModel):
             raise AttributeError(f"{name} is requested but no value was provided.")
         return value
 
+    def get_REST_API_KEYS(self):
+        if len(self.REST_API_KEYS) == 0:
+            raise AttributeError("REST_API_KEYS is requested but no value was provided.")
+        return self.REST_API_KEYS
+
 
 env = EnvHelper()
 
 if __name__ == "__main__":
-    env = EnvHelper()
-    print(env.ENVIRONMENT)
+    print(env.get_REST_API_KEYS())
