@@ -1,7 +1,7 @@
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                        Base - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM python:3.11-slim as base
+FROM python:3.11-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -15,12 +15,14 @@ ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
 RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 -ms /bin/bash appuser
 
+RUN apt-get update
+
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                       Build - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM base as build
+FROM base AS build
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get install -y \
     build-essential && \
     pip install 'poetry==1.7.1'
 
@@ -36,10 +38,15 @@ COPY --chown=appuser:appuser . ./
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                     Runtime - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM base as runtime
+FROM base AS runtime
+
+# Install Azure CLI for defaultcredentials cli login in lockally hosted container
+RUN apt-get install -y curl
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
 USER appuser
 WORKDIR /home/appuser
+
 COPY --from=build $VENV_PATH $VENV_PATH
 COPY --from=build --chown=appuser:appuser /home/appuser /home/appuser
 

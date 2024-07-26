@@ -24,11 +24,12 @@ Go into the src/frontend folder and run:
 `docker images` <br />
 `docker run -p 8501 fatemeh001/kicampus_chatbot:0.0.1` <br />
 
-
 `docker login kicwaacrdev.azurecr.io` <br />
 `docker tag fatemeh001/kicamp_chatbot:0.0.1 kicwaacrdev.azurecr.io/fatemeh001/kicampus_chatbot:0.0.1` <br />
 `docker push kicwaacrdev.azurecr.io/fatemeh001/kicampus_chatbot:0.0.1` <br />
 
+## To run docker images locally, mount your credentials:
+`docker run -it --rm -p 80:80 -v ~/.azure:/home/appuser/.azure kicwaacrdev.azurecr.io/rest-api:latest`
 
 ### Build and push Docker images locally
 Before pushing the docker image you need to be authenticated docker via `gcloud auth configure-docker europe-west3-docker.pkg.dev`.
