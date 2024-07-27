@@ -1,5 +1,6 @@
 import re
 from enum import StrEnum
+from urllib.parse import unquote
 
 from pydantic import BaseModel, Field, HttpUrl, computed_field
 
@@ -24,6 +25,17 @@ class Video(BaseModel):
                 return VideoPlatforms.YOUTUBE
             case "ki-campus-test.fernuni-hagen.de" | "ki-campus.moodle.staging.fernuni-hagen.de" | "moodle.ki-campus.org":
                 return VideoPlatforms.SELF_HOSTED
+            case "learn.ki-campus.org":
+                video_platform_url = unquote(self.video_url.query.split("&")[0].split("=")[1])
+                youtube_pattern = re.compile(r"youtube\.com|youtu\.be", re.IGNORECASE)
+                vimeo_pattern = re.compile(r"vimeo", re.IGNORECASE)
+                self.video_url = HttpUrl(video_platform_url)
+                if youtube_pattern.search(video_platform_url):
+                    return VideoPlatforms.YOUTUBE
+                elif vimeo_pattern.search(video_platform_url):
+                    return VideoPlatforms.VIMEO
+                else:
+                    raise NotImplementedError("Unknown VideoPlatform, implement me")
             case _:
                 raise NotImplementedError("Unknown VideoPlatform, implement me")
 

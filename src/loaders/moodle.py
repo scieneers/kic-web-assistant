@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import zipfile
 
@@ -107,11 +108,15 @@ class Moodle:
 
     def extract_page(self, module):
         for content in module.contents:
+            if content.type == "gif?forcedownload=1" or content.type == "png?forcedownload=1":
+                continue
             page_content_caller = APICaller(url=content.fileurl, params=self.download_params)
             soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
             links = soup.find_all("a")
             for p_link in links:
-                src = p_link.get("href")
+                pattern = r"https://player\.vimeo\.com/video/\d+"
+                match = re.search(pattern, str(p_link))
+                src = match.group(0) if match else p_link.get("href")
                 if src:
                     if src.find("vimeo") != -1:
                         videotime = Video(id=0, vimeo_url=src)
@@ -159,12 +164,17 @@ class Moodle:
                 videourl = content["interactiveVideo"]["video"]["files"][0]["path"]
                 video = Video(id=0, vimeo_url=videourl)
                 vimeo = Vimeo()
-                fallback_transcript_file = (
-                    f"content/{content['interactiveVideo']['video']['textTracks']['videoTrack'][0]['track']['path']}"
-                )
-                with zipfile.ZipFile(local_filename, "r") as zip_ref:
-                    zip_ref.extract(fallback_transcript_file, tmp_dir)
-                texttrack = vimeo.get_transcript(f"{tmp_dir}/{fallback_transcript_file}", video.video_id)
+
+                texttrack = None
+                # Try to locate the fallback transcript file
+                try:
+                    fallback_transcript_file = f"content/{content['interactiveVideo']['video']['textTracks']['videoTrack'][0]['track']['path']}"
+                    with zipfile.ZipFile(local_filename, "r") as zip_ref:
+                        zip_ref.extract(fallback_transcript_file, tmp_dir)
+                        texttrack = vimeo.get_transcript(video.video_id, f"{tmp_dir}/{fallback_transcript_file}")
+                except KeyError:
+                    print("Fallback Transcript not available")
+
                 module.transcripts.append(texttrack)
 
 
