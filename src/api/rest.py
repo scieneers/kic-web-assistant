@@ -123,7 +123,7 @@ class ChatRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_module_id(self):
-        if self.course_id and not self.module_id:
+        if self.module_id and not self.course_id:
             raise HTTPException(
                 status_code=400,
                 detail="module_id is required when course_id is set.",
