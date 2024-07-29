@@ -31,6 +31,9 @@ class EnvHelper(BaseModel):
     AZURE_MISTRAL_URL: str = "UNSET"
     AZURE_MISTRAL_KEY: str = "UNSET"
 
+    GWDG_URL: str = "UNSET"
+    GWDG_API_KEY: str = "UNSET"
+
     LANGFUSE_HOST: str = "UNSET"
     LANGFUSE_PUBLIC_KEY: str = "UNSET"
     LANGFUSE_SECRET_KEY: str = "UNSET"

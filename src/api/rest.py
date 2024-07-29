@@ -105,7 +105,7 @@ class ChatRequest(BaseModel):
     model: Models = Field(
         default=Models.GPT4,
         description="The LLM to use for the conversation.",
-        examples=[Models.GPT4, Models.MISTRAL],
+        examples=[Models.GPT4, Models.MISTRAL8],
     )
 
     @field_validator("messages", mode="after")
