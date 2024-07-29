@@ -18,17 +18,28 @@ class APICaller:
 
     def get(self, **kwargs):
         self.response = requests.get(url=self.url, params=self.params, headers=self.headers)
-        self.response.raise_for_status()
+        try:
+            self.response.raise_for_status()
+        except requests.exceptions.HTTPError as err:
+            raise err
 
     def getJSON(self, **kwargs) -> dict:
-        self.get(**kwargs)
+        try:
+            self.get(**kwargs)
+        except requests.exceptions.HTTPError as err:
+            print(f"Failed to retrieve {self.url}")
+            raise err
         response_json = self.response.json()
         if "exception" in response_json:
             raise Exception(f"{response_json['errorcode']}: {response_json['message']}")
         return response_json
 
     def getText(self, **kwargs) -> str:
-        self.get(**kwargs)
+        try:
+            self.get(**kwargs)
+        except requests.exceptions.HTTPError as err:
+            print(f"Failed to retrieve {self.url}")
+            raise err
         return self.response.text
 
     def getBuffer(self, **kwargs) -> str:

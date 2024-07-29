@@ -9,7 +9,10 @@ TMP_DIR = Path(__file__).parent.parent.parent.joinpath("tmp").resolve()
 
 
 def convert_vtt_to_text(vtt_buffer: StringIO) -> str:
-    vtt = webvtt.read_buffer(vtt_buffer)
+    try:
+        vtt = webvtt.read_buffer(vtt_buffer)
+    except webvtt.MalformedFileError as err:
+        raise err
     transcript = ""
 
     lines = []

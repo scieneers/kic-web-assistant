@@ -27,10 +27,13 @@ class MoodleCourse(BaseModel):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.url = f"{self.url}{self.id}"
+        print(f"Creating course {self.id}")
 
     def __str__(self) -> str:
-        topics = "\n ".join([str(topic) for topic in self.topics])
-        text = f"Course Summary: {self.summary}\n" "Course Topics:\n" f"{topics}"
+        text = f"Course Summary: {self.summary}\n"
+        if self.topics:
+            topics = "\n ".join([str(topic) for topic in self.topics])
+            text += "Course Topics:\n" f"{topics}"
         return text
 
     def to_document(self) -> Document:
@@ -46,11 +49,13 @@ class MoodleCourse(BaseModel):
             metadata.update({"language": self.lang})
 
         course_document = Document(text=text, metadata=metadata)
+        docs = [course_document]
 
-        list_module_documents = []
+        if self.topics:
+            module_documents = []
+            for topic in self.topics:
+                for module in topic.modules:
+                    module_documents.append(module.to_document(self.id))
+            docs += module_documents
 
-        for topic in self.topics:
-            for module in topic.modules:
-                list_module_documents.append(module.to_document(self.id))
-
-        return [course_document] + list_module_documents
+        return docs
