@@ -21,7 +21,11 @@ class Vimeo:
     def get_metadata(self, video_id: str) -> Optional[dict]:
         url = self.api_endpoint + video_id + "/texttracks"
         texttrack_caller = APICaller(url=url, headers=self.headers)
-        response_json = texttrack_caller.getJSON()["data"]
+        try:
+            response_json = texttrack_caller.getJSON()["data"]
+        except requests.exceptions.HTTPError as err:
+            if err.response.status_code == 404:
+                return None
         # TODO: always the first track in data list?
         return response_json[0] if response_json else None
 

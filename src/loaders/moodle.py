@@ -5,6 +5,7 @@ import zipfile
 
 from bs4 import BeautifulSoup
 from llama_index.core import Document
+from pydantic import ValidationError
 
 from src.env import env
 from src.loaders.APICaller import APICaller
@@ -162,7 +163,10 @@ class Moodle:
                 content = json.load(json_file)
             if "interactiveVideo" in content.keys():
                 videourl = content["interactiveVideo"]["video"]["files"][0]["path"]
-                video = Video(id=0, vimeo_url=videourl)
+                try:
+                    video = Video(id=0, vimeo_url=videourl)
+                except ValidationError:
+                    pass
                 vimeo = Vimeo()
 
                 texttrack = None

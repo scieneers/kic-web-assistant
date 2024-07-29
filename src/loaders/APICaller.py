@@ -24,7 +24,11 @@ class APICaller:
             raise err
 
     def getJSON(self, **kwargs) -> dict:
-        self.get(**kwargs)
+        try:
+            self.get(**kwargs)
+        except requests.exceptions.HTTPError as err:
+            print(f"Failed to retrieve {self.url}")
+            raise err
         response_json = self.response.json()
         if "exception" in response_json:
             raise Exception(f"{response_json['errorcode']}: {response_json['message']}")
