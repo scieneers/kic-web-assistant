@@ -103,6 +103,16 @@ class VectorDBQdrant:
 
         return courses_records, modules_records
 
+    def get_courses(self, collection_name, course_id) -> list[dict]:
+        records = self.client.scroll(
+            collection_name=collection_name,
+            with_payload=True,
+            with_vectors=False,
+            limit=10,
+        )
+
+        return records
+
 
 if __name__ == "__main__":
     test_connection = VectorDBQdrant(version="disk")  # For local testing only

@@ -5,6 +5,7 @@ from src.llm.LLMs import Models
 from src.llm.retriever import KiCampusRetriever
 from src.llm.tools.contextualizer import Contextualizer
 from src.llm.tools.question_answerer import QuestionAnswerer
+from vectordb.qdrant import VectorDBQdrant
 
 
 class KICampusAssistant:
@@ -64,6 +65,13 @@ class KICampusAssistant:
         )
 
         return response
+
+    def check_if_course_exists(self, course_id: int) -> bool:
+        courses_list = VectorDBQdrant().get_courses("web_assistant", course_id=course_id)
+        if courses_list:
+            return True
+        else:
+            return False
 
 
 if __name__ == "__main__":

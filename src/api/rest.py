@@ -146,12 +146,19 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
     assistant = KICampusAssistant()
 
     if chat_request.course_id:
-        llm_response = assistant.chat_with_course(
-            query=chat_request.get_user_query(),
-            chat_history=chat_request.get_chat_history(),
-            model=chat_request.model,
-            course_id=chat_request.course_id,
-        )
+        if assistant.check_if_course_exists(chat_request.course_id):
+            llm_response = assistant.chat_with_course(
+                query=chat_request.get_user_query(),
+                chat_history=chat_request.get_chat_history(),
+                model=chat_request.model,
+                course_id=chat_request.course_id,
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no course found with the given id: {chat_request.course_id}.",
+            )
+
     elif chat_request.module_id:
         llm_response = assistant.chat_with_course(
             query=chat_request.get_user_query(),
