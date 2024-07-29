@@ -88,7 +88,13 @@ class VectorDBQdrant:
             all_records.extend(records[0])
 
         courses_records = sorted(
-            [record for record in all_records if "module_id" not in record.payload],
+            [
+                record
+                for record in all_records
+                if "module_id" not in record.payload
+                and "course_id" in record.payload
+                and isinstance(record.payload["course_id"], int)
+            ],
             key=lambda x: x.payload["course_id"],
         )
         modules_records = sorted(
