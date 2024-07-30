@@ -103,9 +103,22 @@ class VectorDBQdrant:
 
         return courses_records, modules_records
 
-    def get_courses(self, collection_name, course_id) -> list[dict]:
+    def check_if_course_exists(self, course_id: int) -> bool:
+        """Check if a course exists in the database."""
+
+        filter_criteria = {"must": [{"key": "course_id", "match": {"value": course_id}}]}
+        return bool(self.query_with_filter("web_assistant", filter_criteria))
+
+    def check_if_module_exists(self, module_id: int) -> bool:
+        """Check if a module exists in the database."""
+
+        filter_criteria = {"must": [{"key": "module_id", "match": {"value": module_id}}]}
+        return bool(VectorDBQdrant().query_with_filter("web_assistant", filter_criteria))
+
+    def query_with_filter(self, collection_name, filter_criteria) -> list[dict]:
         records = self.client.scroll(
             collection_name=collection_name,
+            scroll_filter=filter_criteria,
             with_payload=True,
             with_vectors=False,
             limit=10,
