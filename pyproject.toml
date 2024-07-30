@@ -28,7 +28,7 @@ webvtt-py = "^0.4.6"
 # Monitoring
 langfuse = "^2.22.0"
 youtube-transcript-api = "^0.6.2"
-pydantic = "~2.8.2"
+pydantic = "~2.5.3"
 azure-keyvault-secrets = "^4.8.0"
 llama-index-llms-openai-like = "^0.1.3"
 
@@ -50,7 +50,7 @@ optional = true
 [tool.poetry.group.frontend.dependencies]
 streamlit = "~1.29.0"
 trubrics = {extras = ["streamlit"], version = "^1.6.2"}
-st-ant-tree = "^0.0.12"
+streamlit-antd-components = "^0.3.2"
 
 [tool.poetry.group.dev]
 optional = true
