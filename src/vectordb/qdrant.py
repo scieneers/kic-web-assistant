@@ -1,8 +1,9 @@
 import os
 import sys
+from typing import List
 
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from qdrant_client.http.models import Distance, PointStruct, VectorParams
 
@@ -106,19 +107,33 @@ class VectorDBQdrant:
     def check_if_course_exists(self, course_id: int) -> bool:
         """Check if a course exists in the database."""
 
-        filter_criteria = {"must": [{"key": "course_id", "match": {"value": course_id}}]}
-        return bool(self.query_with_filter("web_assistant", filter_criteria))
+        scroll_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="course_id",
+                    match=models.MatchValue(value=course_id),
+                ),
+            ],
+        )
+        return bool(self.query_with_filter("web_assistant", scroll_filter))
 
     def check_if_module_exists(self, module_id: int) -> bool:
         """Check if a module exists in the database."""
 
-        filter_criteria = {"must": [{"key": "module_id", "match": {"value": module_id}}]}
-        return bool(VectorDBQdrant().query_with_filter("web_assistant", filter_criteria))
+        scroll_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="course_id",
+                    match=models.MatchValue(value=module_id),
+                ),
+            ],
+        )
+        return bool(self.query_with_filter("web_assistant", scroll_filter))
 
-    def query_with_filter(self, collection_name, filter_criteria) -> list[dict]:
+    def query_with_filter(self, collection_name, scroll_filter) -> List:
         records = self.client.scroll(
             collection_name=collection_name,
-            scroll_filter=filter_criteria,
+            scroll_filter=scroll_filter,
             with_payload=True,
             with_vectors=False,
             limit=10,

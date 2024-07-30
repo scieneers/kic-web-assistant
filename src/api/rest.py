@@ -129,20 +129,22 @@ class ChatRequest(BaseModel):
                 status_code=400,
                 detail="module_id is required when course_id is set.",
             )
-        if not VectorDBQdrant().check_if_module_exists(self.module_id):
-            raise HTTPException(
-                status_code=404,
-                detail=f"no module found with the given id: {self.module_id}.",
-            )
+        if self.module_id is not None:
+            if not VectorDBQdrant().check_if_module_exists(self.module_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"no module found with the given id: {self.module_id}.",
+                )
         return self
 
     @model_validator(mode="after")
     def validate_course_id(self):
-        if not VectorDBQdrant().check_if_course_exists(self.course_id):
-            raise HTTPException(
-                status_code=404,
-                detail=f"no course found with the given id: {self.course_id}.",
-            )
+        if self.course_id is not None:
+            if not VectorDBQdrant().check_if_course_exists(self.course_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"no course found with the given id: {self.course_id}.",
+                )
         return self
 
 

@@ -141,6 +141,13 @@ st.title("KI-Campus Assistant")
 if "llm_select" not in st.session_state:
     st.session_state.llm_select = Models.GPT4
 
+if "course_id" not in st.session_state:
+    st.session_state.course_id = None
+
+if "module_id" not in st.session_state:
+    st.session_state.module_id = None
+
+
 with st.sidebar:
     st.session_state["llm_select"] = st.selectbox(
         "LLM Modelauswahl",
