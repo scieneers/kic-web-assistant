@@ -9,6 +9,7 @@ from streamlit_antd_components import AntIcon
 from streamlit_feedback import streamlit_feedback
 
 from src.api.rest import app
+from src.env import env
 from src.llm.LLMs import Models
 from vectordb.qdrant import VectorDBQdrant
 
@@ -126,7 +127,7 @@ def submit_feedback(feedback: dict, trace_id: str):
 
     response = st.session_state.assistant.post(
         "/api/feedback",
-        headers={"Api-Key": "example_todelete_123"},
+        headers={"Api-Key": env.REST_API_KEYS[0]},
         json={"response_id": trace_id, "feedback": feedback["text"], "score": score},
     )
 
@@ -190,7 +191,7 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
     st.session_state.messages.append({"role": MessageRole.USER, "content": query})
     response = st.session_state.assistant.post(
         "/api/chat",
-        headers={"Api-Key": "example_todelete_123"},
+        headers={"Api-Key": env.REST_API_KEYS[0]},
         json={
             "messages": st.session_state.messages,
             "model": st.session_state.llm_select,
@@ -199,7 +200,7 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
         },
     )
     if response.status_code != 200:
-        raise ValueError(f"Error: {response}")
+        raise ValueError(f"Error: {response.content}")
 
     response_content = json.loads(response.content)
     with st.chat_message("assistant"):
