@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.assistant import KICampusAssistant
 from src.llm.LLMs import Models
+from src.vectordb.qdrant import VectorDBQdrant
 
 # Langfuse tracing global initialization
 langfuse_handler = LlamaIndexCallbackHandler()
@@ -48,7 +49,7 @@ def health() -> str:
 class RetrievalRequest(BaseModel):
     message: str = Field(
         description="The query to find the most fitting sources to.",
-        examples=["How much is the maximum dental police?"],
+        examples=["Which course is teaching Ethics?"],
     )
     course_id: int | None = Field(
         default=None,
@@ -128,6 +129,20 @@ class ChatRequest(BaseModel):
                 status_code=400,
                 detail="module_id is required when course_id is set.",
             )
+        if not VectorDBQdrant().check_if_module_exists(self.module_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"no module found with the given id: {self.module_id}.",
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_course_id(self):
+        if not VectorDBQdrant().check_if_course_exists(self.course_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"no course found with the given id: {self.course_id}.",
+            )
         return self
 
 
@@ -145,14 +160,15 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
     """Returns the response to the user message in one response (no streaming)."""
     assistant = KICampusAssistant()
 
-    if chat_request.course_id:
+    if chat_request.course_id and not chat_request.module_id:
         llm_response = assistant.chat_with_course(
             query=chat_request.get_user_query(),
             chat_history=chat_request.get_chat_history(),
             model=chat_request.model,
             course_id=chat_request.course_id,
         )
-    elif chat_request.module_id:
+
+    elif chat_request.course_id and chat_request.module_id:
         llm_response = assistant.chat_with_course(
             query=chat_request.get_user_query(),
             chat_history=chat_request.get_chat_history(),
