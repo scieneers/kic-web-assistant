@@ -69,7 +69,7 @@ class RetrievalRequest(BaseModel):
     def validate_module_id(self):
         if self.course_id and not self.module_id:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="module_id is required when course_id is set.",
             )
         return self
@@ -113,7 +113,10 @@ class ChatRequest(BaseModel):
     @classmethod
     def final_message_is_user(cls, messages: list[SerializableChatMessage]) -> list[SerializableChatMessage]:
         if messages[-1].role != MessageRole.USER:
-            raise ValueError("The last message must be a user message.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The last message must be a user message.",
+            )
         return messages
 
     def get_chat_history(self) -> list[ChatMessage]:
@@ -126,13 +129,13 @@ class ChatRequest(BaseModel):
     def validate_module_id(self):
         if self.module_id and not self.course_id:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="module_id is required when course_id is set.",
             )
         if self.module_id is not None:
             if not VectorDBQdrant().check_if_module_exists(self.module_id):
                 raise HTTPException(
-                    status_code=404,
+                    status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"no module found with the given id: {self.module_id}.",
                 )
         return self
@@ -142,7 +145,7 @@ class ChatRequest(BaseModel):
         if self.course_id is not None:
             if not VectorDBQdrant().check_if_course_exists(self.course_id):
                 raise HTTPException(
-                    status_code=404,
+                    status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"no course found with the given id: {self.course_id}.",
                 )
         return self
@@ -200,7 +203,10 @@ class FeedbackRequest(BaseModel):
     @classmethod
     def validate_score(cls, score: int) -> int:
         if not 0 <= score <= 1:
-            raise ValueError("Score must be between 0 and 1.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Score must be between 0 and 1.",
+            )
         return score
 
 
