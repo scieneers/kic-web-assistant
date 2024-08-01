@@ -51,7 +51,7 @@ class Vimeo:
         except requests.exceptions.HTTPError as err:
             if err.response.status_code == 404:
                 return None
-        return response_json[result_index] if result_index else None
+        return response_json[result_index] if result_index is not None else None
 
     def get_transcript(self, video_id: str, fallback_transcript: str | None = None) -> Optional[TextTrack]:
         texttrack_json = self.get_metadata(video_id)

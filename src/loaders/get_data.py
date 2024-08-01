@@ -21,9 +21,9 @@ class Fetch_Data:
         hpi_courses = Moochup(env.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
         moodle_moochup_courses = Moochup(env.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
         moodle_courses = Moodle().extract()
-        drupal_courses = Drupal(base_url=env.DRUPAL_URL).extract()
+        drupal_content = Drupal(base_url=env.DRUPAL_URL).extract()
 
-        all_docs = hpi_courses + moodle_moochup_courses + moodle_courses + drupal_courses
+        all_docs = hpi_courses + moodle_moochup_courses + moodle_courses + drupal_content
 
         vector_store = VectorDBQdrant(version="remote")
         vector_store.client.delete_collection(collection_name="web_assistant")

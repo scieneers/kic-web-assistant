@@ -85,7 +85,8 @@ class Moodle:
     def extract(self) -> list[Document]:
         """extracts all courses and their contents from moodle"""
         courses = self.get_courses()
-        for course in courses:
+        for i, course in enumerate(courses):
+            print(f"processing course id: {course.id}, {i+1}/{len(courses)}")
             course.topics = self.get_course_contents(course.id)
             h5p_activity_ids = self.get_h5p_module_ids(course.id)
             for topic in course.topics:
@@ -181,10 +182,11 @@ class Moodle:
                     fallback_transcript_file = f"content/{content['interactiveVideo']['video']['textTracks']['videoTrack'][0]['track']['path']}"
                     with zipfile.ZipFile(local_filename, "r") as zip_ref:
                         zip_ref.extract(fallback_transcript_file, tmp_dir)
-                        texttrack = vimeo.get_transcript(video.video_id, f"{tmp_dir}/{fallback_transcript_file}")
+                    fallback_transcript_path = f"{tmp_dir}/{fallback_transcript_file}"
                 except KeyError:
-                    print("Fallback Transcript not available")
+                    fallback_transcript_path = None
 
+                texttrack = vimeo.get_transcript(video.video_id, fallback_transcript=fallback_transcript_path)
                 module.transcripts.append(texttrack)
 
 

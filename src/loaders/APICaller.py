@@ -15,6 +15,9 @@ class APICaller:
         self.headers.update(headers)
         self.params.update(kwargs)
         self.response = requests.Response()
+        # This fixes very slow requests, IPV6 is not properly supported by the ki-campus.org server
+        # https://stackoverflow.com/questions/62599036/python-requests-is-slow-and-takes-very-long-to-complete-http-or-https-request
+        requests.packages.urllib3.util.connection.HAS_IPV6 = False
 
     def get(self, **kwargs):
         self.response = requests.get(url=self.url, params=self.params, headers=self.headers)

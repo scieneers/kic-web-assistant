@@ -68,9 +68,7 @@ class Drupal:
             print(f"Processing {page_type.value[0]} number: {i+1}/{len(node)}")
 
             if page["attributes"]["status"]:
-                metadata = {"title": page["attributes"]["title"]}
-                if page_type == PageTypes.COURSE:
-                    metadata.update({"course_id": page["id"]})
+                metadata = {"title": page["attributes"]["title"], "type": f"Drupal_{page_type.value[0]}"}
                 documents.append(
                     Document(
                         metadata=metadata,
