@@ -125,14 +125,20 @@ class Moodle:
                         texttrack = vimeo.get_transcript(videotime.video_id)
                     elif src.find("youtu") != -1:
                         videotime = Video(id=0, vimeo_url=src)
-                        youtube = Youtube()
-                        texttrack = youtube.get_transcript(videotime.video_id)
+                        if videotime.video_id is None:
+                            texttrack = None
+                        else:
+                            youtube = Youtube()
+                            texttrack = youtube.get_transcript(videotime.video_id)
                     else:
                         texttrack = None
                     module.transcripts.append(texttrack)
 
     def extract_videotime(self, module):  # TODO: rename method
         videotime = Video(**self.get_videotime_content(module.id))
+
+        if videotime.video_id is None:
+            return
 
         match videotime.type:
             case VideoPlatforms.VIMEO:

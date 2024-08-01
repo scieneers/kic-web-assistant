@@ -1,3 +1,5 @@
+from typing import List
+
 import requests
 from bs4 import BeautifulSoup
 from llama_index.core import Document
@@ -9,7 +11,16 @@ class Drupal:
     def __init__(
         self, base_url: str = "", username: str = "", client_id: str = "", client_secret: str = "", grant_type: str = ""
     ) -> None:
+        # This fixes very slow requests, IPV6 is not properly supported by the ki-campus.org server
+        # https://stackoverflow.com/questions/62599036/python-requests-is-slow-and-takes-very-long-to-complete-http-or-https-request
+        requests.packages.urllib3.util.connection.HAS_IPV6 = False
+
         self.oauth_token = self.get_oauth_token("https://ki-campus.org")
+        self.header = {
+            "Authorization": f"Bearer {self.oauth_token}",
+            "Accept": "application/vnd.api+json",
+            "Accept-Language": "de",
+        }
 
     def get_oauth_token(self, base_url: str):
         response = requests.post(
@@ -29,6 +40,17 @@ class Drupal:
             return
 
         return response.json()["access_token"]
+
+    def get_data(self, url: str):
+        data = []
+
+        while url:
+            response = requests.get(url, headers=self.header)
+            result = response.json()
+            data.extend(result["data"])
+            next_link = result["links"].get("next")
+            url = next_link["href"] if next_link else None
+        return data
 
     def get_course_paragraphs(self, course_id: str):
         auth_header = {"Authorization": f"Bearer {self.oauth_token}"}
@@ -64,16 +86,18 @@ class Drupal:
         """
         return final_representations
 
-    def extract(
-        self,
-    ):
+    def extract(self):
+        courses_docs = self.get_courses()
+        page_docs = self.get_pages()
+
+        all_docs = page_docs + courses_docs
+
+        return all_docs
+
+    def get_courses(self) -> List[Document]:
         documents: list[Document] = []
-
-        auth_header = {"Authorization": f"Bearer {self.oauth_token}"}
-        node = requests.get("https://ki-campus.org/jsonapi/node/course", headers=auth_header)
-        result = node.json()
-
-        for i, course in enumerate(result["data"]):
+        node = self.get_data("https://ki-campus.org/jsonapi/node/course")
+        for i, course in enumerate(node):
             documents.append(
                 Document(
                     metadata={"title": course["attributes"]["title"], "course_id": course["id"]},
@@ -82,5 +106,31 @@ class Drupal:
             )
 
             print("course number:", i)
+        return documents
+
+    def get_pages(self) -> List[Document]:
+        documents: list[Document] = []
+        node = self.get_data("https://ki-campus.org/jsonapi/node/page")
+        for i, page in enumerate(node):
+            documents.append(
+                Document(
+                    metadata={"title": page["attributes"]["title"]},
+                    text=self.get_page_representation(page),
+                )
+            )
 
         return documents
+
+    def get_page_representation(self, page):
+        final_representations = f"""
+        Page Title: {page["attributes"]["title"]}
+        """
+
+        if page["attributes"]["body"] is not None:
+            content = BeautifulSoup(page["attributes"]["body"]["value"], "html.parser").getText()
+
+            if content is not None:
+                content_text = f"\nPage Content: {content}"
+                final_representations += content_text
+
+        return final_representations

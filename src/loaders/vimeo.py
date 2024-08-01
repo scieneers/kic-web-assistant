@@ -23,11 +23,35 @@ class Vimeo:
         texttrack_caller = APICaller(url=url, headers=self.headers)
         try:
             response_json = texttrack_caller.getJSON()["data"]
+            de_index = None
+            en_index = None
+            de_autogen_index = None
+            en_autogen_index = None
+
+            # Loop through the data to find the required indices
+            for index, item in enumerate(response_json):
+                if item["language"] == "de":
+                    de_index = index
+                elif item["language"] == "en":
+                    en_index = index
+                elif item["language"] == "de-x-autogen":
+                    de_autogen_index = index
+                elif item["language"] == "en-x-autogen":
+                    en_autogen_index = index
+
+            # Select the appropriate index based on priority
+            if de_index is not None:
+                result_index = de_index
+            elif en_index is not None:
+                result_index = en_index
+            elif de_autogen_index is not None:
+                result_index = de_autogen_index
+            else:
+                result_index = en_autogen_index
         except requests.exceptions.HTTPError as err:
             if err.response.status_code == 404:
                 return None
-        # TODO: always the first track in data list?
-        return response_json[0] if response_json else None
+        return response_json[result_index] if result_index else None
 
     def get_transcript(self, video_id: str, fallback_transcript: str | None = None) -> Optional[TextTrack]:
         texttrack_json = self.get_metadata(video_id)
