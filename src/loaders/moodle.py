@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import tempfile
 import zipfile
@@ -24,6 +25,7 @@ class Moodle:
     token: token for moodle api"""
 
     def __init__(self) -> None:
+        self.logger = logging.getLogger("loader")
         self.base_url = env.DATA_SOURCE_MOODLE_URL
         self.api_endpoint = f"{self.base_url}webservice/rest/server.php"
         self.token = env.DATA_SOURCE_MOODLE_TOKEN
@@ -86,7 +88,7 @@ class Moodle:
         """extracts all courses and their contents from moodle"""
         courses = self.get_courses()
         for i, course in enumerate(courses):
-            print(f"processing course id: {course.id}, {i+1}/{len(courses)}")
+            self.logger.debug(f"processing course id: {course.id}, course {i+1}/{len(courses)}")
             course.topics = self.get_course_contents(course.id)
             h5p_activity_ids = self.get_h5p_module_ids(course.id)
             for topic in course.topics:

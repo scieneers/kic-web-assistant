@@ -1,3 +1,4 @@
+import logging
 from enum import Enum
 from typing import List
 
@@ -24,6 +25,7 @@ class Drupal:
     def __init__(
         self, base_url: str = "", username: str = "", client_id: str = "", client_secret: str = "", grant_type: str = ""
     ) -> None:
+        self.logger = logging.getLogger("loader")
         # This fixes very slow requests, IPV6 is not properly supported by the ki-campus.org server
         # https://stackoverflow.com/questions/62599036/python-requests-is-slow-and-takes-very-long-to-complete-http-or-https-request
         requests.packages.urllib3.util.connection.HAS_IPV6 = False
@@ -47,8 +49,6 @@ class Drupal:
             },
         )
 
-        print("status_code: ", response.status_code)
-
         if response.status_code != 200:
             return
 
@@ -65,7 +65,7 @@ class Drupal:
         documents: list[Document] = []
         node = self.get_data(f"https://ki-campus.org/jsonapi/node/{page_type.value[0]}")
         for i, page in enumerate(node):
-            print(f"Processing {page_type.value[0]} number: {i+1}/{len(node)}")
+            self.logger.debug(f"Processing {page_type.value[0]} number: {i+1}/{len(node)}")
 
             if page["attributes"]["status"]:
                 metadata = {"title": page["attributes"]["title"], "type": f"Drupal_{page_type.value[0]}"}
@@ -133,3 +133,7 @@ class Drupal:
             {paragraphs}
             """
         return final_representations
+
+
+if __name__ == "__main__":
+    docs = Drupal().extract()

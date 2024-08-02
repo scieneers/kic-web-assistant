@@ -1,3 +1,4 @@
+import logging
 from io import StringIO
 from typing import Optional
 
@@ -11,6 +12,7 @@ from src.loaders.models.texttrack import TextTrack
 
 class Vimeo:
     def __init__(self) -> None:
+        self.logger = logging.getLogger("loader")
         self.api_endpoint = "https://api.vimeo.com/videos/"
         self.vimeo_token = env.VIMEO_PAT
         self.headers = {
@@ -65,7 +67,7 @@ class Vimeo:
                     # Transcript URL was present, but no transcript on Vimeo,
                     # fallback to transcript file stored in h5p package
                     if fallback_transcript is not None:
-                        print("Falling back to reading file from H5P-Package")
+                        self.logger.warn("Falling back to reading file from H5P-Package")
                         transcript_text = self.get_transcript_from_file(fallback_transcript)
                     else:
                         return None
@@ -73,8 +75,8 @@ class Vimeo:
                 texttrack.transcript = convert_vtt_to_text(StringIO(transcript_text))
                 return texttrack
             except Exception as err:
-                print(f"Reading Fallback Transcript failed: {fallback_transcript}")
-                print(f"Error while converting VTT to text: {err}")
+                self.logger.warn(f"Reading Fallback Transcript failed: {fallback_transcript}")
+                self.logger.warn(f"Error while converting VTT to text: {err}")
         return None
 
     # Fallback for retrieving transcript from h5p, if transcript on Vimeo is not available

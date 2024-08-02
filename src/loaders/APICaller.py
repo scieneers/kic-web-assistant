@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import requests
@@ -8,6 +9,7 @@ from src.loaders.helper import TMP_DIR
 
 class APICaller:
     def __init__(self, url: HttpUrl, params: dict = {}, headers: dict = {}, **kwargs) -> None:
+        self.logger = logging.getLogger("loader")
         self.url = url
         self.params = {}
         self.params.update(params)
@@ -30,7 +32,7 @@ class APICaller:
         try:
             self.get(**kwargs)
         except requests.exceptions.HTTPError as err:
-            print(f"Failed to retrieve {self.url}")
+            self.logger.error(f"Failed to retrieve {self.url}")
             raise err
         response_json = self.response.json()
         if "exception" in response_json:
@@ -41,7 +43,7 @@ class APICaller:
         try:
             self.get(**kwargs)
         except requests.exceptions.HTTPError as err:
-            print(f"Failed to retrieve {self.url}")
+            self.logger.error(f"Failed to retrieve {self.url}")
             raise err
         return self.response.text
 
