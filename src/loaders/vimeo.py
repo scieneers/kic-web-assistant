@@ -48,8 +48,10 @@ class Vimeo:
                 result_index = en_index
             elif de_autogen_index is not None:
                 result_index = de_autogen_index
-            else:
+            elif en_autogen_index is not None:
                 result_index = en_autogen_index
+            else:
+                result_index = None
         except requests.exceptions.HTTPError as err:
             if err.response.status_code == 404:
                 return None

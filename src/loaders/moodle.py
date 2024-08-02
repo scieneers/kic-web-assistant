@@ -112,7 +112,7 @@ class Moodle:
 
     def extract_page(self, module):
         for content in module.contents:
-            if content.type == "gif?forcedownload=1" or content.type == "png?forcedownload=1":
+            if content.type in ["gif?forcedownload=1", "png?forcedownload=1"]:
                 continue
             page_content_caller = APICaller(url=content.fileurl, params=self.download_params)
             soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
@@ -185,10 +185,11 @@ class Moodle:
                     with zipfile.ZipFile(local_filename, "r") as zip_ref:
                         zip_ref.extract(fallback_transcript_file, tmp_dir)
                     fallback_transcript_path = f"{tmp_dir}/{fallback_transcript_file}"
+                    if video:
+                        texttrack = vimeo.get_transcript(video.video_id, fallback_transcript=fallback_transcript_path)
                 except KeyError:
                     fallback_transcript_path = None
 
-                texttrack = vimeo.get_transcript(video.video_id, fallback_transcript=fallback_transcript_path)
                 module.transcripts.append(texttrack)
 
 

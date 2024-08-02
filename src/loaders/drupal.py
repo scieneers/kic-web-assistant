@@ -19,6 +19,7 @@ class PageTypes(Enum):
     COURSE = ("course", "Kurs")
     ABOUT_US = ("about_us", "Über uns")
     PAGE = ("page", "Seite")
+    BLOGPOST = ("blogpost", "Blogpost")
 
 
 class Drupal:
@@ -97,7 +98,7 @@ class Drupal:
 
         _result = ""
         for d in paragraphs["data"]:
-            if d["type"] == "paragraph--simple_text" or d["type"] == "paragraph--textblock":
+            if d["type"] in ["paragraph--simple_text", "paragraph--textblock"]:
                 if d["attributes"]["field_paragraph_title"] is not None:
                     _result += d["attributes"]["field_paragraph_title"]
                     _result += "\n"
@@ -109,7 +110,7 @@ class Drupal:
         return _result
 
     def get_page_representation(self, page, page_type: PageTypes):
-        if page_type == PageTypes.PAGE:
+        if page_type in [PageTypes.PAGE, PageTypes.BLOGPOST]:
             final_representations = f"""
             {page_type.value[1]} Title: {page["attributes"]["title"]}
             """
