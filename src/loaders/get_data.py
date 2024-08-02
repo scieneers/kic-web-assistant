@@ -11,25 +11,30 @@ from src.loaders.moodle import Moodle
 from src.vectordb.qdrant import VectorDBQdrant
 
 
-# A full run takes about 2 hours and 8 minutes (2024-07-16)
+# A full run takes about 3 hours (2024-08-02)
 class Fetch_Data:
     def __init__(self):
         self.DATA_PATH = "./data"
         self.embedder = LLM().get_embedder()
-
-        logging.basicConfig(
-            level="DEBUG" if env.DEBUG_MODE else "INFO",
-            format="%(asctime)s - %(levelname)s - %(message)s",
+        self.logger = logging.getLogger("loader")
+        self.logger.propagate = False
+        console_handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            "{asctime} - {levelname:<8} - {message}",
+            style="{",
             datefmt="%d-%b-%y %H:%M:%S",
         )
-        self.logger = logging.getLogger("loader")
+        console_handler.setFormatter(formatter)
+        self.logger.addHandler(console_handler)
+        self.logger.setLevel(logging.DEBUG if env.DEBUG_MODE else logging.INFO)
+        self.logger.info("Starting data extraction...")
 
     def extract(
         self,
     ):
         self.logger.info("Loading HPI data from Moochup API...")
         hpi_courses = Moochup(env.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
-        self.logger.info("Finished loading data from Moochup API.")
+        self.logger.info("Finished loading HPI data from Moochup API.")
         self.logger.info("Loading Moodle data from Moochup API...")
         moodle_moochup_courses = Moochup(env.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
         self.logger.info("Finished loading data from Moochup API.")

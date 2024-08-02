@@ -4,8 +4,6 @@ from pathlib import Path
 import requests
 from pydantic import HttpUrl
 
-from src.loaders.helper import TMP_DIR
-
 
 class APICaller:
     def __init__(self, url: HttpUrl, params: dict = {}, headers: dict = {}, **kwargs) -> None:
@@ -32,7 +30,7 @@ class APICaller:
         try:
             self.get(**kwargs)
         except requests.exceptions.HTTPError as err:
-            self.logger.error(f"Failed to retrieve {self.url}")
+            self.logger.warn(f"Failed to retrieve {self.url}")
             raise err
         response_json = self.response.json()
         if "exception" in response_json:
@@ -43,7 +41,7 @@ class APICaller:
         try:
             self.get(**kwargs)
         except requests.exceptions.HTTPError as err:
-            self.logger.error(f"Failed to retrieve {self.url}")
+            self.logger.warn(f"Failed to retrieve {self.url}")
             raise err
         return self.response.text
 

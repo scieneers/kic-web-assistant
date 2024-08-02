@@ -1,8 +1,11 @@
+import logging
 import re
 from enum import StrEnum
 
 import requests
 from pydantic import BaseModel, Field, HttpUrl, computed_field, model_validator
+
+logger = logging.getLogger("loader")
 
 
 class VideoPlatforms(StrEnum):
@@ -20,10 +23,10 @@ class Video(BaseModel):
         try:
             response = requests.get(self.video_url, allow_redirects=True)
             if response.history and self.video_url.host == "learn.ki-campus.org":
-                print(f"The URL was redirected to {response.url}")
+                logger.debug(f"The URL was redirected to {response.url}")
                 self.video_url = HttpUrl(response.url)
         except requests.exceptions.RequestException as e:
-            print(f"An error occurred: {e}")
+            logger.exception(f"An error occurred: {e}")
 
     @computed_field  # type: ignore[misc]
     @property

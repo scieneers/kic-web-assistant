@@ -1,8 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
 from llama_index.core import Document
-from llama_index.core.ingestion import IngestionPipeline
-from llama_index.core.node_parser import SentenceSplitter
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 

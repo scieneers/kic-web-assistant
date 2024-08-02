@@ -27,7 +27,6 @@ class MoodleCourse(BaseModel):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.url = f"{self.url}{self.id}"
-        print(f"Creating course {self.id}")
 
     def __str__(self) -> str:
         text = f"Course Summary: {self.summary}\n"
