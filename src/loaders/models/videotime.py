@@ -1,8 +1,11 @@
+import logging
 import re
 from enum import StrEnum
-from urllib.parse import unquote
 
-from pydantic import BaseModel, Field, HttpUrl, computed_field
+import requests
+from pydantic import BaseModel, Field, HttpUrl, computed_field, model_validator
+
+logger = logging.getLogger("loader")
 
 
 class VideoPlatforms(StrEnum):
@@ -15,6 +18,16 @@ class Video(BaseModel):
     id: int
     video_url: HttpUrl = Field(..., alias="vimeo_url")  # This Field can contain a Vimeo _or_ a Youtube URL
 
+    @model_validator(mode="after")
+    def validate_video_url(self):
+        try:
+            response = requests.get(self.video_url, allow_redirects=True)
+            if response.history and self.video_url.host == "learn.ki-campus.org":
+                logger.debug(f"The URL was redirected to {response.url}")
+                self.video_url = HttpUrl(response.url)
+        except requests.exceptions.RequestException as e:
+            logger.exception(f"An error occurred: {e}")
+
     @computed_field  # type: ignore[misc]
     @property
     def type(self) -> VideoPlatforms:
@@ -25,17 +38,6 @@ class Video(BaseModel):
                 return VideoPlatforms.YOUTUBE
             case "ki-campus-test.fernuni-hagen.de" | "ki-campus.moodle.staging.fernuni-hagen.de" | "moodle.ki-campus.org":
                 return VideoPlatforms.SELF_HOSTED
-            case "learn.ki-campus.org":
-                video_platform_url = unquote(self.video_url.query.split("&")[0].split("=")[1])
-                youtube_pattern = re.compile(r"youtube\.com|youtu\.be", re.IGNORECASE)
-                vimeo_pattern = re.compile(r"vimeo", re.IGNORECASE)
-                self.video_url = HttpUrl(video_platform_url)
-                if youtube_pattern.search(video_platform_url):
-                    return VideoPlatforms.YOUTUBE
-                elif vimeo_pattern.search(video_platform_url):
-                    return VideoPlatforms.VIMEO
-                else:
-                    raise NotImplementedError("Unknown VideoPlatform, implement me")
             case _:
                 raise NotImplementedError("Unknown VideoPlatform, implement me")
 
@@ -50,6 +52,10 @@ class Video(BaseModel):
                 youtube_video_id_pattern = (
                     r"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^\"&?\/\s]{11})"
                 )
-                return re.findall(youtube_video_id_pattern, str(self.video_url))[0]
+                matches = re.findall(youtube_video_id_pattern, str(self.video_url))
+                if matches:
+                    return matches[0]
+                else:
+                    return None
             case VideoPlatforms.SELF_HOSTED:
                 return ""

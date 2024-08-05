@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import tempfile
 import zipfile
@@ -24,6 +25,7 @@ class Moodle:
     token: token for moodle api"""
 
     def __init__(self) -> None:
+        self.logger = logging.getLogger("loader")
         self.base_url = env.DATA_SOURCE_MOODLE_URL
         self.api_endpoint = f"{self.base_url}webservice/rest/server.php"
         self.token = env.DATA_SOURCE_MOODLE_TOKEN
@@ -85,7 +87,8 @@ class Moodle:
     def extract(self) -> list[Document]:
         """extracts all courses and their contents from moodle"""
         courses = self.get_courses()
-        for course in courses:
+        for i, course in enumerate(courses):
+            self.logger.debug(f"Processing course id: {course.id}, course {i+1}/{len(courses)}")
             course.topics = self.get_course_contents(course.id)
             h5p_activity_ids = self.get_h5p_module_ids(course.id)
             for topic in course.topics:
@@ -109,7 +112,7 @@ class Moodle:
 
     def extract_page(self, module):
         for content in module.contents:
-            if content.type == "gif?forcedownload=1" or content.type == "png?forcedownload=1":
+            if content.type in ["gif?forcedownload=1", "png?forcedownload=1"]:
                 continue
             page_content_caller = APICaller(url=content.fileurl, params=self.download_params)
             soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
@@ -125,14 +128,20 @@ class Moodle:
                         texttrack = vimeo.get_transcript(videotime.video_id)
                     elif src.find("youtu") != -1:
                         videotime = Video(id=0, vimeo_url=src)
-                        youtube = Youtube()
-                        texttrack = youtube.get_transcript(videotime.video_id)
+                        if videotime.video_id is None:
+                            texttrack = None
+                        else:
+                            youtube = Youtube()
+                            texttrack = youtube.get_transcript(videotime.video_id)
                     else:
                         texttrack = None
                     module.transcripts.append(texttrack)
 
     def extract_videotime(self, module):  # TODO: rename method
         videotime = Video(**self.get_videotime_content(module.id))
+
+        if videotime.video_id is None:
+            return
 
         match videotime.type:
             case VideoPlatforms.VIMEO:
@@ -175,9 +184,11 @@ class Moodle:
                     fallback_transcript_file = f"content/{content['interactiveVideo']['video']['textTracks']['videoTrack'][0]['track']['path']}"
                     with zipfile.ZipFile(local_filename, "r") as zip_ref:
                         zip_ref.extract(fallback_transcript_file, tmp_dir)
-                        texttrack = vimeo.get_transcript(video.video_id, f"{tmp_dir}/{fallback_transcript_file}")
+                    fallback_transcript_path = f"{tmp_dir}/{fallback_transcript_file}"
+                    if video:
+                        texttrack = vimeo.get_transcript(video.video_id, fallback_transcript=fallback_transcript_path)
                 except KeyError:
-                    print("Fallback Transcript not available")
+                    fallback_transcript_path = None
 
                 module.transcripts.append(texttrack)
 
