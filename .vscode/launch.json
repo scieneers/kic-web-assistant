@@ -9,7 +9,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "src/loaders/get_data.py",
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
         },
         {
             "name": "Python: Current File",

@@ -1,11 +1,4 @@
 import os
-
-from src.env import env
-
-os.environ["LANGFUSE_PUBLIC_KEY"] = env.LANGFUSE_PUBLIC_KEY
-os.environ["LANGFUSE_SECRET_KEY"] = env.LANGFUSE_SECRET_KEY
-os.environ["LANGFUSE_HOST"] = env.LANGFUSE_HOST
-
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -19,6 +12,7 @@ from llama_index.core.llms import ChatMessage, MessageRole
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
+from src.env import env
 from src.llm.assistant import KICampusAssistant
 from src.llm.LLMs import Models
 from src.vectordb.qdrant import VectorDBQdrant
