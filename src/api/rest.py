@@ -1,13 +1,9 @@
-import os
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import APIKeyHeader
 from langfuse import Langfuse
 from langfuse.decorators import langfuse_context, observe
-from langfuse.llama_index import LlamaIndexCallbackHandler
-from llama_index.core import Settings
-from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import ChatMessage, MessageRole
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -16,10 +12,6 @@ from src.env import env
 from src.llm.assistant import KICampusAssistant
 from src.llm.LLMs import Models
 from src.vectordb.qdrant import VectorDBQdrant
-
-# Langfuse tracing global initialization
-langfuse_handler = LlamaIndexCallbackHandler()
-Settings.callback_manager = CallbackManager([langfuse_handler])
 
 app = FastAPI()
 # authentication with OAuth2
