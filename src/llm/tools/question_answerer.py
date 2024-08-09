@@ -62,9 +62,10 @@ class QuestionAnswerer:
     ) -> ChatMessage:
         sources_text = self.get_sources_text(sources)
         prompted_user_query = USER_QUERY_WITH_SOURCES_PROMPT.format(context=sources_text, query=query)
-        prompted_chat_history = [ChatMessage(content=system_prompt, role=MessageRole.SYSTEM)] + chat_history
 
-        response = self.llm.chat(query=prompted_user_query, chat_history=prompted_chat_history, model=model)
+        response = self.llm.chat(
+            query=prompted_user_query, chat_history=chat_history, model=model, system_prompt=system_prompt
+        )
         if response.content is None:
             raise ValueError(f"LLM produced no response. Please check the LLM implementation. Response: {response}")
         return response

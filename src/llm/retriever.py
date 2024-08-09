@@ -1,7 +1,11 @@
 from langfuse.decorators import observe
 from llama_index.core.schema import NodeWithScore
-from llama_index.core.vector_stores import VectorStoreQuery
-from llama_index_client import FilterCondition, MetadataFilter, MetadataFilters
+from llama_index.core.vector_stores import (
+    FilterCondition,
+    MetadataFilter,
+    MetadataFilters,
+    VectorStoreQuery,
+)
 
 from src.llm.LLMs import LLM
 from src.vectordb.qdrant import VectorDBQdrant

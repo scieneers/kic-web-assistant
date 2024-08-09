@@ -135,7 +135,6 @@ class EnvHelper(BaseModel):
                 secret_client=secret_client,
                 class_variable="DATA_SOURCE_MOODLE_TOKEN",
             )
-
         super().__init__(*args, **kwargs)
 
     @staticmethod
@@ -158,6 +157,9 @@ class EnvHelper(BaseModel):
 
 
 env = EnvHelper()
+os.environ["LANGFUSE_PUBLIC_KEY"] = env.LANGFUSE_PUBLIC_KEY
+os.environ["LANGFUSE_SECRET_KEY"] = env.LANGFUSE_SECRET_KEY
+os.environ["LANGFUSE_HOST"] = env.LANGFUSE_HOST
 
 if __name__ == "__main__":
     print(env.get_REST_API_KEYS())
