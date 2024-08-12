@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from io import StringIO
 from pathlib import Path
 
@@ -45,4 +46,7 @@ def process_html_summaries(text: str) -> str:
     new_text = new_text.replace("\n", " ").replace("\r", "")
     # \r = carriage return character
     new_text = re.sub(r"\s{3,}", "  ", new_text)
+
+    # Normalize parsed text (remove \xa0 from str)
+    new_text = unicodedata.normalize("NFKD", new_text)
     return new_text

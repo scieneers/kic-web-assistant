@@ -29,7 +29,7 @@ class MoodleCourse(BaseModel):
         self.url = f"{self.url}{self.id}"
 
     def __str__(self) -> str:
-        text = f"Course Summary: {self.summary}\n"
+        text = f"Course Title: {self.fullname}\n Course Summary: {self.summary}\n"
         if self.topics:
             topics = "\n ".join([str(topic) for topic in self.topics])
             text += "Course Topics:\n" f"{topics}"
