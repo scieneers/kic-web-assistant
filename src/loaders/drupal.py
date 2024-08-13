@@ -1,4 +1,5 @@
 import logging
+import unicodedata
 from enum import Enum
 from typing import List
 
@@ -20,6 +21,10 @@ class PageTypes(Enum):
     ABOUT_US = ("about_us", "Über uns")
     PAGE = ("page", "Seite")
     BLOGPOST = ("blogpost", "Blogpost")
+    SPEZIAL = ("dvv_page", "Spezial")
+
+
+DRUPAL_API_BASE_URL = "https://ki-campus.org/jsonapi/node/"
 
 
 class Drupal:
@@ -64,7 +69,7 @@ class Drupal:
 
     def get_page_type(self, page_type: PageTypes) -> List[Document]:
         documents: list[Document] = []
-        node = self.get_data(f"https://ki-campus.org/jsonapi/node/{page_type.value[0]}")
+        node = self.get_data(f"{DRUPAL_API_BASE_URL}{page_type.value[0]}")
         for i, page in enumerate(node):
             self.logger.debug(f"Processing {page_type.value[0]} number: {i+1}/{len(node)}")
 
@@ -90,49 +95,112 @@ class Drupal:
             url = next_link["href"] if next_link else None
         return data
 
-    def get_page_paragraphs(self, page_id: str, page_type: PageTypes):
-        response = requests.get(
-            f"https://ki-campus.org/jsonapi/node/{page_type.value[0]}/{page_id}/field_paragraphs", headers=self.header
-        )
+    def get_page_paragraphs(self, page_id: str, page_type: PageTypes | str):
+        if type(page_type) is PageTypes:
+            response = requests.get(
+                f"{DRUPAL_API_BASE_URL}{page_type.value[0]}/{page_id}/field_paragraphs", headers=self.header
+            )
+        elif type(page_type) is str:
+            response = requests.get(
+                f"{DRUPAL_API_BASE_URL}{page_type}/{page_id}/field_content_paragraphs", headers=self.header
+            )
+        else:
+            raise Exception('Bad type: "page_type"')
         paragraphs = response.json()
 
         _result = ""
         for d in paragraphs["data"]:
-            if d["type"] in ["paragraph--simple_text", "paragraph--textblock"]:
-                if d["attributes"]["field_paragraph_title"] is not None:
+            if d["type"] in ["paragraph--simple_text", "paragraph--textblock", "paragraph--text_and_image"]:
+                if d["attributes"].get("field_paragraph_title") is not None:
                     _result += d["attributes"]["field_paragraph_title"]
                     _result += "\n"
 
-                if d["attributes"]["field_paragraph_body"] is not None:
-                    _result += BeautifulSoup(d["attributes"]["field_paragraph_body"]["value"]).getText()
+                if d["attributes"].get("field_paragraph_body") is not None:
+                    _result += BeautifulSoup(d["attributes"]["field_paragraph_body"]["value"], "html.parser").getText()
                     _result += "\n\n"
 
         return _result
 
+    def fetch_data(self, url):
+        response = requests.get(url, headers=self.header)
+        return response.json()
+
+    def process_lecture_books(self, page) -> str:
+        lecture_books = page["relationships"]["field_lecture_books"]["data"]
+        books_text = ""
+
+        for lecture_book in lecture_books:
+            lecture_book_url = f"{DRUPAL_API_BASE_URL}lecture_book/{lecture_book['id']}"
+            chapter_data = self.fetch_data(lecture_book_url)
+            books_text += self.process_chapters(chapter_data)
+            pass
+
+        return books_text
+
+    def process_chapters(self, chapter_data) -> str:
+        chapters = chapter_data["data"]["relationships"]["field_lecture_chapters"]["data"]
+        chapters_text = ""
+
+        for single_chapter in chapters:
+            # Yes, its really called lecture_chaper
+            chapter_url = f"{DRUPAL_API_BASE_URL}lecture_chaper/{single_chapter['id']}"
+            lecture_data = self.fetch_data(chapter_url)
+
+            chapters_text += self.process_lectures(lecture_data)
+
+        return chapters_text
+
+    def process_lectures(self, lecture_data) -> str:
+        lectures = lecture_data["data"]["relationships"]["field_lectures"]["data"]
+        lectures_text = ""
+
+        for lecture in lectures:
+            lectures_text += self.get_page_paragraphs(lecture["id"], "lecture")
+
+        return lectures_text
+
     def get_page_representation(self, page, page_type: PageTypes):
-        if page_type in [PageTypes.PAGE, PageTypes.BLOGPOST]:
-            final_representations = f"""
-            {page_type.value[1]} Title: {page["attributes"]["title"]}
-            """
+        final_representations = ""
 
-            if page["attributes"]["body"] is not None:
-                content = BeautifulSoup(page["attributes"]["body"]["value"], "html.parser").getText()
+        match page_type:
+            case (PageTypes.PAGE, PageTypes.BLOGPOST):
+                self.get_basic_representation(page, page_type)
 
-                if content is not None:
-                    content_text = f"\{page_type.value[1]} Content: {content}"
-                    final_representations += content_text
-        else:
-            description = ""
-            if page["attributes"]["field_description"] is not None:
-                description = BeautifulSoup(page["attributes"]["field_description"]["value"], "html.parser").getText()
-            paragraphs = self.get_page_paragraphs(page["id"], page_type)
+            case PageTypes.SPEZIAL:
+                final_representations += self.get_basic_representation(page, page_type)
+                final_representations += self.process_lecture_books(page)
+                pass
 
-            final_representations = f"""
-            {page_type.value[1]} Title: {page["attributes"]["title"]}
-            {page_type.value[1]} Description: {description}
+            case _:
+                description = ""
+                if page["attributes"]["field_description"] is not None:
+                    description = BeautifulSoup(
+                        page["attributes"]["field_description"]["value"], "html.parser"
+                    ).getText()
+                paragraphs = self.get_page_paragraphs(page["id"], page_type)
 
-            {paragraphs}
-            """
+                final_representations = f"""
+                {page_type.value[1]} Title: {page["attributes"]["title"]}
+                {page_type.value[1]} Description: {description}
+
+                {paragraphs}
+                """
+
+        # Normalize parsed text (remove \xa0 from str)
+        final_representations = unicodedata.normalize("NFKD", final_representations)
+        return final_representations
+
+    def get_basic_representation(self, page, page_type: PageTypes):
+        final_representations = f"""
+                    {page_type.value[1]} Title: {page["attributes"]["title"]}
+                """
+        if page["attributes"]["body"] is not None:
+            content = BeautifulSoup(page["attributes"]["body"]["value"], "html.parser").getText()
+
+            if content is not None:
+                content_text = f"\n{page_type.value[1]} Content: {content}"
+                final_representations += content_text
+
         return final_representations
 
 
