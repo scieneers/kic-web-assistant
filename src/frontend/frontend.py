@@ -63,7 +63,7 @@ def create_courses_modules_tree() -> list:
     return tree_items
 
 
-def get_course_module(course_or_module_index: int) -> dict:
+def convert_selected_index_to_id(course_or_module_index: int) -> dict:
     tree = create_courses_modules_tree()
 
     course_id = None
@@ -103,22 +103,30 @@ def get_course_module(course_or_module_index: int) -> dict:
     return response
 
 
-def set_course_selection():
-    if st.session_state.course_selection == 0:
-        reset_history()
-        return
+def select_course_or_module():
+    # st.session_state.course_selection is a list with a single item
+    # everytime the user collapses the tree :(
     if type(st.session_state.course_selection) is list:
         index_selected = st.session_state.course_selection[0]
     else:
         index_selected = st.session_state.course_selection
 
-    talk_to_course = get_course_module(index_selected)
-    st.session_state["course_id"] = talk_to_course["course_id"]
-    st.session_state["module_id"] = talk_to_course["module_id"]
+    talk_to_course_ids = convert_selected_index_to_id(index_selected)
+
+    if (
+        st.session_state["course_id"] != talk_to_course_ids["course_id"]
+        or st.session_state["module_id"] != talk_to_course_ids["module_id"]
+    ):
+        reset_history()
+
+    st.session_state["course_id"] = talk_to_course_ids["course_id"]
+    st.session_state["module_id"] = talk_to_course_ids["module_id"]
 
 
 def reset_history():
     st.session_state.messages = []
+    st.session_state.course_id = None
+    st.session_state.module_id = None
 
 
 def submit_feedback(feedback: dict, trace_id: str):
@@ -166,7 +174,7 @@ with st.sidebar:
         show_line=False,
         checkbox=False,
         return_index=True,
-        on_change=set_course_selection,
+        on_change=select_course_or_module,
         label="Make a selection to talk to a course - or module",
     )
 
