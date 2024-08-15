@@ -94,7 +94,17 @@ class Moodle:
             for topic in course.topics:
                 self.get_module_contents(topic, h5p_activity_ids)
         course_documents = [doc for course in courses for doc in course.to_document()]
-        return course_documents
+        course_documents += self.get_toc_document(courses)
+        return [course_documents]
+
+    def get_toc_document(self, courses) -> Document:
+        toc_str = "List of all available courses:\n"
+        for course in courses:
+            toc_str += f"Course ID: {course.id}, Course Name: {course.fullname}\n"
+
+        toc_doc = Document(text=toc_str)
+
+        return toc_doc
 
     def get_module_contents(self, topic, h5p_activities):
         for module in topic.modules:

@@ -27,7 +27,7 @@ class KiCampusRetriever:
         if module_id is not None:
             filters.filters.append(MetadataFilter(key="module_id", value=module_id))
 
-        vector_store_query = VectorStoreQuery(query_embedding=embedding, similarity_top_k=3, filters=filters)
+        vector_store_query = VectorStoreQuery(query_embedding=embedding, similarity_top_k=12, filters=filters)
 
         query_result = self.vector_store.query(vector_store_query)
         if query_result.nodes is None:

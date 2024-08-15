@@ -21,7 +21,7 @@ class PageTypes(Enum):
     ABOUT_US = ("about_us", "Über uns")
     PAGE = ("page", "Seite")
     BLOGPOST = ("blogpost", "Blogpost")
-    SPEZIAL = ("dvv_page", "Spezial")
+    SPEZIAL = ("dvv_page", "Spezial")  # Spezial / Stadt Land DatenFluss
 
 
 DRUPAL_API_BASE_URL = "https://ki-campus.org/jsonapi/node/"
@@ -163,7 +163,7 @@ class Drupal:
         final_representations = ""
 
         match page_type:
-            case (PageTypes.PAGE, PageTypes.BLOGPOST):
+            case PageTypes.PAGE | PageTypes.BLOGPOST:
                 self.get_basic_representation(page, page_type)
 
             case PageTypes.SPEZIAL:
