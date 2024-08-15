@@ -74,7 +74,11 @@ class Drupal:
             self.logger.debug(f"Processing {page_type.value[0]} number: {i+1}/{len(node)}")
 
             if page["attributes"]["status"]:
-                metadata = {"title": page["attributes"]["title"], "type": f"Drupal_{page_type.value[0]}"}
+                metadata = {
+                    "title": page["attributes"]["title"],
+                    "type": f"Drupal_{page_type.value[0]}",
+                    "url": f"https://ki-campus.org/node/{page['attributes']['drupal_internal__nid']}",
+                }
                 documents.append(
                     Document(
                         metadata=metadata,
