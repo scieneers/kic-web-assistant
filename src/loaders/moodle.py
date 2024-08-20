@@ -93,9 +93,10 @@ class Moodle:
             h5p_activity_ids = self.get_h5p_module_ids(course.id)
             for topic in course.topics:
                 self.get_module_contents(topic, h5p_activity_ids)
+
         course_documents = [doc for course in courses for doc in course.to_document()]
-        course_documents += self.get_toc_document(courses)
-        return [course_documents]
+        course_documents.append(self.get_toc_document(courses))
+        return course_documents
 
     def get_toc_document(self, courses) -> Document:
         toc_str = "List of all available courses:\n"

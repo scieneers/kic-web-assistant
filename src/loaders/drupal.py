@@ -168,7 +168,7 @@ class Drupal:
 
         match page_type:
             case PageTypes.PAGE | PageTypes.BLOGPOST:
-                self.get_basic_representation(page, page_type)
+                final_representations += self.get_basic_representation(page, page_type)
 
             case PageTypes.SPEZIAL:
                 final_representations += self.get_basic_representation(page, page_type)
