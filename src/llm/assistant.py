@@ -38,7 +38,6 @@ class KICampusAssistant:
         )
 
         response.content = self.output_formatter.parse(answer=response.content, source_documents=retrieved_chunks)
-
         return response
 
     @observe()
@@ -66,6 +65,8 @@ class KICampusAssistant:
             course_name="example_course_name",
             # module_name=module_name
         )
+
+        response.content = self.output_formatter.parse(answer=response.content, source_documents=retrieved_chunks)
 
         return response
 

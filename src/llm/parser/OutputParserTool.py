@@ -66,11 +66,11 @@ class OutputParserTool:
             try:
                 doc = source_documents[idx]
 
-                pattern = rf",?\s*\[doc{i}\]"
                 if doc.metadata.get("url") in answer:
-                    answer = re.sub(pattern, "", answer)
+                    answer = re.sub(rf"(, )?\[doc{i}\]", "", answer)
                 else:
-                    answer = re.sub(pattern, doc.metadata.get("url"), answer)
+                    answer = re.sub(rf"(, )?\[doc{i}\]", rf"\1({doc.metadata.get('url')})", answer)
+
                 real_doc_ids.append(i)
             except IndexError:
                 print(f"Could not find doc{i} in source documents")
