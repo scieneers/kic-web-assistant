@@ -173,7 +173,6 @@ class Drupal:
             case PageTypes.SPEZIAL:
                 final_representations += self.get_basic_representation(page, page_type)
                 final_representations += self.process_lecture_books(page)
-                pass
 
             case _:
                 description = ""

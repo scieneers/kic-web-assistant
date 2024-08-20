@@ -103,7 +103,13 @@ class Moodle:
         for course in courses:
             toc_str += f"Course ID: {course.id}, Course Name: {course.fullname}\n"
 
-        toc_doc = Document(text=toc_str)
+        metadata = {
+            "fullname": "Table of Contents",
+            "type": "toc",
+            "url": "https://ki-campus.org/overview/course",
+        }
+
+        toc_doc = Document(text=toc_str, metadata=metadata)
 
         return toc_doc
 

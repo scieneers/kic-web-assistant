@@ -144,4 +144,3 @@ class VectorDBQdrant:
 
 if __name__ == "__main__":
     test_connection = VectorDBQdrant(version="disk")  # For local testing only
-    print(test_connection.get_metadata("web_assistant"))

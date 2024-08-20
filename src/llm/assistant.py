@@ -2,6 +2,7 @@ from langfuse.decorators import observe
 from llama_index.core.llms import ChatMessage
 
 from src.llm.LLMs import Models
+from src.llm.parser.OutputParserTool import OutputParserTool
 from src.llm.retriever import KiCampusRetriever
 from src.llm.tools.contextualizer import Contextualizer
 from src.llm.tools.question_answerer import QuestionAnswerer
@@ -13,6 +14,7 @@ class KICampusAssistant:
 
         self.contextualizer = Contextualizer()
         self.question_answerer = QuestionAnswerer()
+        self.output_formatter = OutputParserTool()
 
     @observe()
     def limit_chat_history(self, chat_history: list[ChatMessage], limit: int) -> list[ChatMessage]:
@@ -34,6 +36,8 @@ class KICampusAssistant:
         response = self.question_answerer.answer_website_question(
             query=query, chat_history=limited_chat_history, sources=retrieved_chunks, model=model
         )
+
+        response.content = self.output_formatter.parse(answer=response.content, source_documents=retrieved_chunks)
 
         return response
 
