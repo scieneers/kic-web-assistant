@@ -45,7 +45,7 @@ class LLM:
                     callback_manager=Settings.callback_manager,
                 )
             case Models.MISTRAL8:
-                llm = MistralAI(api_key=env.AZURE_MISTRAL_KEY, endpoint=env.AZURE_MISTRAL_URL)
+                llm = MistralAI(api_key=env.AZURE_MISTRAL_KEY, endpoint=env.AZURE_MISTRAL_URL, model="mistral-large")
                 # GWDG instruct model for chat currently not working
                 # llm = OpenAILike(
                 #     model="mixtral-8x7b-instruct",
