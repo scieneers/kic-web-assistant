@@ -68,14 +68,14 @@ def convert_selected_index_to_id(course_or_module_index: int) -> dict:
 
     course_id = None
     course_name = None
-    module_id = None
-    module_name = None
     module_level = False
     i = -1
     flag_done = False
     for course in tree:
         if flag_done:
             break
+        module_id = None
+        module_name = None
         course_id = course.description
         course_name = course.label
         module_level = False
