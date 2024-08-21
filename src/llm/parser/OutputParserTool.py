@@ -1,7 +1,7 @@
 import re
 
+from llama_index.core.llms import ChatMessage
 from llama_index.core.schema import NodeWithScore
-from llama_index_client import ChatMessage
 
 
 class OutputParserTool:
