@@ -9,6 +9,7 @@ from llama_index.core.llms.function_calling import FunctionCallingLLM
 from llama_index.core.llms.llm import LLM as llama_llm
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from llama_index.llms.azure_openai import AzureOpenAI
+from llama_index.llms.mistralai import MistralAI
 from llama_index.llms.openai_like import OpenAILike
 
 from src.env import env
@@ -44,17 +45,19 @@ class LLM:
                     callback_manager=Settings.callback_manager,
                 )
             case Models.MISTRAL8:
-                llm = OpenAILike(
-                    model="mixtral-8x7b-instruct",
-                    is_chat_model=True,
-                    temperature=0,
-                    max_tokens=400,
-                    api_key=env.GWDG_API_KEY,
-                    api_base=env.GWDG_URL,
-                    api_version="v1",
-                    logprobs=None,
-                    callback_manager=Settings.callback_manager,
-                )
+                llm = MistralAI(api_key=env.AZURE_MISTRAL_KEY, endpoint=env.AZURE_MISTRAL_URL)
+                # GWDG instruct model for chat currently not working
+                # llm = OpenAILike(
+                #     model="mixtral-8x7b-instruct",
+                #     is_chat_model=True,
+                #     temperature=0,
+                #     max_tokens=400,
+                #     api_key=env.GWDG_API_KEY,
+                #     api_base=env.GWDG_URL,
+                #     api_version="v1",
+                #     logprobs=None,
+                #     callback_manager=Settings.callback_manager,
+                # )
             case Models.LLAMA3:
                 llm = OpenAILike(
                     model="meta-llama-3-70b-instruct",
