@@ -9,7 +9,7 @@ from src.vectordb.qdrant import VectorDBQdrant, models
 class KiCampusRetriever:
     def __init__(self):
         self.embedder = LLM().get_embedder()
-        self.vector_store = VectorDBQdrant("disk").as_llama_vector_store(collection_name="drupal_page_test")
+        self.vector_store = VectorDBQdrant("remote").as_llama_vector_store(collection_name="web_assistant")
         super().__init__()
 
     @observe()
