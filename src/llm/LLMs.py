@@ -8,8 +8,8 @@ from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 from llama_index.core.llms.llm import LLM as llama_llm
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.llms.azure_inference import AzureAICompletionsModel
 from llama_index.llms.azure_openai import AzureOpenAI
-from llama_index.llms.mistralai import MistralAI
 from llama_index.llms.openai_like import OpenAILike
 
 from src.env import env
@@ -45,7 +45,9 @@ class LLM:
                     callback_manager=Settings.callback_manager,
                 )
             case Models.MISTRAL8:
-                llm = MistralAI(api_key=env.AZURE_MISTRAL_KEY, endpoint=env.AZURE_MISTRAL_URL, model="mistral-large")
+                llm = AzureAICompletionsModel(
+                    credential=env.AZURE_MISTRAL_KEY, endpoint=env.AZURE_MISTRAL_URL, model_name="mistral-large"
+                )
                 # GWDG instruct model for chat currently not working
                 # llm = OpenAILike(
                 #     model="mixtral-8x7b-instruct",
