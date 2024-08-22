@@ -59,6 +59,9 @@ class Contextualizer:
     def contextualize(self, query: str, chat_history: list[ChatMessage], model: Models) -> str:
         """Contextualize a message based on the chat history, so that it can effectively used as input for RAG retrieval."""
 
+        if len(chat_history) == 0:
+            return query
+
         contextualized_question = self.llm.chat(
             query=query, chat_history=chat_history, model=model, system_prompt=CONDENSE_QUESTION_PROMPT
         )

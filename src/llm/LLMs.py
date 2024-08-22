@@ -92,8 +92,14 @@ class LLM:
         Settings.callback_manager = CallbackManager([langfuse_handler])
 
         llm = self.get_model(model)
-        chat_engine = SimpleChatEngine.from_defaults(llm=llm, system_prompt=system_prompt)
-        response = chat_engine.chat(message=query, chat_history=chat_history)
+        copy_chat_history = (
+            chat_history.copy()
+        )  # creating a copy of the history because the SimpleChatEngine modifies it
+        # Only way of automatic tracing Langfuse is to use such an Engine. Direct calling llama_index models is not traced.
+        chat_engine = SimpleChatEngine.from_defaults(
+            llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
+        )
+        response = chat_engine.chat(message=query)
         if type(response.response) is not str:
             raise ValueError(f"Response is not a string. Please check the LLM implementation. Response: {response}")
         return ChatMessage(content=response.response, role=MessageRole.ASSISTANT)
