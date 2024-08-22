@@ -45,4 +45,7 @@ COPY --from=build $VENV_PATH $VENV_PATH
 COPY --from=build --chown=appuser:appuser /home/appuser /home/appuser
 WORKDIR /home/appuser
 
+RUN mkdir nltk_data
+ENV NLTK_DATA=nltk_data
+RUN python -m nltk.downloader stopwords punkt punkt_tab
 CMD python -m streamlit run src/frontend/frontend.py

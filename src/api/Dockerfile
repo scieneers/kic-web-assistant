@@ -50,5 +50,9 @@ WORKDIR /home/appuser
 COPY --from=build $VENV_PATH $VENV_PATH
 COPY --from=build --chown=appuser:appuser /home/appuser /home/appuser
 
+RUN mkdir nltk_data
+ENV NLTK_DATA=nltk_data
+RUN python -m nltk.downloader stopwords punkt punkt_tab
 EXPOSE 80
+
 CMD ["gunicorn" , "-b", "0.0.0.0:80", "-c", "src/api/gunicorn.conf.py", "src.api.rest:app"]
