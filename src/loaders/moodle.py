@@ -93,16 +93,23 @@ class Moodle:
             h5p_activity_ids = self.get_h5p_module_ids(course.id)
             for topic in course.topics:
                 self.get_module_contents(topic, h5p_activity_ids)
+
         course_documents = [doc for course in courses for doc in course.to_document()]
-        course_documents += self.get_toc_document(courses)
-        return [course_documents]
+        course_documents.append(self.get_toc_document(courses))
+        return course_documents
 
     def get_toc_document(self, courses) -> Document:
         toc_str = "List of all available courses:\n"
         for course in courses:
             toc_str += f"Course ID: {course.id}, Course Name: {course.fullname}\n"
 
-        toc_doc = Document(text=toc_str)
+        metadata = {
+            "fullname": "Table of Contents",
+            "type": "toc",
+            "url": "https://ki-campus.org/overview/course",
+        }
+
+        toc_doc = Document(text=toc_str, metadata=metadata)
 
         return toc_doc
 

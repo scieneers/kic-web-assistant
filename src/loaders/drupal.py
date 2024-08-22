@@ -74,7 +74,11 @@ class Drupal:
             self.logger.debug(f"Processing {page_type.value[0]} number: {i+1}/{len(node)}")
 
             if page["attributes"]["status"]:
-                metadata = {"title": page["attributes"]["title"], "type": f"Drupal_{page_type.value[0]}"}
+                metadata = {
+                    "title": page["attributes"]["title"],
+                    "type": f"Drupal_{page_type.value[0]}",
+                    "url": f"https://ki-campus.org/node/{page['attributes']['drupal_internal__nid']}",
+                }
                 documents.append(
                     Document(
                         metadata=metadata,
@@ -164,12 +168,11 @@ class Drupal:
 
         match page_type:
             case PageTypes.PAGE | PageTypes.BLOGPOST:
-                self.get_basic_representation(page, page_type)
+                final_representations += self.get_basic_representation(page, page_type)
 
             case PageTypes.SPEZIAL:
                 final_representations += self.get_basic_representation(page, page_type)
                 final_representations += self.process_lecture_books(page)
-                pass
 
             case _:
                 description = ""

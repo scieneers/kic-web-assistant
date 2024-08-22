@@ -1,14 +1,9 @@
 from langfuse.decorators import observe
 from llama_index.core.schema import NodeWithScore
-from llama_index.core.vector_stores import (
-    FilterCondition,
-    MetadataFilter,
-    MetadataFilters,
-    VectorStoreQuery,
-)
+from llama_index.core.vector_stores import VectorStoreQuery
 
 from src.llm.LLMs import LLM
-from src.vectordb.qdrant import VectorDBQdrant
+from src.vectordb.qdrant import VectorDBQdrant, models
 
 
 class KiCampusRetriever:
@@ -21,15 +16,30 @@ class KiCampusRetriever:
     def retrieve(self, query: str, course_id: int | None = None, module_id: int | None = None) -> list[NodeWithScore]:
         embedding = self.embedder.get_query_embedding(query)
 
-        filters = MetadataFilters(filters=[], condition=FilterCondition.AND)
+        conditions = []
+
         if course_id is not None:
-            filters.filters.append(MetadataFilter(key="course_id", value=course_id))
+            conditions.append(
+                models.FieldCondition(
+                    key="course_id",
+                    match=models.MatchValue(value=course_id),
+                )
+            )
+
         if module_id is not None:
-            filters.filters.append(MetadataFilter(key="module_id", value=module_id))
+            conditions.append(
+                models.FieldCondition(
+                    key="module_id",
+                    match=models.MatchValue(value=module_id),
+                )
+            )
 
-        vector_store_query = VectorStoreQuery(query_embedding=embedding, similarity_top_k=12, filters=filters)
+        filter = models.Filter(must=conditions) if conditions else None
 
-        query_result = self.vector_store.query(vector_store_query)
+        vector_store_query = VectorStoreQuery(query_embedding=embedding, similarity_top_k=10)
+
+        query_result = self.vector_store.query(vector_store_query, qdrant_filters=filter)
+
         if query_result.nodes is None:
             return []
 
