@@ -1,5 +1,5 @@
 from langfuse.decorators import observe
-from llama_index.core.schema import NodeWithScore
+from llama_index.core.schema import NodeWithScore, TextNode
 from llama_index.core.vector_stores import VectorStoreQuery
 
 from src.llm.LLMs import LLM
@@ -13,10 +13,15 @@ class KiCampusRetriever:
         super().__init__()
 
     @observe()
-    def retrieve(self, query: str, course_id: int | None = None, module_id: int | None = None) -> list[NodeWithScore]:
+    def retrieve(self, query: str, course_id: int | None = None, module_id: int | None = None) -> list[TextNode]:
         embedding = self.embedder.get_query_embedding(query)
 
         conditions = []
+
+        # TODO filter for source, needs to be ingested in the vector store (Moodle, Moochup, Drupal...)
+        # if course_id is None and module_id is not None:
+        #     conditions.append(
+        #     )
 
         if course_id is not None:
             conditions.append(
@@ -43,15 +48,9 @@ class KiCampusRetriever:
         if query_result.nodes is None:
             return []
 
-        nodes_with_scores = []
-        for index, node in enumerate(query_result.nodes):
+        for node in query_result.nodes:
             # how node gets rendered as context for the llm
             # alternatively create a custom node post-processor and pass to query engine https://docs.llamaindex.ai/en/stable/module_guides/querying/node_postprocessors/root.html
             node.text_template = "{metadata_str}\nContent: {content}"
 
-            score: list[float] = None
-            if query_result.similarities is not None:
-                score = query_result.similarities[index]
-            nodes_with_scores.append(NodeWithScore(node=node, score=score))
-
-        return nodes_with_scores
+        return query_result.nodes

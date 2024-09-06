@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from langfuse import Langfuse
 from langfuse.decorators import langfuse_context, observe
@@ -16,6 +17,16 @@ from src.vectordb.qdrant import VectorDBQdrant
 app = FastAPI()
 # authentication with OAuth2
 api_key_hearder = APIKeyHeader(name="Api-Key")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://ki-campus.staging.piipe.de/",
+        "https://ki-campus.org/",
+        "https://moodle.ki-campus.org",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 async def api_key_auth(api_key: Annotated[str, Depends(api_key_hearder)]):
@@ -59,12 +70,6 @@ class RetrievalRequest(BaseModel):
                 detail="module_id is required when course_id is set.",
             )
         return self
-
-
-# @app.post("/api/retrieval", dependencies=[Depends(api_key_auth)])
-# def retrieval(retrieval_request: RetrievalRequest):
-#     """Returns the most similar documents from the Search Index."""
-#     pass
 
 
 class ChatRequest(BaseModel):

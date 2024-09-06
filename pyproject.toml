@@ -31,6 +31,7 @@ langfuse = "~2.43.1"
 youtube-transcript-api = "~0.6.2"
 pydantic = "~2.8.2"
 azure-keyvault-secrets = "~4.8.0"
+lingua-language-detector = "^2.0.2"
 
 [tool.poetry.group.api]
 optional = true

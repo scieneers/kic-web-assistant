@@ -19,7 +19,7 @@ tasks:
         {{ if eq .TARGET "linux" }}
           docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/app:latest -f src/frontend/Dockerfile .
         {{ else }}
-          docker build -t app:latest -f src/frontend/Dockerfile .
+          docker build -t {{ .REGISTRY }}/app:latest -f src/frontend/Dockerfile .
         {{ end }}
 
   build-api:
@@ -29,7 +29,7 @@ tasks:
         {{ if eq .TARGET "linux" }}
           docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/rest-api:latest -f src/api/Dockerfile .
         {{ else }}
-          docker build -t rest-api:latest -f src/api/Dockerfile .
+          docker build -t {{ .REGISTRY }}/rest-api:latest -f src/api/Dockerfile .
         {{ end }}
 
   build-embedder:
@@ -42,13 +42,21 @@ tasks:
           docker build -t embedder:latest -f src/embedder/Dockerfile .
         {{ end }}
 
-  push-images:
-    desc: Pushes the docker images. Make sure to only push amd64 images
+  push-latest-images:
+    desc: Pushes the docker images. Make sure to only push amd64 images,
     cmds:
-      - docker push {{ .REGISTRY }}/app:latest
-      - docker push {{ .REGISTRY }}/embedder:latest
+      - |
+        if [ -z "{{.CLI_ARGS}}" ]; then
+          echo "add version like this task XYZ -- 1.4.2"
+          exit 1
+        fi
+      - docker image tag {{ .REGISTRY }}/app:latest {{ .REGISTRY }}/app:{{.CLI_ARGS}}
+      - docker image tag {{ .REGISTRY }}/rest-api:latest {{ .REGISTRY }}/rest-api:{{.CLI_ARGS}}
+      - docker push {{ .REGISTRY }}/app:{{.CLI_ARGS}}
+      - docker push {{ .REGISTRY }}/rest-api:{{.CLI_ARGS}}
 
   az-login:
     desc: Login to azure using azure-cli
     cmds:
       - az login --tenant c6ff58bc-993e-4bdb-8d10-6013e2cd361f --scope https://graph.microsoft.com/.default
+      - az acr login --name kicwaacrdev.azurecr.io

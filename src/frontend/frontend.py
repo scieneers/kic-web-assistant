@@ -194,7 +194,7 @@ if "messages" not in st.session_state:
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        st.markdown(message["content"], unsafe_allow_html=True)
 
 
 # React to user input
@@ -218,7 +218,7 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
 
     response_content = json.loads(response.content)
     with st.chat_message("assistant"):
-        st.markdown(response_content["message"])
+        st.markdown(response_content["message"], unsafe_allow_html=True)
 
     st.session_state["trace_id"] = response_content["response_id"]
     st.session_state.messages.append({"role": MessageRole.ASSISTANT, "content": response_content["message"]})
