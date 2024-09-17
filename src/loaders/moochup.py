@@ -1,3 +1,5 @@
+from typing import Optional
+
 import requests
 from bs4 import BeautifulSoup
 from llama_index.core import Document
@@ -6,7 +8,7 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 class CourseAttributes(BaseModel):
     name: str
-    abstract: str
+    description: Optional[str]
     # TODO tell cornelia where apis differ
     languages: str | None = Field(
         alias=AliasChoices("inLanguage", "languages")
@@ -14,13 +16,13 @@ class CourseAttributes(BaseModel):
     url: str = Field(validation_alias=AliasChoices("url", "uniformResourceLocator"))
 
     # moochup does not always provide a language, learn.ki-campus.org does
-    @field_validator("abstract")
+    @field_validator("description")
     @classmethod
-    def remove_html_tags(cls, abstract: str) -> str:
-        if "<" not in abstract:
-            return abstract
+    def remove_html_tags(cls, description: str) -> str:
+        if "<" not in description:
+            return description
 
-        soup = BeautifulSoup(abstract, "html.parser")
+        soup = BeautifulSoup(description, "html.parser")
         return soup.get_text()
 
     @field_validator("languages", mode="before")
@@ -50,7 +52,7 @@ class CourseInfo(BaseModel):
         return type.lower()
 
     def to_document(self) -> Document:
-        text = f"Kursname: {self.attributes.name}\n Kursbeschreibung: {self.attributes.abstract}"
+        text = f"Kursname: {self.attributes.name}\n Kursbeschreibung: {self.attributes.description}"
         metadata = {"type": "courses", "url": self.attributes.url, "course_id": self.id}
         if self.attributes.languages:
             metadata["lang"] = (self.attributes.languages,)

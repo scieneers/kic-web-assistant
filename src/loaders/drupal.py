@@ -176,15 +176,25 @@ class Drupal:
 
             case _:
                 description = ""
-                if page["attributes"]["field_description"] is not None:
+                if page.get("relationships", {}).get("field_description") is not None:
                     description = BeautifulSoup(
                         page["attributes"]["field_description"]["value"], "html.parser"
                     ).getText()
                 paragraphs = self.get_page_paragraphs(page["id"], page_type)
 
+                type = ""
+                if page.get("attributes", {}).get("field_format") is not None:
+                    type = f'{page_type.value[1]} Type: {self.get_course_type(page["attributes"]["field_format"])}'
+
+                topics = ""
+                if page.get("relationships", {}).get("field_occupational_field", {}).get("data") is not None:
+                    topics = f"{page_type.value[1]} Topic(s): {self.get_course_topic(page['relationships']['field_occupational_field']['data'])}"
+
                 final_representations = f"""
                 {page_type.value[1]} Title: {page["attributes"]["title"]}
                 {page_type.value[1]} Description: {description}
+                {type}
+                {topics}
 
                 {paragraphs}
                 """
@@ -192,6 +202,37 @@ class Drupal:
         # Normalize parsed text (remove \xa0 from str)
         final_representations = unicodedata.normalize("NFKD", final_representations)
         return final_representations
+
+    def get_course_type(self, short_type: str):
+        match short_type:
+            case "mooc":
+                return "Online-Kurse & MOOCs"
+            case "blended":
+                return "Blended Learning"
+            case "micro":
+                return "Micro Content"
+            case "podcast":
+                return "Podcasts"
+            case "video":
+                return "Lernvideos"
+            case "paths":
+                return "Lernpfade"
+            case _:
+                raise Exception(f"Bad type: {short_type}")
+
+    def get_course_topic(self, topic_list: list):
+        topics_str = ""
+
+        for idx, topic in enumerate(topic_list):
+            topic_data = self.fetch_data(
+                f"https://ki-campus.org/jsonapi/taxonomy_term/occupational_field/{topic['id']}"
+            )
+            if (topic_data.get("data")) is not None:
+                if idx != 0:
+                    topics_str += ", "
+                topics_str += f"{topic_data['data']['attributes']['name']}"
+
+        return topics_str
 
     def get_basic_representation(self, page, page_type: PageTypes):
         final_representations = f"""
