@@ -55,7 +55,13 @@ class Fetch_Data:
         moodle_courses = Moodle().extract()
         self.logger.info("Finished loading data from Moodle API.")
         self.logger.info("Loading Drupal data from Drupal API...")
-        drupal_content = Drupal(base_url=env.DRUPAL_URL).extract()
+        drupal_content = Drupal(
+            base_url=env.DRUPAL_URL,
+            username=env.DRUPAL_USERNAME,
+            client_id=env.DRUPAL_CLIENT_ID,
+            client_secret=env.DRUPAL_CLIENT_SECRET,
+            grant_type=env.DRUPAL_GRANT_TYPE,
+        ).extract()
 
         all_docs = hpi_courses + moodle_moochup_courses + moodle_courses + drupal_content
 

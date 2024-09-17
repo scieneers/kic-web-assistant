@@ -18,10 +18,13 @@ class KiCampusRetriever:
 
         conditions = []
 
-        # TODO filter for source, needs to be ingested in the vector store (Moodle, Moochup, Drupal...)
-        # if course_id is None and module_id is not None:
-        #     conditions.append(
-        #     )
+        if course_id is None and module_id is None:
+            conditions.append(
+                models.FieldCondition(
+                    key="type",
+                    match=models.MatchText(text="Drupal_"),
+                )
+            )
 
         if course_id is not None:
             conditions.append(

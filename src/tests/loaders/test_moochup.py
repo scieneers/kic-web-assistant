@@ -14,8 +14,8 @@ from src.loaders.moochup import CourseAttributes, CourseInfo
     ],
 )
 def test_moochup_course_attributes(input: str, expected: str):
-    course_attributes = CourseAttributes(name="Test Title", abstract=input, languages=["de"])
-    assert course_attributes.abstract == expected
+    course_attributes = CourseAttributes(name="Test Title", description=input, languages=["de"])
+    assert course_attributes.description == expected
 
 
 def test_moochup_payload_creation():
