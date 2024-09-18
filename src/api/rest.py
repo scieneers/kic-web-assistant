@@ -20,8 +20,8 @@ api_key_hearder = APIKeyHeader(name="Api-Key")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://ki-campus.staging.piipe.de/",
-        "https://ki-campus.org/",
+        "https://ki-campus.staging.piipe.de",
+        "https://ki-campus.org",
         "https://moodle.ki-campus.org",
     ],
     allow_methods=["*"],
