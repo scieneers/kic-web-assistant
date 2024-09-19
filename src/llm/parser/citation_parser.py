@@ -62,15 +62,19 @@ class CitationParser:
         # we track doc ids which exist in case of hallucination
         real_doc_ids: list[int] = []
         fake_doc_ids: list[int] = []
+        seen_urls = set()
 
         for i in doc_ids:
             idx = i - 1
             try:
                 doc = source_documents[idx]
-                replacement_text = CITATION_TEXT.format(url=doc.metadata.get("url"), index=i)
-                answer = re.sub(rf"(, )?\[doc{i}\]", rf"\1{replacement_text}", answer)
-
-                real_doc_ids.append(i)
+                if doc.metadata.get("url") not in seen_urls:
+                    replacement_text = CITATION_TEXT.format(url=doc.metadata.get("url"), index=i)
+                    seen_urls.add(doc.metadata.get("url"))
+                    answer = re.sub(rf"(, )?\[doc{i}\]", rf"\1{replacement_text}", answer)
+                    real_doc_ids.append(i)
+                else:
+                    answer = answer.replace(f", [doc{i}]", "")
             except IndexError:
                 print(f"Could not find doc{i} in source documents")
                 fake_doc_ids.append(i)
