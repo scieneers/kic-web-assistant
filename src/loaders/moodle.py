@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import tempfile
+import unicodedata
 import zipfile
 
 from bs4 import BeautifulSoup
@@ -134,6 +135,12 @@ class Moodle:
             page_content_caller = APICaller(url=content.fileurl, params=self.download_params)
             soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
             links = soup.find_all("a")
+
+            if soup.text is not None:
+                module.text = soup.get_text("\n")
+                # Normalize parsed text (remove \xa0 from str)
+                module.text = unicodedata.normalize("NFKD", module.text)
+
             for p_link in links:
                 pattern = r"https://player\.vimeo\.com/video/\d+"
                 match = re.search(pattern, str(p_link))

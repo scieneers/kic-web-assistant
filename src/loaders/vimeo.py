@@ -32,9 +32,9 @@ class Vimeo:
 
             # Loop through the data to find the required indices
             for index, item in enumerate(response_json):
-                if item["language"] == "de":
+                if item["language"].startswith("de"):
                     de_index = index
-                elif item["language"] == "en":
+                elif item["language"].startswith("en"):
                     en_index = index
                 elif item["language"] == "de-x-autogen":
                     de_autogen_index = index

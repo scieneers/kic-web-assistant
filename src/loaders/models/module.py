@@ -23,6 +23,7 @@ class Module(BaseModel):
     name: str
     url: HttpUrl | None = None
     modname: str  # content type
+    text: str | None = None
     contents: list[DownloadableContent] | None = None
     videotime: Video | None = None
     transcripts: list[TextTrack] = []
@@ -41,7 +42,15 @@ class Module(BaseModel):
                 return None
 
     def to_document(self, course_id) -> Document:
-        text = "\n ".join([str(transcript) for transcript in self.transcripts])
+        text = ""
+        text_content = ""
+        text_transcripts = ""
+        if self.text is not None:
+            text_content += f"\nText: {self.text}"
+        if len(self.transcripts) > 0:
+            text_transcripts += "\nTranscript:\n".join([str(transcript) for transcript in self.transcripts])
+        text = f"""Module Name: {self.name}{text_content}{text_transcripts}"""
+
         metadata = {
             "course_id": course_id,
             "module_id": self.id,
