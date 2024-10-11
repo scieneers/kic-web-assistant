@@ -45,7 +45,7 @@ class Drupal:
 
     def get_oauth_token(self, base_url: str):
         response = requests.post(
-            f"{base_url}/oauth/token",
+            f"{base_url}/oauth2/token",
             data={
                 "client_id": env.DRUPAL_CLIENT_ID,
                 "client_secret": env.DRUPAL_CLIENT_SECRET,
