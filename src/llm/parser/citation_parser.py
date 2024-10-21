@@ -39,7 +39,7 @@ class CitationParser:
         if sorted_doc_ids == target_doc_ids:
             return answer
 
-        for current, target in zip(sorted_doc_ids, target_doc_ids):
+        for current, target in zip(doc_ids, target_doc_ids):
             answer = answer.replace(f"<sup>[{current}]</sup>", f"<sup>[{target}]</sup>")
 
         return answer
@@ -71,10 +71,10 @@ class CitationParser:
                 if doc.metadata.get("url") not in seen_urls:
                     replacement_text = CITATION_TEXT.format(url=doc.metadata.get("url"), index=i)
                     seen_urls.add(doc.metadata.get("url"))
-                    answer = re.sub(rf"(, )?\[doc{i}\]", rf"\1{replacement_text}", answer)
+                    answer = re.sub(rf"[, ]*\[doc{i}\]", rf"{replacement_text}", answer)
                     real_doc_ids.append(i)
                 else:
-                    answer = answer.replace(f", [doc{i}]", "")
+                    answer = re.sub(rf"[, ]*\[doc{i}\]", "", answer)
             except IndexError:
                 print(f"Could not find doc{i} in source documents")
                 fake_doc_ids.append(i)
