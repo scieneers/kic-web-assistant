@@ -1,7 +1,9 @@
 import time
 from io import StringIO
 from typing import Optional
+from xml.etree.ElementTree import ParseError
 
+from retry import retry
 from youtube_transcript_api import (
     NoTranscriptFound,
     TranscriptsDisabled,
@@ -14,6 +16,7 @@ from src.loaders.models.texttrack import TextTrack
 
 
 class Youtube:
+    @retry(ParseError, tries=3, delay=2)
     def get_transcript(self, video_id: str) -> Optional[TextTrack]:
         try:
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)

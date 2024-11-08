@@ -53,7 +53,7 @@ class CourseInfo(BaseModel):
 
     def to_document(self) -> Document:
         text = f"Kursname: {self.attributes.name}\n Kursbeschreibung: {self.attributes.description}"
-        metadata = {"type": "courses", "url": self.attributes.url, "course_id": self.id}
+        metadata = {"source": "Moochup", "type": "Kurs", "url": self.attributes.url, "course_id": self.id}
         if self.attributes.languages:
             metadata["lang"] = (self.attributes.languages,)
         return Document(text=text, metadata=metadata)

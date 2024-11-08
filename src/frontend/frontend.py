@@ -186,7 +186,7 @@ if "assistant" not in st.session_state or not st.session_state.assistant:
 
 
 with st.chat_message("assistant"):
-    st.write("Hallo 👋 Wie kann ich Ihnen helfen?")
+    st.write("Herzlich willkommen auf dem KI-Campus! Wie kann ich dir weiterhelfen?")
 
 # Initialize chat history & display chat messages from history on app rerun
 if "messages" not in st.session_state:

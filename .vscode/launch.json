@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python Debugger: Loader",
+            "name": "Loader",
             "type": "debugpy",
             "request": "launch",
             "program": "src/loaders/get_data.py",
@@ -49,5 +49,12 @@
             },
             "jinja": true
         },
+    ],
+    "compounds": [
+    {
+        "name": "FastAPI & Frontend",
+        "configurations": ["FastAPI", "Streamlit"],
+        "stopAll": true
+    }
     ]
 }

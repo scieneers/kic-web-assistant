@@ -1,5 +1,6 @@
 import logging
 import unicodedata
+from datetime import datetime
 from enum import Enum
 from typing import List
 
@@ -76,7 +77,9 @@ class Drupal:
             if page["attributes"]["status"]:
                 metadata = {
                     "title": page["attributes"]["title"],
-                    "type": f"Drupal_{page_type.value[0]}",
+                    "source": "Drupal",
+                    "type": f"{page_type.value[0]}",
+                    "date_created": datetime.fromisoformat(page["attributes"]["created"]).strftime("%Y-%m-%d"),
                     "url": f"https://ki-campus.org/node/{page['attributes']['drupal_internal__nid']}",
                 }
                 documents.append(

@@ -21,8 +21,8 @@ class KiCampusRetriever:
         if course_id is None and module_id is None:
             conditions.append(
                 models.FieldCondition(
-                    key="type",
-                    match=models.MatchText(text="Drupal_"),
+                    key="source",
+                    match=models.MatchText(text="Drupal"),
                 )
             )
 

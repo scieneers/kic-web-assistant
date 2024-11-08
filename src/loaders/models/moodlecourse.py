@@ -41,7 +41,8 @@ class MoodleCourse(BaseModel):
             "course_id": self.id,
             "shortname": self.shortname,
             "fullname": self.fullname,
-            "type": "course",
+            "type": "Kurs",
+            "source": "Moodle",
             "url": self.url,
         }
         if self.lang:

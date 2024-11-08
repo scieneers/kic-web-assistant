@@ -29,7 +29,7 @@ class LLM:
             deployment_name=env.AZURE_OPENAI_EMBEDDER_DEPLOYMENT,
             api_key=env.AZURE_OPENAI_API_KEY,
             azure_endpoint=env.AZURE_OPENAI_URL,
-            api_version="2023-07-01-preview",
+            api_version="2023-05-15",
         )
         return embedder
 

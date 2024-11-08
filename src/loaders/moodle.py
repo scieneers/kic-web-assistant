@@ -5,7 +5,7 @@ import tempfile
 import unicodedata
 import zipfile
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, ParserRejectedMarkup
 from llama_index.core import Document
 from pydantic import ValidationError
 
@@ -133,7 +133,10 @@ class Moodle:
             if content.type in ["gif?forcedownload=1", "png?forcedownload=1"]:
                 continue
             page_content_caller = APICaller(url=content.fileurl, params=self.download_params)
-            soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
+            try:
+                soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
+            except ParserRejectedMarkup:
+                continue
             links = soup.find_all("a")
 
             if soup.text is not None:
@@ -151,7 +154,11 @@ class Moodle:
                         vimeo = Vimeo()
                         texttrack = vimeo.get_transcript(videotime.video_id)
                     elif src.find("youtu") != -1:
-                        videotime = Video(id=0, vimeo_url=src)
+                        try:
+                            videotime = Video(id=0, vimeo_url=src)
+                        except ValidationError:
+                            self.logger.warning(f"Cannot parse video url: {src}")
+                            continue
                         if videotime.video_id is None:
                             texttrack = None
                         else:

@@ -43,6 +43,8 @@ class KICampusAssistant:
             language=user_language,
             sources=retrieved_chunks,
             model=model,
+            is_moodle=False,
+            course_id=None,
         )
 
         response.content = self.output_formatter.parse(answer=response.content, source_documents=retrieved_chunks)
@@ -74,6 +76,8 @@ class KICampusAssistant:
             language=user_language,
             sources=retrieved_chunks,
             model=model,
+            is_moodle=True,
+            course_id=course_id,
         )
 
         response.content = self.output_formatter.parse(answer=response.content, source_documents=retrieved_chunks)
