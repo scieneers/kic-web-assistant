@@ -1,0 +1,21 @@
+## python
+**/.venv
+**/__pycache__
+**/.pytest_cache
+
+## vector store
+**/qdrant_storage
+
+# Local environment variables and keys
+.env
+
+## Local dev
+outputs
+
+## IDE config
+.vscode
+
+## tmp
+tmp
+.DS_Store
+db

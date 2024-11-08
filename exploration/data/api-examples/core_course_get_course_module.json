@@ -1,0 +1,30 @@
+{
+    "cm": {
+        "id": 162,
+        "course": 16,
+        "module": 17,
+        "name": "Was ist Intelligenz?",
+        "modname": "page",
+        "instance": 49,
+        "section": 80,
+        "sectionnum": 1,
+        "groupmode": 0,
+        "groupingid": 0,
+        "completion": 2,
+        "idnumber": "",
+        "added": 1690447668,
+        "score": 0,
+        "indent": 0,
+        "visible": 1,
+        "visibleoncoursepage": 1,
+        "visibleold": 1,
+        "completiongradeitemnumber": null,
+        "completionpassgrade": 0,
+        "completionview": 1,
+        "completionexpected": 0,
+        "showdescription": 0,
+        "downloadcontent": 1,
+        "availability": null
+    },
+    "warnings": []
+}

@@ -1,0 +1,15 @@
+{
+    "python.testing.pytestArgs": [
+        "."
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+
+    "launches": {
+        "KIC-CoursesPipeline": "Python Debugger: KI Campus courses pipeline",
+    },
+
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingTypeStubs": "none"
+}
+}
