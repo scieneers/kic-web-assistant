@@ -11,6 +11,12 @@ from pydantic import ValidationError
 
 from src.env import env
 from src.loaders.APICaller import APICaller
+from src.loaders.failed_transcripts import (
+    FailedCourse,
+    FailedModule,
+    FailedTranscripts,
+    save_failed_transcripts_to_excel,
+)
 from src.loaders.models.coursetopic import CourseTopic
 from src.loaders.models.hp5activities import H5PActivities
 from src.loaders.models.module import ModuleTypes
@@ -87,16 +93,22 @@ class Moodle:
 
     def extract(self) -> list[Document]:
         """extracts all courses and their contents from moodle"""
+
+        failedTranscripts: FailedTranscripts = FailedTranscripts(courses=[])
+
         courses = self.get_courses()
         for i, course in enumerate(courses):
             self.logger.debug(f"Processing course id: {course.id}, course {i+1}/{len(courses)}")
             course.topics = self.get_course_contents(course.id)
             h5p_activity_ids = self.get_h5p_module_ids(course.id)
             for topic in course.topics:
-                self.get_module_contents(topic, h5p_activity_ids)
+                failed_modules = self.get_module_contents(topic, h5p_activity_ids)
+                if failed_modules:
+                    failedTranscripts.courses.append(FailedCourse(course=course, modules=failed_modules))
 
         course_documents = [doc for course in courses for doc in course.to_document()]
         course_documents.append(self.get_toc_document(courses))
+        save_failed_transcripts_to_excel(transcripts=failedTranscripts, file_name="FailedTranscripts.xlsx")
         return course_documents
 
     def get_toc_document(self, courses) -> Document:
@@ -115,20 +127,29 @@ class Moodle:
         return toc_doc
 
     def get_module_contents(self, topic, h5p_activities):
+        failed_modules: list[FailedModule] = []
+
         for module in topic.modules:
+            err_message = None
             if module.visible == 0:
                 continue
             match module.type:
                 case ModuleTypes.VIDEOTIME:
-                    self.extract_videotime(module)
+                    err_message = self.extract_videotime(module)
                 case ModuleTypes.PAGE:
-                    self.extract_page(module)
+                    err_message = self.extract_page(module)
                 case ModuleTypes.H5P:
                     for activity in h5p_activities:
                         if activity.coursemodule == module.id:
                             self.extract_h5p(module, activity)
+            if err_message:
+                failed_modules.append(FailedModule(modul=module, err_message=err_message))
+
+        return failed_modules
 
     def extract_page(self, module):
+        err_message = None
+
         for content in module.contents:
             if content.type in ["gif?forcedownload=1", "png?forcedownload=1"]:
                 continue
@@ -152,7 +173,7 @@ class Moodle:
                     if src.find("vimeo") != -1:
                         videotime = Video(id=0, vimeo_url=src)
                         vimeo = Vimeo()
-                        texttrack = vimeo.get_transcript(videotime.video_id)
+                        texttrack, err_message = vimeo.get_transcript(videotime.video_id)
                     elif src.find("youtu") != -1:
                         try:
                             videotime = Video(id=0, vimeo_url=src)
@@ -160,16 +181,20 @@ class Moodle:
                             self.logger.warning(f"Cannot parse video url: {src}")
                             continue
                         if videotime.video_id is None:
+                            # Link refers not to a specific video, but to a channel overview page
                             texttrack = None
                         else:
                             youtube = Youtube()
-                            texttrack = youtube.get_transcript(videotime.video_id)
+                            texttrack, err_message = youtube.get_transcript(videotime.video_id)
                     else:
                         texttrack = None
                     module.transcripts.append(texttrack)
+        return err_message if err_message is not None else None
 
     def extract_videotime(self, module):  # TODO: rename method
         videotime = Video(**self.get_videotime_content(module.id))
+
+        err_message = None
 
         if videotime.video_id is None:
             return
@@ -177,15 +202,17 @@ class Moodle:
         match videotime.type:
             case VideoPlatforms.VIMEO:
                 vimeo = Vimeo()
-                texttrack = vimeo.get_transcript(videotime.video_id)
+                texttrack, err_message = vimeo.get_transcript(videotime.video_id)
                 module.transcripts.append(texttrack)
             case VideoPlatforms.YOUTUBE:
                 youtube = Youtube()
-                texttrack = youtube.get_transcript(videotime.video_id)
+                texttrack, err_message = youtube.get_transcript(videotime.video_id)
                 module.transcripts.append(texttrack)
             case VideoPlatforms.SELF_HOSTED:
                 # found no subtitles in self-hosted videos, if this ever changes add code here
                 pass
+
+        return err_message if err_message is not None else None
 
     # A H5P Module is a zipped bundle of js, css and a content.json, describing the content.
     # If a video is wrapped in a H5P Module we are only interested in the content.json.
@@ -193,6 +220,8 @@ class Moodle:
     # the link to the transcript of that video. Then we download that transcript and add it to the
     # module.transcripts list.
     def extract_h5p(self, module, activity):
+        err_message = None
+
         h5pfile_call = APICaller(url=activity.fileurl, params=self.download_params)
         with tempfile.TemporaryDirectory() as tmp_dir:
             local_filename = h5pfile_call.getFile(activity.filename, tmp_dir)
@@ -206,6 +235,7 @@ class Moodle:
                 try:
                     video = Video(id=0, vimeo_url=videourl)
                 except ValidationError:
+                    # No link to external Video-Service
                     pass
                 vimeo = Vimeo()
 
@@ -217,11 +247,15 @@ class Moodle:
                         zip_ref.extract(fallback_transcript_file, tmp_dir)
                     fallback_transcript_path = f"{tmp_dir}/{fallback_transcript_file}"
                     if video:
-                        texttrack = vimeo.get_transcript(video.video_id, fallback_transcript=fallback_transcript_path)
+                        texttrack, err_message = vimeo.get_transcript(
+                            video.video_id, fallback_transcript=fallback_transcript_path
+                        )
                 except KeyError:
                     fallback_transcript_path = None
+                    err_message = "Kein Transcript auf Video _und_ in H5P-Datei gefunden"
 
                 module.transcripts.append(texttrack)
+        return err_message if err_message is not None else None
 
 
 if __name__ == "__main__":

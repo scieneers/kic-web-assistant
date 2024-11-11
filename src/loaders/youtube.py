@@ -1,6 +1,6 @@
 import time
 from io import StringIO
-from typing import Optional
+from typing import Optional, Tuple
 from xml.etree.ElementTree import ParseError
 
 from retry import retry
@@ -17,7 +17,9 @@ from src.loaders.models.texttrack import TextTrack
 
 class Youtube:
     @retry(ParseError, tries=3, delay=2)
-    def get_transcript(self, video_id: str) -> Optional[TextTrack]:
+    def get_transcript(self, video_id: str) -> Tuple[Optional[TextTrack], str]:
+        err_message = None
+
         try:
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             transcript = transcript_list.find_manually_created_transcript(["de-DE", "de", "en"])
@@ -27,7 +29,8 @@ class Youtube:
         except (NoTranscriptFound, TranscriptsDisabled):
             # No transcript found, probably because the transcript is not available in the given language
             # or because the video is not available in the given language
-            return None
+            err_message = "Transcript liegt nicht (in Deutsch oder Englisch) vor"
+            return None, err_message
         formatter = WebVTTFormatter()
         transcript = convert_vtt_to_text(StringIO(formatter.format_transcript(transcript_json)))
         texttrack = TextTrack(
@@ -37,4 +40,4 @@ class Youtube:
             link=None,
             transcript=transcript,
         )
-        return texttrack
+        return texttrack, err_message
