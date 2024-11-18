@@ -15,7 +15,10 @@ Answer the student's query based on the provided sources. \
 Use at most 2 of the provided sources to answer the question. \
 Do not make up any information. Do not use any other external information. \
 Your rationale MUST be completely backed up by the provided sources. \
-
+Consider only sources that meet these criteria:
+The source must be the central focus and primary subject of the question. \
+All other references to sources are relevant only in relation to this source. \
+The information and events provided by the source must be critical to answering the question.
 Prioritize the sources in the following order:
 1. Type: Kurs
 2. Type: Blogpost
