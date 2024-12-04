@@ -19,3 +19,6 @@ outputs
 tmp
 .DS_Store
 db
+
+## Failed Transcripts
+FailedTranscripts.xlsx
