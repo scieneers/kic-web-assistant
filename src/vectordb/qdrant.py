@@ -29,8 +29,15 @@ class VectorDBQdrant:
                     "docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1"
                 )
                 raise e
-        elif version == "remote":
-            self.client = QdrantClient(url=env.QDRANT_URL, port=443, https=True, timeout=30, api_key=env.QDRANT_API_KEY)
+        elif version == "dev_remote":
+            self.client = QdrantClient(
+                url=env.DEV_QDRANT_URL, port=443, https=True, timeout=30, api_key=env.DEV_QDRANT_API_KEY
+            )
+            _ = self.client.get_collections()
+        elif version == "prod_remote":
+            self.client = QdrantClient(
+                url=env.PROD_QDRANT_URL, port=443, https=True, timeout=30, api_key=env.PROD_QDRANT_API_KEY
+            )
             _ = self.client.get_collections()
         else:
             raise ValueError("Version must be either 'memory' or 'disk' or 'remote'")
