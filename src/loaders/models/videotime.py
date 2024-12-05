@@ -1,6 +1,7 @@
 import logging
 import re
 from enum import StrEnum
+from typing import Union
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -13,6 +14,7 @@ class VideoPlatforms(StrEnum):
     VIMEO = "vimeo"
     YOUTUBE = "youtube"
     SELF_HOSTED = "ki-campus"
+    UNKNOWN = "unknown"
 
 
 class Video(BaseModel):
@@ -45,11 +47,12 @@ class Video(BaseModel):
             case "ki-campus-test.fernuni-hagen.de" | "ki-campus.moodle.staging.fernuni-hagen.de" | "moodle.ki-campus.org":
                 return VideoPlatforms.SELF_HOSTED
             case _:
-                raise NotImplementedError("Unknown VideoPlatform, implement me")
+                logger.warning(f"Unknown Video Host (implement?): {self.video_url.host}")
+                return VideoPlatforms.UNKNOWN
 
     @computed_field  # type: ignore[misc]
     @property
-    def video_id(self) -> str:
+    def video_id(self) -> Union[str, None]:
         match self.type:
             case VideoPlatforms.VIMEO:
                 vimeo_video_id_pattern = r"\d+"
@@ -65,3 +68,5 @@ class Video(BaseModel):
                     return None
             case VideoPlatforms.SELF_HOSTED:
                 return ""
+            case VideoPlatforms.UNKNOWN:
+                return None
