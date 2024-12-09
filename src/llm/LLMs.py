@@ -101,6 +101,7 @@ class LLM:
         chat_engine = SimpleChatEngine.from_defaults(
             llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
         )
+
         response = chat_engine.chat(message=query)
         if type(response.response) is not str:
             raise ValueError(f"Response is not a string. Please check the LLM implementation. Response: {response}")

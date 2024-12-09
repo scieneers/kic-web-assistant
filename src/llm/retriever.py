@@ -44,7 +44,7 @@ class KiCampusRetriever:
 
         filter = models.Filter(must=conditions) if conditions else None
 
-        vector_store_query = VectorStoreQuery(query_embedding=embedding, similarity_top_k=5)
+        vector_store_query = VectorStoreQuery(query_embedding=embedding, similarity_top_k=10)
 
         query_result = self.vector_store.query(vector_store_query, qdrant_filters=filter)
 

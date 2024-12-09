@@ -1,3 +1,5 @@
+import sys
+
 from langfuse.decorators import observe
 from llama_index.core.llms import ChatMessage
 from llama_index.core.schema import TextNode
@@ -127,13 +129,20 @@ to answer the question. Refer to the course itself for additional assistance, in
 """
 
 
-def format_sources(sources: list[TextNode]) -> str:
-    sources_text = "\n".join(
-        [
-            USER_QUERY_WITH_SOURCES_PROMPT.format(index=i + 1, content=source.get_text(), metadata=source.metadata)
-            for i, source in enumerate(sources)
-        ]
-    )
+#
+def format_sources(sources: list[TextNode], max_length: int = 8000) -> str:
+    sources_text = ""
+    for i, source in enumerate(sources):
+        source_entry = USER_QUERY_WITH_SOURCES_PROMPT.format(
+            index=i + 1, content=source.get_text(), metadata=source.metadata
+        )
+        # max_length must not exceed 8k for non-GPT models, otherwise the output will be garbled
+        if len(sources_text) + len(source_entry) > max_length:
+            break
+        sources_text += source_entry + "\n"
+
+    sources_text = sources_text.strip()
+
     return "<SOURCES>:\n" + sources_text
 
 
@@ -158,12 +167,15 @@ class QuestionAnswerer:
         else:
             answer_not_found_prompt = ANSWER_NOT_FOUND_PROMPT_DRUPAL
 
-        system_prompt = SYSTEM_PROMPT.format(language=language, answer_not_found_prompt=answer_not_found_prompt)
         if model != Models.GPT4:
             system_prompt = SHORT_SYSTEM_PROMPT.format(
                 language=language, answer_not_found_prompt=answer_not_found_prompt
             )
-        formatted_sources = format_sources(sources)
+            formatted_sources = format_sources(sources, max_length=8000)
+        else:
+            system_prompt = SYSTEM_PROMPT.format(language=language, answer_not_found_prompt=answer_not_found_prompt)
+            formatted_sources = format_sources(sources, max_length=sys.maxsize)
+
         prompted_user_query = f"<QUERY>:\n {query}\n---\n\n{formatted_sources}"
 
         response = self.llm.chat(
