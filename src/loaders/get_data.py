@@ -1,4 +1,5 @@
 import logging
+import azure.functions as func
 
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
@@ -83,4 +84,11 @@ class Fetch_Data:
 
 
 if __name__ == "__main__":
+    Fetch_Data().extract()
+
+app = func.FunctionApp()
+
+@app.timer_trigger(schedule="0 4 * * 3", run_on_startup=False,
+              use_monitor=False) 
+def timer_trigger() -> None:
     Fetch_Data().extract()
