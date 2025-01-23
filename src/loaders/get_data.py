@@ -2,7 +2,6 @@ import logging
 from datetime import datetime
 from typing import List
 
-import azure.functions as func
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from qdrant_client.http import models
