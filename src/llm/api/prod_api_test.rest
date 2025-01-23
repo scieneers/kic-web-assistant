@@ -1,0 +1,13 @@
+POST https://kic-restapi-prod.azurewebsites.net/api/chat
+Content-Type: application/json
+Api-Key: API_KEY
+
+{
+  "messages": [
+    {
+      "content": "Wie kann ich mein Passwort zurücksetzen?",
+      "role": "user"
+    }
+  ],
+  "model": "Llama3"
+}
