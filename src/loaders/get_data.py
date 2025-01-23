@@ -1,6 +1,6 @@
 import logging
-import azure.functions as func
 
+import azure.functions as func
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from qdrant_client import models
@@ -88,7 +88,7 @@ if __name__ == "__main__":
 
 app = func.FunctionApp()
 
-@app.timer_trigger(schedule="0 4 * * 3", run_on_startup=False,
-              use_monitor=False) 
+
+@app.timer_trigger(schedule="0 0 4 * * 3", run_on_startup=False, use_monitor=False)
 def timer_trigger() -> None:
     Fetch_Data().extract()
