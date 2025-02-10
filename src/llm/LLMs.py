@@ -1,3 +1,4 @@
+import threading
 from enum import Enum
 
 from langfuse.decorators import langfuse_context, observe
@@ -11,6 +12,7 @@ from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from llama_index.llms.azure_inference import AzureAICompletionsModel
 from llama_index.llms.azure_openai import AzureOpenAI
 from llama_index.llms.openai_like import OpenAILike
+from openai import APIStatusError
 
 from src.env import env
 
@@ -23,6 +25,9 @@ class Models(str, Enum):
 
 
 class LLM:
+    def __init__(self):
+        self.gwdg_unavailable = False
+
     def get_embedder(self) -> AzureOpenAIEmbedding:
         embedder = AzureOpenAIEmbedding(
             model=env.AZURE_OPENAI_EMBEDDER_MODEL,
@@ -102,7 +107,38 @@ class LLM:
             llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
         )
 
-        response = chat_engine.chat(message=query)
+        result = [None]  # Use a list to hold the result (mutable object to modify inside threads)
+
+        def target():
+            try:
+                result.append(chat_engine.chat(message=query))  # Execute the chat function
+            except Exception as e:
+                result.append(e)  # If error, store the exception in the result
+
+        thread = threading.Thread(target=target)
+        thread.start()
+        thread.join(0.001)
+
+        if thread.is_alive():
+            self.gwdg_unavailable = True
+            llm = self.get_model(Models.GPT4)
+            chat_engine = SimpleChatEngine.from_defaults(
+                llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
+            )
+            response = chat_engine.chat(message=query)
+        else:
+            response = result[-1]
+
+        if isinstance(result[-1], Exception):
+            self.gwdg_unavailable = True
+            llm = self.get_model(Models.GPT4)
+            chat_engine = SimpleChatEngine.from_defaults(
+                llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
+            )
+            response = chat_engine.chat(message=query)
+        else:
+            response = result[-1]
+
         if type(response.response) is not str:
             raise ValueError(f"Response is not a string. Please check the LLM implementation. Response: {response}")
         return ChatMessage(content=response.response, role=MessageRole.ASSISTANT)
