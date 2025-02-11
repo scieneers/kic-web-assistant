@@ -1,42 +1,22 @@
-#  ╭──────────────────────────────────────────────────────────╮
-#  │                        Base - Stage                      │
-#  ╰──────────────────────────────────────────────────────────╯
-FROM python:3.11-slim as base
+# To enable ssh & remote debugging on app service change the base image to the one below
+# FROM mcr.microsoft.com/azure-functions/python:4-python3.11-appservice
+FROM mcr.microsoft.com/azure-functions/python:4-python3.11
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    POETRY_HOME="/opt/poetry" \
-    POETRY_VIRTUALENVS_IN_PROJECT=true \
+ENV AzureWebJobsScriptRoot=/home/site/wwwroot \
+    AzureFunctionsJobHost__Logging__Console__IsEnabled=true \
     POETRY_NO_INTERACTION=1 \
-    PYSETUP_PATH="/opt/pysetup" \
-    VENV_PATH="/opt/pysetup/.venv"
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_CACHE_DIR='/var/cache/pypoetry' \
+    POETRY_HOME='/usr/local' \
+    POETRY_VERSION=1.7.1 \
+    PYTHONPATH="$PYTHONPATH:/home/site/wwwroot:/home/site"
 
-ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
+WORKDIR /home/site/wwwroot
 
-RUN groupadd --gid 1000 appuser \
-    && useradd --uid 1000 --gid 1000 -ms /bin/bash appuser
+RUN curl -sSL https://install.python-poetry.org | python3 -
 
-#  ╭──────────────────────────────────────────────────────────╮
-#  │                       Build - Stage                      │
-#  ╰──────────────────────────────────────────────────────────╯
-FROM base as build
-
-RUN apt-get update && apt-get install -y \
-    build-essential && \
-    pip install 'poetry==1.7.1'
-
-WORKDIR $PYSETUP_PATH
 COPY poetry.lock pyproject.toml ./
-RUN poetry install --with frontend,api --no-interaction --no-ansi
+RUN poetry config virtualenvs.create false && poetry install --with azfunction --no-interaction --no-ansi
 
-USER appuser
-WORKDIR /home/appuser
-COPY --chown=appuser:appuser . ./
-
-#  ╭──────────────────────────────────────────────────────────╮
-#  │                     Runtime - Stage                      │
-#  ╰──────────────────────────────────────────────────────────╯
-FROM base as runtime
-
-USER appuser
-WORKDIR /home/appuser
+COPY . /home/site
+COPY src/loaders/. /home/site/wwwroot

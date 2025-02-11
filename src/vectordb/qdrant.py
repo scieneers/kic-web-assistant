@@ -43,7 +43,7 @@ class VectorDBQdrant:
             raise ValueError("Version must be either 'memory' or 'disk' or 'remote'")
 
     def as_llama_vector_store(self, collection_name) -> QdrantVectorStore:
-        return QdrantVectorStore(client=self.client, collection_name=collection_name)
+        return QdrantVectorStore(client=self.client, collection_name=collection_name, max_retries=10)
 
     def create_collection(self, collection_name, vector_size) -> None:
         try:

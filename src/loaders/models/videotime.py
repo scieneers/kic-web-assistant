@@ -5,7 +5,14 @@ from typing import Union
 from urllib.parse import parse_qs, urlparse
 
 import requests
-from pydantic import BaseModel, Field, HttpUrl, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    ValidationError,
+    computed_field,
+    model_validator,
+)
 
 logger = logging.getLogger("loader")
 
@@ -23,7 +30,7 @@ class Video(BaseModel):
 
     @model_validator(mode="after")
     def validate_video_url(self):
-        if self.video_url.host == "www.google.com":
+        if self.video_url.host == "www.google.com" or self.video_url.host == "learn.ki-campus.org":
             parsed_url = urlparse(str(self.video_url))
             query_params = parse_qs(parsed_url.query)
             self.video_url = HttpUrl(query_params.get("url", [None])[0])
@@ -35,6 +42,7 @@ class Video(BaseModel):
                 self.video_url = HttpUrl(response.url)
         except requests.exceptions.RequestException as e:
             logger.exception(f"An error occurred: {e}")
+            raise ValueError()
 
     @computed_field  # type: ignore[misc]
     @property

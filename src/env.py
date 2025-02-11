@@ -45,8 +45,11 @@ class EnvHelper(BaseModel):
     DRUPAL_PASSWORD: str = "UNSET"
     DRUPAL_GRANT_TYPE: str = "password"
 
-    QDRANT_API_KEY: str = "UNSET"
-    QDRANT_URL: str = "UNSET"
+    DEV_QDRANT_API_KEY: str = "UNSET"
+    DEV_QDRANT_URL: str = "UNSET"
+
+    PROD_QDRANT_API_KEY: str = "UNSET"
+    PROD_QDRANT_URL: str = "UNSET"
 
     DATA_SOURCE_MOODLE_URL: str = "UNSET"
     DATA_SOURCE_MOODLE_TOKEN: str = "UNSET"

@@ -9,7 +9,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "src/loaders/get_data.py",
-            "console": "integratedTerminal",
+            "console": "integratedTerminal"
         },
         {
             "name": "Python: Current File",
@@ -18,7 +18,7 @@
             "program": "${file}",
             "cwd": "${fileDirname}",
             "console": "integratedTerminal",
-            "justMyCode": false,
+            "justMyCode": false
         },
         {
             "name": "Streamlit",
@@ -30,7 +30,7 @@
                 "src/frontend/frontend.py"
             ],
             "console": "integratedTerminal",
-            "justMyCode": true,
+            "justMyCode": true
         },
         {
             "name": "FastAPI",
@@ -45,10 +45,20 @@
             "cwd": "${workspaceFolder}/src",
             "python": "${workspaceFolder}/.venv/bin/python",
             "env": {
-                "DEBUG_LANGCHAIN": "True",
+                "DEBUG_LANGCHAIN": "True"
             },
             "jinja": true
         },
+        {
+            "name": "Attach to Python Functions",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 9091
+            },
+            "preLaunchTask": "func: host start"
+        }
     ],
     "compounds": [
     {
