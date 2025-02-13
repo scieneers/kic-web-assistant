@@ -15,7 +15,7 @@ sys.path.append(parent)
 
 
 class VectorDBQdrant:
-    def __init__(self, version: str = "remote"):
+    def __init__(self, version: str = "prod_remote"):
         self.version = version
         if version == "memory":
             self.client = QdrantClient(":memory:")

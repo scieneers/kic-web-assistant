@@ -23,7 +23,7 @@ def instantiate_assistant() -> TestClient:
 # selection is done, we remove the prefix.
 @st.cache_resource
 def create_courses_modules_tree() -> list:
-    course_records, module_records = VectorDBQdrant("remote").get_course_module_records("web_assistant")
+    course_records, module_records = VectorDBQdrant("prod_remote").get_course_module_records("web_assistant")
     tree_dict = {}
 
     # Sets to track unique course_ids and module_ids
