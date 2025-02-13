@@ -1,3 +1,5 @@
+import datetime
+import threading
 from enum import Enum
 
 from langfuse.decorators import langfuse_context, observe
@@ -14,6 +16,9 @@ from llama_index.llms.openai_like import OpenAILike
 
 from src.env import env
 
+TIME_TO_WAIT_FOR_GWDG = 7  # in seconds
+TIME_TO_RESET_UNAVAILABLE_STATUS = 60 * 5  # in seconds
+
 
 class Models(str, Enum):
     GPT4 = "GPT-4"
@@ -23,6 +28,9 @@ class Models(str, Enum):
 
 
 class LLM:
+    gwdg_unavailable = False
+    gwdg_unavailable_since = None
+
     def get_embedder(self) -> AzureOpenAIEmbedding:
         embedder = AzureOpenAIEmbedding(
             model=env.AZURE_OPENAI_EMBEDDER_MODEL,
@@ -62,7 +70,7 @@ class LLM:
                 # )
             case Models.LLAMA3:
                 llm = OpenAILike(
-                    model="meta-llama-3-70b-instruct",
+                    model="llama-3.3-70b-instruct",
                     is_chat_model=True,
                     temperature=0,
                     max_tokens=400,
@@ -93,6 +101,17 @@ class LLM:
         langfuse_handler = langfuse_context.get_current_llama_index_handler()
         Settings.callback_manager = CallbackManager([langfuse_handler])
 
+        if LLM.gwdg_unavailable and LLM.gwdg_unavailable_since:
+            if datetime.datetime.now() - LLM.gwdg_unavailable_since > datetime.timedelta(
+                seconds=TIME_TO_RESET_UNAVAILABLE_STATUS
+            ):
+                LLM.gwdg_unavailable = False
+                LLM.gwdg_unavailable_since = None
+
+        # If GWDG is unavailable, use GPT-4 instead
+        if LLM.gwdg_unavailable:
+            model = Models.GPT4
+
         llm = self.get_model(model)
         copy_chat_history = (
             chat_history.copy()
@@ -102,7 +121,39 @@ class LLM:
             llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
         )
 
-        response = chat_engine.chat(message=query)
+        result = [None]  # Use a list to hold the result (mutable object to modify inside threads)
+
+        def target():
+            try:
+                result.append(chat_engine.chat(message=query))  # Execute the chat function
+            except Exception as e:
+                result.append(e)  # If error, store the exception in the result
+
+        thread = threading.Thread(target=target)
+        thread.start()
+        thread.join(timeout=TIME_TO_WAIT_FOR_GWDG)
+
+        if thread.is_alive() or isinstance(result[-1], Exception):
+            LLM.gwdg_unavailable = True
+            LLM.gwdg_unavailable_since = datetime.datetime.now()
+            llm = self.get_model(Models.GPT4)
+            chat_engine = SimpleChatEngine.from_defaults(
+                llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
+            )
+            response = chat_engine.chat(message=query)
+        else:
+            response = result[-1]
+
+        if isinstance(result[-1], Exception):
+            self.gwdg_unavailable = True
+            llm = self.get_model(Models.GPT4)
+            chat_engine = SimpleChatEngine.from_defaults(
+                llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
+            )
+            response = chat_engine.chat(message=query)
+        else:
+            response = result[-1]
+
         if type(response.response) is not str:
             raise ValueError(f"Response is not a string. Please check the LLM implementation. Response: {response}")
         return ChatMessage(content=response.response, role=MessageRole.ASSISTANT)
@@ -114,7 +165,7 @@ if __name__ == "__main__":
     response = llm.chat(
         query="Hello, this is a test. What model are you using?",
         chat_history=[],
-        model=Models.GPT4,
+        model=Models.LLAMA3,
         system_prompt="You are an assistant. Do what you do best.",
     )
 

@@ -172,6 +172,9 @@ class Moodle:
                 if src:
                     if src.find("vimeo") != -1:
                         videotime = Video(id=0, vimeo_url=src)
+                        if videotime.video_id is None:
+                            self.logger.warning(f"Cannot parse video url: {src}")
+                            continue
                         vimeo = Vimeo()
                         texttrack, err_message = vimeo.get_transcript(videotime.video_id)
                     elif src.find("youtu") != -1:

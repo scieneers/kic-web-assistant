@@ -82,6 +82,10 @@ class Drupal:
                     "date_created": datetime.fromisoformat(page["attributes"]["created"]).strftime("%Y-%m-%d"),
                     "url": f"https://ki-campus.org/node/{page['attributes']['drupal_internal__nid']}",
                 }
+
+                if page.get("attributes", {}).get("field_moodle_course_id") is not None:
+                    metadata["course_id"] = page["attributes"]["field_moodle_course_id"]
+
                 documents.append(
                     Document(
                         metadata=metadata,
@@ -189,6 +193,18 @@ class Drupal:
                 if page.get("attributes", {}).get("field_format") is not None:
                     type = f'{page_type.value[1]} Type: {self.get_course_type(page["attributes"]["field_format"])}'
 
+                length = ""
+                if page.get("attributes", {}).get("field_umfang") is not None:
+                    length = f'{page_type.value[1]} Length: {page["attributes"]["field_umfang"]}'
+
+                difficulty = ""
+                if page.get("attributes", {}).get("field_level") is not None:
+                    difficulty = f'{page_type.value[1]} Difficulty: {page["attributes"]["field_level"]}'
+
+                language = ""
+                if page.get("attributes", {}).get("field_course_language") is not None:
+                    language = f'{page_type.value[1]} language code: {page["attributes"]["field_course_language"]}'
+
                 topics = ""
                 if page.get("relationships", {}).get("field_occupational_field", {}).get("data") is not None:
                     topics = f"{page_type.value[1]} Topic(s): {self.get_course_topic(page['relationships']['field_occupational_field']['data'])}"
@@ -197,6 +213,9 @@ class Drupal:
                 {page_type.value[1]} Title: {page["attributes"]["title"]}
                 {page_type.value[1]} Description: {description}
                 {type}
+                {length}
+                {difficulty}
+                {language}
                 {topics}
 
                 {paragraphs}

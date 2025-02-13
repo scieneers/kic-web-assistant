@@ -42,9 +42,10 @@ fastapi = "~0.112.0"
 uvicorn = {extras = ["standard"], version = "~0.24.0.post1"}
 gunicorn = "~22.0.0"
 
-[tool.poetry.group.embedder]
+[tool.poetry.group.azfunction]
 optional = true
-[tool.poetry.group.embedder.dependencies]
+[tool.poetry.group.azfunction.dependencies]
+azure-functions = "^1.21.3"
 requests = "~2.31.0"
 beautifulsoup4 = "~4.12.2"
 

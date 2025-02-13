@@ -12,9 +12,6 @@
 ## Local dev
 outputs
 
-## IDE config
-.vscode
-
 ## tmp
 tmp
 .DS_Store
