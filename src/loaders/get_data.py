@@ -65,9 +65,6 @@ class Fetch_Data:
                         collection_name=DEFAULT_COLLECTION, snapshot_name=snapshot.name
                     )
 
-        # self.logger.info("Loading HPI data from Moochup API...")
-        # hpi_courses = Moochup(env.DATA_SOURCE_MOOCHUP_HPI_URL).get_course_documents()
-        # self.logger.info("Finished loading HPI data from Moochup API.")
         self.logger.info("Loading Moodle data from Moochup API...")
         moodle_moochup_courses = Moochup(env.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
         self.logger.info("Finished loading data from Moochup API.")

@@ -29,9 +29,10 @@ class VectorDBQdrant:
                     "docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1"
                 )
                 raise e
+        # Longer timeout for dev, because container app is scaled down to 0 instances
         elif version == "dev_remote":
             self.client = QdrantClient(
-                url=env.DEV_QDRANT_URL, port=443, https=True, timeout=30, api_key=env.DEV_QDRANT_API_KEY
+                url=env.DEV_QDRANT_URL, port=443, https=True, timeout=120, api_key=env.DEV_QDRANT_API_KEY
             )
             _ = self.client.get_collections()
         elif version == "prod_remote":
