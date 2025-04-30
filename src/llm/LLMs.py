@@ -82,7 +82,7 @@ class LLM:
                 )
             case Models.QWEN2:
                 llm = OpenAILike(
-                    model="qwen2-72b-instruct",
+                    model="qwen2.5-72b-instruct",
                     is_chat_model=True,
                     temperature=0,
                     max_tokens=400,
