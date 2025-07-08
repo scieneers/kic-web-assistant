@@ -23,6 +23,7 @@ app.add_middleware(
         "https://ki-campus.staging.piipe.de",
         "https://ki-campus.org",
         "https://moodle.ki-campus.org",
+        "https://ki-campus.loom.de",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
