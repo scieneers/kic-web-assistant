@@ -144,7 +144,7 @@ class LLM:
         else:
             response = result[-1]
 
-        if isinstance(result[-1], Exception):
+        if isinstance(result[-1], Exception) or result[-1] is None:
             self.gwdg_unavailable = True
             llm = self.get_model(Models.GPT4)
             chat_engine = SimpleChatEngine.from_defaults(

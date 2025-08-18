@@ -101,7 +101,7 @@ class EnvHelper(BaseModel):
             logging.warning("No .env file found.")
 
         # Using Azure Key Vault when secrets are not set through environment variables
-        key_vault_name = os.environ.get("KEY_VAULT_NAME", "kicwa-keyvault-dev")
+        key_vault_name = os.environ.get("KEY_VAULT_NAME", "kicwa-keyvault-prod")
         key_vault_uri = f"https://{key_vault_name}.vault.azure.net/"
         credential = DefaultAzureCredential()
         secret_client = SecretClient(vault_url=key_vault_uri, credential=credential)
