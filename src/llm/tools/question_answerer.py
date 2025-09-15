@@ -196,6 +196,7 @@ class QuestionAnswerer:
         )
 
         try:
+            response.content = response.content.replace("```json\n", "").replace("\n```", "")
             response_json = json.loads(response.content)
             response.content = response_json["answer"]
 
