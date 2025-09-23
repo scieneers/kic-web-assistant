@@ -17,7 +17,7 @@ DEFAULT_COLLECTION = "web_assistant"
 SNAPSHOTS_TO_KEEP = 3
 
 
-# A full run takes about 2,5 hours (2025-02-11)
+# A full run takes about 5 hours (2025-09-23)
 class Fetch_Data:
     def sanity_check(self):
         # Check if URLs are missing in metadata,
@@ -51,7 +51,7 @@ class Fetch_Data:
     ):
         self.logger.info("Create Snapshot of previous data collection...")
         if self.dev_vector_store.client.collection_exists(DEFAULT_COLLECTION):
-            new_snapshot = self.dev_vector_store.client.create_snapshot(collection_name=DEFAULT_COLLECTION, wait=False)
+            self.dev_vector_store.client.create_snapshot(collection_name=DEFAULT_COLLECTION, wait=False)
 
             # There will likely be one additional snapshot because the snapshot created in the previous step has not yet been added to the list.
             all_snapshots: List[models.SnapshotDescription] = self.dev_vector_store.client.list_snapshots(
@@ -104,11 +104,12 @@ class Fetch_Data:
             pipeline.run(documents=batch)
 
         self.logger.info("Finished loading Docs into Dev Qdrant.")
-        self.logger.info(f"Migrate dev collection '{DEFAULT_COLLECTION}' to prod collection")
-        self.dev_vector_store.client.migrate(
-            self.prod_vector_store.client, [DEFAULT_COLLECTION], recreate_on_collision=True
-        )
-        self.logger.info("Migration successful")
+        if not env.DEBUG_MODE:
+            self.logger.info(f"Migrate dev collection '{DEFAULT_COLLECTION}' to prod collection")
+            self.dev_vector_store.client.migrate(
+                self.prod_vector_store.client, [DEFAULT_COLLECTION], recreate_on_collision=True
+            )
+            self.logger.info("Migration successful")
 
         self.sanity_check()
 
