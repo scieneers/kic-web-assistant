@@ -40,16 +40,16 @@
             "request": "launch",
             "module": "uvicorn",
             "args": [
-                "api.rest:app",
+                "src.api.rest:app",
                 "--reload",
-                "--port=8000"
+                "--port", "8000",
+                "--log-level", "debug"
             ],
-            "cwd": "${workspaceFolder}/src",
-            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
-            "env": {
-                "DEBUG_LANGCHAIN": "True"
-            },
-            "jinja": true
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal",
+            "jinja": true,
+            "justMyCode": false
         },
         {
             "name": "Attach to Python Functions",

@@ -21,9 +21,24 @@ from src.llm.objects.LLMs import Models
 from src.vectordb.qdrant import VectorDBQdrant
 from src.llm.streaming import TokenCallbackContext
 
-# Singleton instances for performance - avoid recreating on every request
-_vector_db = VectorDBQdrant()
-_assistant = KICampusAssistant()
+# Lazy singletons - initialized on first request to avoid blocking app startup
+_vector_db: VectorDBQdrant | None = None
+_assistant: KICampusAssistant | None = None
+
+
+def get_vector_db() -> VectorDBQdrant:
+    global _vector_db
+    if _vector_db is None:
+        _vector_db = VectorDBQdrant()
+    return _vector_db
+
+
+def get_assistant() -> KICampusAssistant:
+    global _assistant
+    if _assistant is None:
+        _assistant = KICampusAssistant()
+    return _assistant
+
 
 app = FastAPI()
 # authentication with OAuth2
@@ -124,7 +139,7 @@ class ChatRequest(BaseModel):
                 detail="module_id is required when course_id is set.",
             )
         if self.module_id is not None:
-            if not _vector_db.check_if_module_exists(self.module_id):
+            if not get_vector_db().check_if_module_exists(self.module_id):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"no module found with the given id: {self.module_id}.",
@@ -134,7 +149,7 @@ class ChatRequest(BaseModel):
     @model_validator(mode="after")
     def validate_course_id(self):
         if self.course_id is not None:
-            if not _vector_db.check_if_course_exists(self.course_id):
+            if not get_vector_db().check_if_course_exists(self.course_id):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"no course found with the given id: {self.course_id}.",
@@ -162,7 +177,7 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
     
     if chat_request.course_id is not None:
         # Chat with course content (with or without module filter)
-        llm_response, thread_id = _assistant.chat_with_course(
+        llm_response, thread_id = get_assistant().chat_with_course(
             query=chat_request.get_user_query(),
             model=chat_request.model,
             course_id=chat_request.course_id,
@@ -171,8 +186,8 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
         )
     else:
         # General chat (Drupal content)
-        llm_response, thread_id = _assistant.chat(
-            query=chat_request.get_user_query(), 
+        llm_response, thread_id = get_assistant().chat(
+            query=chat_request.get_user_query(),
             model=chat_request.model,
             thread_id=chat_request.thread_id,
         )
@@ -222,7 +237,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
 
             with TokenCallbackContext(token_callback):
                 if chat_request.course_id is not None:
-                    llm_response, _thread_id = _assistant.chat_with_course(
+                    llm_response, _thread_id = get_assistant().chat_with_course(
                         query=chat_request.get_user_query(),
                         model=chat_request.model,
                         course_id=chat_request.course_id,
@@ -230,7 +245,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                         thread_id=thread_id,
                     )
                 else:
-                    llm_response, _thread_id = _assistant.chat(
+                    llm_response, _thread_id = get_assistant().chat(
                         query=chat_request.get_user_query(),
                         model=chat_request.model,
                         thread_id=thread_id,
