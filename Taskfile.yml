@@ -14,46 +14,103 @@ tasks:
 
   build-frontend:
     desc: Build the docker image for the streamlit frontend
+    vars:
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
     cmds:
+      - echo "Building frontend with version {{.VERSION}}"
       - |
         {{ if eq .TARGET "linux" }}
-          docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/app:latest -f src/frontend/Dockerfile .
+          docker buildx build --load --platform linux/amd64 -t {{ .REGISTRY }}/app:{{.VERSION}} -f src/frontend/Dockerfile .
         {{ else }}
-          docker build -t {{ .REGISTRY }}/app:latest -f src/frontend/Dockerfile .
+          docker build -t {{ .REGISTRY }}/app:{{.VERSION}} -f src/frontend/Dockerfile .
         {{ end }}
 
   build-api:
     desc: Build the docker image for the chatbot Rest API
+    vars:
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
     cmds:
+      - echo "Building API with version {{.VERSION}}"
       - |
         {{ if eq .TARGET "linux" }}
-          docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/rest-api:latest -f src/api/Dockerfile .
+          docker buildx build --load --platform linux/amd64 -t {{ .REGISTRY }}/rest-api:{{.VERSION}} -f src/api/Dockerfile .
         {{ else }}
-          docker build -t {{ .REGISTRY }}/rest-api:latest -f src/api/Dockerfile .
+          docker build -t {{ .REGISTRY }}/rest-api:{{.VERSION}} -f src/api/Dockerfile .
         {{ end }}
 
   build-embedder:
     desc: Build the docker image for the embedder API
+    vars:
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
     cmds:
+      - echo "Building embedder with version {{.VERSION}}"
       - |
         {{ if eq .TARGET "linux" }}
-          docker buildx build --platform linux/amd64 -t {{ .REGISTRY }}/embedder:latest -f src/embedder/Dockerfile .
+          docker buildx build --load --platform linux/amd64 -t {{ .REGISTRY }}/embedder:{{.VERSION}} -f src/embedder/Dockerfile .
         {{ else }}
-          docker build -t embedder:latest -f src/embedder/Dockerfile .
+          docker build -t {{ .REGISTRY }}/embedder:{{.VERSION}} -f src/embedder/Dockerfile .
         {{ end }}
 
-  push-latest-images:
-    desc: Pushes the docker images. Make sure to only push amd64 images,
+  push-frontend:
+    desc: Push the frontend docker image. Version defaults to git commit hash if not provided.
+    vars:
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
     cmds:
-      - |
-        if [ -z "{{.CLI_ARGS}}" ]; then
-          echo "add version like this task XYZ -- 1.4.2"
-          exit 1
-        fi
-      - docker image tag {{ .REGISTRY }}/app:latest {{ .REGISTRY }}/app:{{.CLI_ARGS}}
-      - docker image tag {{ .REGISTRY }}/rest-api:latest {{ .REGISTRY }}/rest-api:{{.CLI_ARGS}}
-      - docker push {{ .REGISTRY }}/app:{{.CLI_ARGS}}
-      - docker push {{ .REGISTRY }}/rest-api:{{.CLI_ARGS}}
+      - echo "Pushing frontend with version {{.VERSION}}"
+      - docker push {{ .REGISTRY }}/app:{{.VERSION}}
+
+  push-api:
+    desc: Push the API docker image. Version defaults to git commit hash if not provided.
+    vars:
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
+    cmds:
+      - echo "Pushing API with version {{.VERSION}}"
+      - docker push {{ .REGISTRY }}/rest-api:{{.VERSION}}
+
+  push-latest-images:
+    desc: Pushes the docker images. Make sure to only push amd64 images. Version defaults to git commit hash if not provided.
+    vars:
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
+    cmds:
+      - echo "Pushing images with version {{.VERSION}}"
+      - docker push {{ .REGISTRY }}/app:{{.VERSION}}
+      - docker push {{ .REGISTRY }}/rest-api:{{.VERSION}}
 
   az-login:
     desc: Login to azure using azure-cli
