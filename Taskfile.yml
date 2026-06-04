@@ -3,7 +3,7 @@ version: '3'
 vars:
   # Build for different architecture in case of arm processors
   TARGET: "linux"
-  REGISTRY: "kicwaacrdev.azurecr.io"
+  REGISTRY: "kicacrdev.azurecr.io"
 
 tasks:
   print-vars:
@@ -116,4 +116,4 @@ tasks:
     desc: Login to azure using azure-cli
     cmds:
       - az login --tenant c6ff58bc-993e-4bdb-8d10-6013e2cd361f --scope https://graph.microsoft.com/.default
-      - az acr login --name kicwaacrdev.azurecr.io
+      - az acr login --name kicacrdev.azurecr.io

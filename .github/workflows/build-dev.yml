@@ -6,7 +6,7 @@ on:
       - dev
 
 env:
-  REGISTRY: kicwaacrdev.azurecr.io
+  REGISTRY: kicacrdev.azurecr.io
 
 jobs:
   build-and-push:
