@@ -292,4 +292,4 @@ class KICampusAssistant:
 
 if __name__ == "__main__":
     assistant = KICampusAssistant()
-    assistant.chat(query="Eklär über den Kurs Deep Learning mit Tensorflow, Keras und Tensorflow.js", model=Models.GPT4)
+    assistant.chat(query="Eklär über den Kurs Deep Learning mit Tensorflow, Keras und Tensorflow.js", model=Models.AZURE_FALLBACK)

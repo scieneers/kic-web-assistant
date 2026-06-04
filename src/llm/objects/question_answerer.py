@@ -64,7 +64,7 @@ class QuestionAnswerer:
         course_id: int,
     ) -> SerializableChatMessage:
         
-        if model != Models.GPT4:
+        if model != Models.AZURE_FALLBACK:
             system_prompt = SHORT_SYSTEM_PROMPT.format(language=language)
             formatted_sources = format_sources(sources, max_length=8000)
         else:

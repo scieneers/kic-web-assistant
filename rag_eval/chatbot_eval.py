@@ -52,10 +52,10 @@ def answer_question(
     citation_parser = CitationParser()
 
     is_moodle = course_id is not None
-    mode = contextualizer.classify_scenario(query=question, model=Models.GPT4)
+    mode = contextualizer.classify_scenario(query=question, model=Models.AZURE_FALLBACK)
 
     if mode == "multi_hop":
-        decomposed = decompose_query_eval(model=Models.GPT4, query=question)
+        decomposed = decompose_query_eval(model=Models.AZURE_FALLBACK, query=question)
         retrieved_nodes = retrieve_multi_parallel_eval(
             subqueries=decomposed,
             course_id=course_id,
@@ -66,7 +66,7 @@ def answer_question(
         reranked_nodes = reranker.rerank(
             query=question,
             nodes=combined_nodes,
-            model=Models.GPT4
+            model=Models.AZURE_FALLBACK
         )
     else:
         retrieved_nodes = retriever.retrieve(
@@ -77,7 +77,7 @@ def answer_question(
         reranked_nodes = reranker.rerank(
             query=question,
             nodes=retrieved_nodes,
-            model=Models.GPT4
+            model=Models.AZURE_FALLBACK
         )
 
     contexts = [node.text for node in reranked_nodes]
@@ -86,7 +86,7 @@ def answer_question(
         query=question,
         chat_history=[],
         sources=reranked_nodes,
-        model=Models.GPT4,
+        model=Models.AZURE_FALLBACK,
         language="German",
         is_moodle=is_moodle,
         course_id=course_id,
@@ -108,7 +108,7 @@ async def main():
     print("\nStarting evaluation...\n")
 
     evaluator_llm = LangchainLLMWrapper(
-        ChatOpenAI(model="gpt-4o", temperature=0)
+        ChatOpenAI(model="gpt-5.4", temperature=0)
     )
 
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")

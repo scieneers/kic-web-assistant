@@ -14,7 +14,7 @@ THREAD_ID = "finale_workflow_thread"
 
 def parse_args():
     p = argparse.ArgumentParser(description="Interactive CLI chat with KICampusAssistant.")
-    p.add_argument("--model", default="GPT4", help="Model enum name from Models, e.g. GPT4")
+    p.add_argument("--model", default="AZURE_FALLBACK", help="Model enum name from Models, e.g. AZURE_FALLBACK")
     p.add_argument("--course-id", type=int, default=DEFAULT_COURSE_ID, help="Optional Moodle course_id")
     p.add_argument("--module-id", type=int, default=DEFAULT_MODULE_ID, help="Optional module_id")
     p.add_argument("--rerank-top-n", type=int, default=RERANK_TOP_N, help="Assistant rerank_top_n")

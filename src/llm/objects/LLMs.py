@@ -21,7 +21,7 @@ TIME_TO_WAIT_FOR_GWDG = 7  # in seconds
 TIME_TO_RESET_UNAVAILABLE_STATUS = 60 * 5  # in seconds
 
 class Models(str, Enum):
-    GPT4 = "GPT-4"
+    AZURE_FALLBACK = "Azure-Fallback"
     MISTRAL8 = "Mistral8"
     LLAMA3 = "Llama3"
     QWEN2 = "Qwen2"
@@ -36,19 +36,19 @@ class LLM:
             deployment_name=env.AZURE_OPENAI_EMBEDDER_DEPLOYMENT,
             api_key=env.AZURE_OPENAI_API_KEY,
             azure_endpoint=env.AZURE_OPENAI_URL,
-            api_version="2023-05-15",
+            api_version="2024-12-01-preview",
         )
         return embedder
 
     def get_model(self, model: Models) -> FunctionCallingLLM | llama_llm:
         match model:
-            case Models.GPT4:
+            case Models.AZURE_FALLBACK:
                 llm = AzureOpenAI(
-                    model=env.AZURE_OPENAI_GPT4_MODEL,
-                    deployment=env.AZURE_OPENAI_GPT4_DEPLOYMENT,
+                    model=env.AZURE_FALLBACK_MODEL,
+                    deployment=env.AZURE_FALLBACK_DEPLOYMENT,
                     api_key=env.AZURE_OPENAI_API_KEY,
                     azure_endpoint=env.AZURE_OPENAI_URL,
-                    api_version="2023-05-15",
+                    api_version="2024-12-01-preview",
                     callback_manager=Settings.callback_manager,
                 )
             case Models.MISTRAL8:
@@ -116,9 +116,9 @@ class LLM:
                 LLM.gwdg_unavailable = False
                 LLM.gwdg_unavailable_since = None
 
-        # If GWDG is unavailable, use GPT-4 instead
+        # If GWDG is unavailable, use Azure fallback model instead
         if LLM.gwdg_unavailable:
-            model = Models.GPT4
+            model = Models.AZURE_FALLBACK
 
         llm = self.get_model(model)
         # Convert SerializableChatMessage to ChatMessage for SimpleChatEngine
@@ -204,10 +204,10 @@ class LLM:
         thread.join(timeout=TIME_TO_WAIT_FOR_GWDG)
 
         if thread.is_alive() or isinstance(result[-1], Exception) or result[-1] is None:
-            # GWDG timeout or error - fallback to GPT-4
+            # GWDG timeout or error - fallback to Azure model
             LLM.gwdg_unavailable = True
             LLM.gwdg_unavailable_since = datetime.datetime.now()
-            llm = self.get_model(Models.GPT4)
+            llm = self.get_model(Models.AZURE_FALLBACK)
             chat_engine = SimpleChatEngine.from_defaults(
                 llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history
             )

@@ -117,7 +117,7 @@ async def main():
 
     # 1) LLM for Ragas metrics (async)
     metrics_client = AsyncOpenAI()
-    async_llm = llm_factory("gpt-4o-mini", client=metrics_client)
+    async_llm = llm_factory("gpt-5.4", client=metrics_client)
     critics = build_metrics(async_llm)
 
     all_results: List[Dict[str, Any]] = []

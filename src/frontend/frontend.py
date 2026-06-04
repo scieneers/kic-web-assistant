@@ -209,7 +209,7 @@ def submit_feedback(feedback: dict, trace_id: str):
 st.title("KI-Campus Assistant")
 
 if "llm_select" not in st.session_state:
-    st.session_state.llm_select = Models.GPT4
+    st.session_state.llm_select = Models.AZURE_FALLBACK
 
 if "course_id" not in st.session_state:
     st.session_state.course_id = None
@@ -228,7 +228,7 @@ with st.sidebar:
         index=0,
         on_change=reset_history,
         format_func=lambda model: model.value,
-        placeholder=Models.GPT4.name,
+        placeholder=Models.AZURE_FALLBACK.name,
     )
     st.divider()
 

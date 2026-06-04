@@ -289,7 +289,7 @@ class ExampleRAG:
                 component="openai_api",
                 data={
                     "operation": "generate_response",
-                    "model": "gpt-4o",
+                    "model": "gpt-5.4",
                     "query": query,
                     "prompt_length": len(prompt),
                     "context_length": len(context),
@@ -300,7 +300,7 @@ class ExampleRAG:
 
         try:
             response = self.llm_client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5.4",
                 messages=[
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": prompt},
@@ -319,7 +319,7 @@ class ExampleRAG:
                         "usage": (
                             response.usage.model_dump() if response.usage else None
                         ),
-                        "model": "gpt-4o",
+                        "model": "gpt-5.4",
                     },
                 )
             )

@@ -12,7 +12,7 @@ state = GraphState(
     chat_history=[],
     contextualized_query="Was ist Deep Learning?",
     runtime_config={
-        "model": Models.GPT4,
+        "model": Models.AZURE_FALLBACK,
     },
     system_config={
         "rerank_top_n": 5,
