@@ -15,7 +15,7 @@ class EnvHelper(BaseModel):
     If a variable without a default value retrieved, an error is raised."""
 
     ENVIRONMENT: str = Field(
-        default="STAGING", description="Whether to use production or staging APIs from ki-campus sites "
+        default="DEV", description="Whether to use production or dev APIs from ki-campus sites"
     )
     DEBUG_MODE: bool = False
     REST_API_KEYS: list[str] = []
@@ -48,15 +48,8 @@ class EnvHelper(BaseModel):
     DRUPAL_PASSWORD: str = "UNSET"
     DRUPAL_GRANT_TYPE: str = "password"
 
-    # Generic Qdrant config (e.g. for lab / single-cluster setups)
     QDRANT_API_KEY: str = "UNSET"
     QDRANT_URL: str = "UNSET"
-
-    #DEV_QDRANT_API_KEY: str = "UNSET"
-    #DEV_QDRANT_URL: str = "UNSET"
-
-    PROD_QDRANT_API_KEY: str = "UNSET"
-    PROD_QDRANT_URL: str = "UNSET"
 
     DATA_SOURCE_MOODLE_URL: str = "UNSET"
     DATA_SOURCE_MOODLE_TOKEN: str = "UNSET"
@@ -68,8 +61,8 @@ class EnvHelper(BaseModel):
 
     @field_validator("ENVIRONMENT")
     def validate_ENVIRONMENT(cls, value: str) -> str:
-        if value not in ["STAGING", "PRODUCTION"]:
-            raise ValueError("ENVIRONMENT must be LOCAL, STAGING, or PRODUCTION")
+        if value not in ["DEV", "PRODUCTION"]:
+            raise ValueError("ENVIRONMENT must be DEV or PRODUCTION")
         return value
 
     @field_validator("REST_API_KEYS", mode="before")
@@ -118,7 +111,7 @@ class EnvHelper(BaseModel):
             if key not in kwargs.keys():
                 self.append_variable(kwargs, variable_key=key, secret_client=secret_client)
         # Use default ENVIRONMENT if not loaded from Key Vault or env
-        environment = kwargs.get("ENVIRONMENT", "PRODUCTION")
+        environment = kwargs.get("ENVIRONMENT", "DEV")
 
         # Variables with different names
         if environment == "PRODUCTION":

@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import warnings
 from typing import List
 
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -14,14 +15,38 @@ current = os.path.dirname(os.path.realpath(__file__))
 parent = os.path.dirname(current)
 sys.path.append(parent)
 
+_DEPRECATED_MODES = {
+    "dev_remote": 120,
+    "prod_remote": 30,
+}
+
 
 class VectorDBQdrant:
-    def __init__(self, version: str = "prod_remote"):
+    def __init__(self, mode: str = "auto"):
         self.logger = logging.getLogger("loader")
-        self.version = version
-        if version == "memory":
+
+        # Backwards-compat: accept legacy version strings with a deprecation warning
+        if mode in _DEPRECATED_MODES:
+            warnings.warn(
+                f"VectorDBQdrant(mode='{mode}') is deprecated. Use mode='auto' and set ENVIRONMENT instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            timeout = _DEPRECATED_MODES[mode]
+            self.logger.info("Connecting to Qdrant at %s (legacy mode='%s', timeout=%ss)", env.QDRANT_URL, mode, timeout)
+            self.client = QdrantClient(url=env.QDRANT_URL, port=443, https=True, timeout=timeout, api_key=env.QDRANT_API_KEY)
+            _ = self.client.get_collections()
+        elif mode == "auto":
+            is_dev = env.ENVIRONMENT == "DEV"
+            timeout = 120 if is_dev else 30
+            self.logger.info(
+                "Connecting to Qdrant at %s (ENVIRONMENT=%s, timeout=%ss)", env.QDRANT_URL, env.ENVIRONMENT, timeout
+            )
+            self.client = QdrantClient(url=env.QDRANT_URL, port=443, https=True, timeout=timeout, api_key=env.QDRANT_API_KEY)
+            _ = self.client.get_collections()
+        elif mode == "memory":
             self.client = QdrantClient(":memory:")
-        elif version == "disk":
+        elif mode == "disk":
             self.client = QdrantClient("localhost", port=6333)
             try:
                 _ = self.client.get_collections()
@@ -31,27 +56,8 @@ class VectorDBQdrant:
                     "docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1",
                 )
                 raise e
-        # Longer timeout for dev, because container app is scaled down to 0 instances
-        elif version == "dev_remote":
-            # Prefer dedicated DEV_QDRANT_* settings; fall back to generic QDRANT_*
-            try:
-                url = env.DEV_QDRANT_URL
-                api_key = env.DEV_QDRANT_API_KEY
-            except AttributeError:
-                url = env.QDRANT_URL
-                api_key = env.QDRANT_API_KEY
-
-            self.logger.info("Connecting to DEV Qdrant at %s", url)
-            self.client = QdrantClient(url=url, port=443, https=True, timeout=120, api_key=api_key)
-            _ = self.client.get_collections()
-        elif version == "prod_remote":
-            self.logger.info("Connecting to PROD Qdrant at %s", env.PROD_QDRANT_URL)
-            self.client = QdrantClient(
-                url=env.PROD_QDRANT_URL, port=443, https=True, timeout=30, api_key=env.PROD_QDRANT_API_KEY
-            )
-            _ = self.client.get_collections()
         else:
-            raise ValueError("Version must be either 'memory' or 'disk' or 'remote'")
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'auto', 'memory', or 'disk'.")
 
     def as_llama_vector_store(self, collection_name) -> QdrantVectorStore:
         return QdrantVectorStore(client=self.client, collection_name=collection_name, max_retries=10)
@@ -323,4 +329,4 @@ class VectorDBQdrant:
 
 
 if __name__ == "__main__":
-    test_connection = VectorDBQdrant(version="disk")  # For local testing only
+    test_connection = VectorDBQdrant(mode="disk")  # For local testing only

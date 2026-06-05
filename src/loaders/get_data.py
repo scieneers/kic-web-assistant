@@ -136,8 +136,8 @@ class Fetch_Data:
         # If start_ingest already created a SAS URL for this run, keep it.
         self.preset_log_url = preset_log_url
 
-        self.dev_vector_store = VectorDBQdrant(version="dev_remote")
-        self.prod_vector_store = VectorDBQdrant(version="prod_remote")
+        self.dev_vector_store = VectorDBQdrant(mode="dev_remote")
+        self.prod_vector_store = VectorDBQdrant(mode="prod_remote")
 
         self.logger.info("Starting data extraction...")
 

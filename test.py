@@ -8,7 +8,7 @@ COLLECTION = "web_assistant_hybrid"
 
 def check(version: str) -> None:
     try:
-        db = VectorDBQdrant(version=version)
+        db = VectorDBQdrant(mode=version)
         info = db.client.get_collection(collection_name=COLLECTION)
         print(f"[{version}] Collection '{COLLECTION}' EXISTIERT.")
         print(f"[{version}] Details: {info}")
@@ -19,7 +19,7 @@ def check(version: str) -> None:
 
 def check_payload(version: str) -> None:
     try:
-        db = VectorDBQdrant(version=version)
+        db = VectorDBQdrant(mode=version)
         points = db.client.scroll(
             collection_name=COLLECTION,
             limit=1

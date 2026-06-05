@@ -25,10 +25,10 @@ class KiCampusRetriever:
         if use_hybrid:
             self.sparse_encoder = SparseTextEmbedding("Qdrant/bm42-all-minilm-l6-v2-attentions")
             # For hybrid search, we use direct Qdrant client instead of LlamaIndex wrapper
-            self.vector_db = VectorDBQdrant("prod_remote")
+            self.vector_db = VectorDBQdrant()
             self.collection_name = "web_assistant_hybrid_v2"
         else:
-            self.vector_store = VectorDBQdrant("prod_remote").as_llama_vector_store(collection_name="web_assistant_hybrid_v2")
+            self.vector_store = VectorDBQdrant().as_llama_vector_store(collection_name="web_assistant_hybrid_v2")
 
     @observe()
     def retrieve(self, query: str, course_id: int | None = None, module_id: int | None = None) -> list[SerializableTextNode]:

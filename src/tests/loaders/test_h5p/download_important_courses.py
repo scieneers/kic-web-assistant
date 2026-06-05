@@ -66,7 +66,7 @@ def main():
     print("=== DOWNLOAD IMPORTANT COURSES ===\n")
     
     # Verify PRODUCTION environment
-    print(f"Environment: {os.environ.get('ENVIRONMENT', 'STAGING')}")
+    print(f"Environment: {os.environ.get('ENVIRONMENT', 'DEV')}")
     
     # Setup API connection (using PRODUCTION Moodle secrets)
     base_url = env.DATA_SOURCE_MOODLE_URL
