@@ -49,6 +49,7 @@ class LLM:
                     api_key=env.AZURE_OPENAI_API_KEY,
                     azure_endpoint=env.AZURE_OPENAI_URL,
                     api_version="2024-12-01-preview",
+                    context_window=272000,
                     callback_manager=Settings.callback_manager,
                 )
             case Models.MISTRAL8:
