@@ -1,17 +1,14 @@
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                        Base - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM python:3.11-slim as base
+FROM python:3.11-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    POETRY_HOME="/opt/poetry" \
-    POETRY_VIRTUALENVS_IN_PROJECT=true \
-    POETRY_NO_INTERACTION=1 \
     PYSETUP_PATH="/opt/pysetup" \
     VENV_PATH="/opt/pysetup/.venv"
 
-ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
+ENV PATH="$VENV_PATH/bin:$PATH"
 
 RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 -ms /bin/bash appuser
@@ -19,15 +16,15 @@ RUN groupadd --gid 1000 appuser \
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                       Build - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM base as build
+FROM base AS build
 
 RUN apt-get update && apt-get install -y \
     build-essential && \
-    pip install 'poetry==1.7.1'
+    pip install uv
 
 WORKDIR $PYSETUP_PATH
-COPY ./poetry.lock ./pyproject.toml ./
-RUN poetry install --with embedder --no-interaction --no-ansi
+COPY uv.lock pyproject.toml ./
+RUN uv sync --no-dev --no-install-project
 
 USER appuser
 WORKDIR /home/appuser
@@ -37,7 +34,7 @@ COPY --chown=appuser:appuser . ./
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                     Runtime - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM base as runtime
+FROM base AS runtime
 
 USER appuser
 WORKDIR /home/appuser
