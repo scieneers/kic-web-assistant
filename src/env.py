@@ -36,6 +36,7 @@ class EnvHelper(BaseModel):
 
     GWDG_URL: str = "UNSET"
     GWDG_API_KEY: str = "UNSET"
+    GWDG_MODEL: str = "UNSET"
 
     LANGFUSE_HOST: str = "UNSET"
     LANGFUSE_PUBLIC_KEY: str = "UNSET"

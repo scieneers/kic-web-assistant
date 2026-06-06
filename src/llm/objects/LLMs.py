@@ -22,9 +22,8 @@ TIME_TO_RESET_UNAVAILABLE_STATUS = 60 * 5  # in seconds
 
 class Models(str, Enum):
     AZURE_FALLBACK = "Azure-Fallback"
-    MISTRAL8 = "Mistral8"
     LLAMA3 = "Llama3"
-    QWEN2 = "Qwen2"
+    GEMMA4_31B = "Gemma4"
 
 class LLM:
     gwdg_unavailable = False
@@ -51,25 +50,9 @@ class LLM:
                     api_version="2024-12-01-preview",
                     callback_manager=Settings.callback_manager,
                 )
-            case Models.MISTRAL8:
-                llm = AzureAICompletionsModel(
-                    credential=env.AZURE_MISTRAL_KEY, endpoint=env.AZURE_MISTRAL_URL, model_name="mistral-large"
-                )
-                # GWDG instruct model for chat currently not working
-                # llm = OpenAILike(
-                #     model="mixtral-8x7b-instruct",
-                #     is_chat_model=True,
-                #     temperature=0,
-                #     max_tokens=400,
-                #     api_key=env.GWDG_API_KEY,
-                #     api_base=env.GWDG_URL,
-                #     api_version="v1",
-                #     logprobs=None,
-                #     callback_manager=Settings.callback_manager,
-                # )
             case Models.LLAMA3:
                 llm = OpenAILike(
-                    model="llama-3.3-70b-instruct",
+                    model="gemma-4-31b-it",  # TODO: kept for compatibility (LLAMA3 enum maps to gemma4); remove once all frontends have switched to gemma4
                     is_chat_model=True,
                     temperature=0,
                     max_tokens=400,
@@ -79,9 +62,9 @@ class LLM:
                     logprobs=None,
                     callback_manager=Settings.callback_manager,
                 )
-            case Models.QWEN2:
+            case Models.GEMMA4_31B:
                 llm = OpenAILike(
-                    model="qwen2-72b-instruct",
+                    model=env.GWDG_MODEL,
                     is_chat_model=True,
                     temperature=0,
                     max_tokens=400,

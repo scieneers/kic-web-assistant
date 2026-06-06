@@ -124,7 +124,7 @@ class ChatRequest(BaseModel):
     model: Models = Field(
         default=Models.AZURE_FALLBACK,
         description="The LLM to use for the conversation.",
-        examples=[Models.AZURE_FALLBACK, Models.MISTRAL8],
+        examples=[Models.AZURE_FALLBACK, Models.GEMMA4_31B],
     )
 
     def get_user_query(self) -> str:
