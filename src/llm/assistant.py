@@ -20,18 +20,20 @@ class KICampusAssistant:
     Routes queries to appropriate subgraphs based on scenario classification.
     """
     
-    def __init__(self, rerank_top_n: int = 5, retrieve_top_n: int = 10):
+    def __init__(self, rerank_top_n: int = 5, retrieve_top_n: int = 10, enable_socratic: bool = False):
         """
         Initialize the assistant with system configuration.
-        
+
         Args:
             rerank_top_n: Number of top chunks to keep after reranking
             retrieve_top_n: Number of chunks to retrieve from vector database
+            enable_socratic: Enable/disable the socratic learning mode
         """
         # System configuration (hardcoded, not exposed to frontend)
         self.system_config = {
             "rerank_top_n": rerank_top_n,
             "retrieve_top_n": retrieve_top_n,
+            "enable_socratic": enable_socratic,
         }
         
         # Initialize checkpoint/persistence backend

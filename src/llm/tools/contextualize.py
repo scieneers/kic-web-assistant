@@ -51,11 +51,12 @@ def contextualize_and_route(state: GraphState) -> dict:
     user_query = state["user_query"]
     chat_history = state["chat_history"]
     socratic_mode = state.get("socratic_mode", None)
+    enable_socratic = state.get("system_config", {}).get("enable_socratic", False)
     # Cleaned user response for entry/exit intent (socratic mode)
     response_clean = user_query.lower().strip()
-    
-    # Handle socratic mode if active
-    if socratic_mode is not None:
+
+    # Handle socratic mode if active (only if socratic is enabled)
+    if socratic_mode is not None and enable_socratic:
         # Socratic mode is active - check if user wants to continue
         continue_socratic = response_clean not in ["exit", "quit", "stop", "stopp", "beende den lernmodus", "ich möchte aufhören"]
         
@@ -99,8 +100,8 @@ def contextualize_and_route(state: GraphState) -> dict:
             }
     else:
         # Normal mode handling (no active socratic session)
-        # Check if user wants to start socratic mode
-        if response_clean in ["start socratic", "begin socratic", "enter socratic", "unterstütze mich beim lernen"]:
+        # Check if user wants to start socratic mode (only if enabled)
+        if enable_socratic and response_clean in ["start socratic", "begin socratic", "enter socratic", "unterstütze mich beim lernen"]:
             return {
                 "mode": "socratic",
                 "socratic_mode": "contract"
