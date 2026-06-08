@@ -50,25 +50,6 @@ tasks:
           docker build -t {{ .REGISTRY }}/rest-api:{{.VERSION}} -f src/api/Dockerfile .
         {{ end }}
 
-  build-embedder:
-    desc: Build the docker image for the embedder API
-    vars:
-      VERSION:
-        sh: |
-          if [ -n "{{.CLI_ARGS}}" ]; then
-            echo "{{.CLI_ARGS}}"
-          else
-            git rev-parse --short HEAD
-          fi
-    cmds:
-      - echo "Building embedder with version {{.VERSION}}"
-      - |
-        {{ if eq .TARGET "linux" }}
-          docker buildx build --load --platform linux/amd64 -t {{ .REGISTRY }}/embedder:{{.VERSION}} -f src/embedder/Dockerfile .
-        {{ else }}
-          docker build -t {{ .REGISTRY }}/embedder:{{.VERSION}} -f src/embedder/Dockerfile .
-        {{ end }}
-
   push-frontend:
     desc: Push the frontend docker image. Version defaults to git commit hash if not provided.
     vars:
