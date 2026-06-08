@@ -19,7 +19,6 @@ from src.loaders.helper import iter_nodes_from_document_hierarchical
 from src.vectordb.qdrant import VectorDBQdrant
 from src.loaders.run_logger import Heartbeat, RunContext, RunLogger, StageTimer, Watchdog, format_kv
 
-DEFAULT_COLLECTION = "web_assistant_hybrid_v2"
 SNAPSHOTS_TO_KEEP = 3
 
 
@@ -71,20 +70,20 @@ class Fetch_Data:
                 format_kv(
                     RUN_ID=self.run_id,
                     STAGE=stage,
-                    COLLECTION=DEFAULT_COLLECTION,
+                    COLLECTION=env.QDRANT_COLLECTION,
                     BATCH_POINT_GROUP=size_batch_idx,
                     BATCH_POINTS=len(size_batch),
                     BATCH_MB=round(batch_size_mb, 2),
                 ),
             )
             t_upsert = time.time()
-            self.dev_vector_store.upsert(DEFAULT_COLLECTION, size_batch)
+            self.dev_vector_store.upsert(env.QDRANT_COLLECTION, size_batch)
             self.logger.info(
                 "QDRANT_UPSERT_END %s",
                 format_kv(
                     RUN_ID=self.run_id,
                     STAGE=stage,
-                    COLLECTION=DEFAULT_COLLECTION,
+                    COLLECTION=env.QDRANT_COLLECTION,
                     BATCH_POINT_GROUP=size_batch_idx,
                     BATCH_POINTS=len(size_batch),
                     ELAPSED_MS=int((time.time() - t_upsert) * 1000),
@@ -103,7 +102,7 @@ class Fetch_Data:
         # every point needs a non-empty url field in the metadata
         query_filter = models.Filter(must=[models.IsEmptyCondition(is_empty=models.PayloadField(key="url"))])
 
-        if self.dev_vector_store.query_with_filter(DEFAULT_COLLECTION, query_filter) != ([], None):
+        if self.dev_vector_store.query_with_filter(env.QDRANT_COLLECTION, query_filter) != ([], None):
             self.logger.error("Missing URLs in Metadata, linking to content not possible in all cases")
 
     def __init__(self, run_id: str | None = None, preset_log_url: str | None = None):
@@ -245,7 +244,7 @@ class Fetch_Data:
             format_kv(
                 RUN_ID=self.run_id,
                 EVENT="STARTED",
-                DEFAULT_COLLECTION=DEFAULT_COLLECTION,
+                COLLECTION=env.QDRANT_COLLECTION,
                 DEBUG_MODE=getattr(env, "DEBUG_MODE", False),
             ),
         )
@@ -267,19 +266,19 @@ class Fetch_Data:
             if os.getenv("QDRANT_SNAPSHOTS_ENABLED", "true").lower() in {"1", "true", "yes"}:
                 with StageTimer(self.logger, self.ctx, "SNAPSHOT"):
                     self.logger.info("Create Snapshot of previous data collection...")
-                    if self.dev_vector_store.client.collection_exists(DEFAULT_COLLECTION):
-                        _ = self.dev_vector_store.client.create_snapshot(collection_name=DEFAULT_COLLECTION, wait=False)
+                    if self.dev_vector_store.client.collection_exists(env.QDRANT_COLLECTION):
+                        _ = self.dev_vector_store.client.create_snapshot(collection_name=env.QDRANT_COLLECTION, wait=False)
 
                         # There will likely be one additional snapshot because the snapshot created in the previous step has not yet been added to the list.
                         all_snapshots: List[models.SnapshotDescription] = self.dev_vector_store.client.list_snapshots(
-                            collection_name=DEFAULT_COLLECTION
+                            collection_name=env.QDRANT_COLLECTION
                         )
                         sorted_snapshots = self.sort_snapshots_by_creation_time(all_snapshots)
                         if len(all_snapshots) >= SNAPSHOTS_TO_KEEP:
                             for snapshot in sorted_snapshots[SNAPSHOTS_TO_KEEP:]:
                                 self.logger.debug("Deleting snapshot %s", snapshot.name)
                                 self.dev_vector_store.client.delete_snapshot(
-                                    collection_name=DEFAULT_COLLECTION, snapshot_name=snapshot.name
+                                    collection_name=env.QDRANT_COLLECTION, snapshot_name=snapshot.name
                                 )
             else:
                 self.logger.info(
@@ -295,7 +294,7 @@ class Fetch_Data:
                 # Keep a cheap zero-vector around for metadata-only points (e.g., ModuleFingerprint)
                 zero_dense_vec = [0.0] * embedding_dim
                 self.dev_vector_store.create_collection(
-                    collection_name=DEFAULT_COLLECTION,
+                    collection_name=env.QDRANT_COLLECTION,
                     vector_size=embedding_dim,
                     enable_sparse=True,
                 )
@@ -442,7 +441,7 @@ class Fetch_Data:
 
                     # Delete existing Moochup points
                     self.dev_vector_store.delete_by_filter(
-                        DEFAULT_COLLECTION,
+                        env.QDRANT_COLLECTION,
                         models.Filter(
                             must=[models.FieldCondition(key="source", match=models.MatchValue(value="Moochup"))]
                         ),
@@ -492,7 +491,7 @@ class Fetch_Data:
                             moodle_courses_done += 1
                             self.ctx.set_counter("moodle_courses_done", moodle_courses_done)
                             self.dev_vector_store.delete_by_filter(
-                                DEFAULT_COLLECTION,
+                                env.QDRANT_COLLECTION,
                                 models.Filter(
                                     must=[
                                         models.FieldCondition(key="source", match=models.MatchValue(value="Moodle")),
@@ -554,7 +553,7 @@ class Fetch_Data:
                         self.logger.warning("Drupal extraction returned 0 documents")
 
                     self.dev_vector_store.delete_by_filter(
-                        DEFAULT_COLLECTION,
+                        env.QDRANT_COLLECTION,
                         models.Filter(
                             must=[models.FieldCondition(key="source", match=models.MatchValue(value="Drupal"))]
                         ),

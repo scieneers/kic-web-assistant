@@ -51,6 +51,8 @@ class EnvHelper(BaseModel):
 
     QDRANT_API_KEY: str = "UNSET"
     QDRANT_URL: str = "UNSET"
+    # Default Qdrant collection to search in and write new vectors to.
+    QDRANT_COLLECTION: str = "aichat"
 
     DATA_SOURCE_MOODLE_URL: str = "UNSET"
     DATA_SOURCE_MOODLE_TOKEN: str = "UNSET"
