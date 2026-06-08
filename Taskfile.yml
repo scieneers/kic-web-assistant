@@ -12,6 +12,23 @@ tasks:
         echo "TARGET: {{ .TARGET }}"
         echo "REGISTRY: {{ .REGISTRY }}"
 
+  qdrant:
+    desc: Start a local Qdrant container (REST :6333, gRPC :6334). Dashboard at http://localhost:6333/dashboard
+    cmds:
+      - docker compose up -d qdrant
+      - echo "Qdrant is up -> http://localhost:6333/dashboard"
+
+  qdrant-logs:
+    desc: Tail the logs of the local Qdrant container
+    cmds:
+      - docker compose logs -f qdrant
+
+  qdrant-down:
+    desc: Stop and remove the local Qdrant container (storage in ./db/qdrant is kept)
+    cmds:
+      - docker compose stop qdrant
+      - docker compose rm -f qdrant
+
   build-frontend:
     desc: Build the docker image for the streamlit frontend
     vars:
@@ -50,6 +67,25 @@ tasks:
           docker build -t {{ .REGISTRY }}/rest-api:{{.VERSION}} -f src/api/Dockerfile .
         {{ end }}
 
+  build-loader:
+    desc: Build the docker image for the data loader (Azure Functions)
+    vars:
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
+    cmds:
+      - echo "Building loader with version {{.VERSION}}"
+      - |
+        {{ if eq .TARGET "linux" }}
+          docker buildx build --load --platform linux/amd64 -t {{ .REGISTRY }}/loader:{{.VERSION}} -f src/loaders/Dockerfile .
+        {{ else }}
+          docker build -t {{ .REGISTRY }}/loader:{{.VERSION}} -f src/loaders/Dockerfile .
+        {{ end }}
+
   push-frontend:
     desc: Push the frontend docker image. Version defaults to git commit hash if not provided.
     vars:
@@ -78,6 +114,20 @@ tasks:
       - echo "Pushing API with version {{.VERSION}}"
       - docker push {{ .REGISTRY }}/rest-api:{{.VERSION}}
 
+  push-loader:
+    desc: Push the loader docker image. Version defaults to git commit hash if not provided.
+    vars:
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
+    cmds:
+      - echo "Pushing loader with version {{.VERSION}}"
+      - docker push {{ .REGISTRY }}/loader:{{.VERSION}}
+
   push-latest-images:
     desc: Pushes the docker images. Make sure to only push amd64 images. Version defaults to git commit hash if not provided.
     vars:
@@ -92,9 +142,33 @@ tasks:
       - echo "Pushing images with version {{.VERSION}}"
       - docker push {{ .REGISTRY }}/app:{{.VERSION}}
       - docker push {{ .REGISTRY }}/rest-api:{{.VERSION}}
+      - docker push {{ .REGISTRY }}/loader:{{.VERSION}}
 
   az-login:
     desc: Login to azure using azure-cli
     cmds:
       - az login --tenant c6ff58bc-993e-4bdb-8d10-6013e2cd361f --scope https://graph.microsoft.com/.default
       - az acr login --name kicacrdev.azurecr.io
+
+  deploy-loader:
+    desc: |
+      Promote a loader image onto the data-loader Function App (out-of-band, like restapi/frontend).
+      Usage: task deploy-loader ENV=dev [-- <version>]   (version defaults to git short SHA)
+      Mirrors Terraform's lifecycle{ignore_changes} on the docker block: TF owns the resource,
+      this owns the running image.
+    vars:
+      ENV: '{{.ENV | default "dev"}}'
+      ACR: 'kicacr{{.ENV | default "dev"}}.azurecr.io'
+      RESOURCE_GROUP: 'kic-aichat-{{.ENV | default "dev"}}'
+      FUNCTION_APP: 'kic-dataloader-{{.ENV | default "dev"}}'
+      VERSION:
+        sh: |
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            git rev-parse --short HEAD
+          fi
+    cmds:
+      - echo "Deploying loader {{.ACR}}/loader:{{.VERSION}} to {{.FUNCTION_APP}} ({{.RESOURCE_GROUP}})"
+      - az functionapp config container set --name {{.FUNCTION_APP}} --resource-group {{.RESOURCE_GROUP}} --image {{.ACR}}/loader:{{.VERSION}}
+      - az functionapp restart --name {{.FUNCTION_APP}} --resource-group {{.RESOURCE_GROUP}}

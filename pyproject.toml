@@ -35,7 +35,10 @@ dependencies = [
     "openpyxl>=3.1.5,<4",
     "certifi>=2025.11.12",
     "pymupdf>=1.26.7,<2",
+    # Linux (Docker/prod) gets the latest; macOS caps at 0.3.44, the last
+    # release that still ships a macOS (universal2) wheel — 0.3.45 is Linux-only.
     "vosk>=0.3.45,<1; sys_platform == 'linux'",
+    "vosk>=0.3.38,<0.3.45; sys_platform == 'darwin'",
     "ragas==0.3.8",
     "fastembed>=0.8.0,<1",
 ]

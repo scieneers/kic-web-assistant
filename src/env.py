@@ -18,6 +18,10 @@ class EnvHelper(BaseModel):
         default="DEV", description="Whether to use production or dev APIs from ki-campus sites"
     )
     DEBUG_MODE: bool = False
+    # Gate audio transcription (Vosk). Off by default: the deployed loader image ships
+    # without the Vosk model or ffmpeg, so leaving this on would crash audio resources.
+    # The code path is intact -- flip to True (and ship model + ffmpeg) to re-enable.
+    AUDIO_TRANSCRIPTION_ENABLED: bool = False
     REST_API_KEYS: list[str] = []
 
     # Base URL for the FastAPI service (used by Streamlit when calling via HTTP)
@@ -133,13 +137,13 @@ class EnvHelper(BaseModel):
         else:
             self.append_variable(
                 kwargs,
-                variable_key="DATA_SOURCE_STAGING_MOODLE_URL",
+                variable_key="DATA_SOURCE_PRODUCTION_MOODLE_URL",
                 secret_client=secret_client,
                 class_variable="DATA_SOURCE_MOODLE_URL",
             )
             self.append_variable(
                 kwargs,
-                variable_key="DATA_SOURCE_STAGING_MOODLE_TOKEN",
+                variable_key="DATA_SOURCE_PRODUCTION_MOODLE_TOKEN",
                 secret_client=secret_client,
                 class_variable="DATA_SOURCE_MOODLE_TOKEN",
             )

@@ -135,7 +135,7 @@ class Fetch_Data:
         # If start_ingest already created a SAS URL for this run, keep it.
         self.preset_log_url = preset_log_url
 
-        self.dev_vector_store = VectorDBQdrant(mode="dev_remote")
+        self.dev_vector_store = VectorDBQdrant(mode="auto")
         self.prod_vector_store = VectorDBQdrant(mode="prod_remote")
 
         self.logger.info("Starting data extraction...")
@@ -353,56 +353,61 @@ class Fetch_Data:
                             format_kv(RUN_ID=self.run_id, RSS_MB=round(rss, 1), BATCH=batch_counter),
                         )
 
-            def _upsert_document_streaming(doc, *, stage: str) -> int:
-                """Chunk/embed/upsert a single Document with strict bounded memory.
+            # Shared node buffer: chunked nodes are accumulated ACROSS documents and
+            # only embedded/upserted once embed_nodes_batch nodes are queued. This keeps
+            # embedding batches full even when individual documents are tiny (common for
+            # Moodle modules), while staying bounded in memory: the buffer never holds
+            # more than one batch worth of nodes.
+            node_buffer: list = []
+            batch_state = {"counter": 0}
 
-                Returns points upserted.
+            def _flush_node_buffer(*, stage: str) -> int:
+                """Embed + upsert everything currently queued in node_buffer.
+
+                Returns points upserted; no-op (returns 0) when the buffer is empty.
                 """
                 nonlocal total_points_upserted
-                points_upserted = 0
-                batch_counter = 0
+                if not node_buffer:
+                    return 0
+                batch_state["counter"] += 1
+                points_upserted = self._embed_and_upsert_nodes(
+                    node_buffer,
+                    stage=stage,
+                    calculate_point_size=calculate_point_size,
+                    batch_by_size=batch_by_size,
+                    max_batch_bytes=MAX_BATCH_SIZE_BYTES,
+                )
+                node_buffer.clear()
+                _maybe_cleanup(batch_state["counter"])
+                total_points_upserted += points_upserted
+                self.ctx.set_counter("points_upserted", total_points_upserted)
+                return points_upserted
 
-                node_batch = []
+            def _queue_document(doc, *, stage: str) -> None:
+                """Chunk a document and append its nodes to the shared buffer.
+
+                Flushes whenever the buffer reaches embed_nodes_batch, but does NOT
+                force a flush at the document boundary - so a single batch can span
+                multiple documents. Callers must invoke _flush_node_buffer() at the end
+                of a stage to drain the remainder.
+                """
                 for node in iter_nodes_from_document_hierarchical(
                     doc,
                     chunk_size_tokens=chunk_size_tokens,
                     chunk_overlap_tokens=chunk_overlap_tokens,
                 ):
-                    node_batch.append(node)
-                    if len(node_batch) < embed_nodes_batch:
-                        continue
-
-                    batch_counter += 1
-                    points_upserted += self._embed_and_upsert_nodes(
-                        node_batch,
-                        stage=stage,
-                        calculate_point_size=calculate_point_size,
-                        batch_by_size=batch_by_size,
-                        max_batch_bytes=MAX_BATCH_SIZE_BYTES,
-                    )
-                    node_batch = []
-                    _maybe_cleanup(batch_counter)
-
-                if node_batch:
-                    batch_counter += 1
-                    points_upserted += self._embed_and_upsert_nodes(
-                        node_batch,
-                        stage=stage,
-                        calculate_point_size=calculate_point_size,
-                        batch_by_size=batch_by_size,
-                        max_batch_bytes=MAX_BATCH_SIZE_BYTES,
-                    )
-                    node_batch = []
-                    _maybe_cleanup(batch_counter)
-
-                total_points_upserted += points_upserted
-                self.ctx.set_counter("points_upserted", total_points_upserted)
-                return points_upserted
+                    node_buffer.append(node)
+                    if len(node_buffer) >= embed_nodes_batch:
+                        _flush_node_buffer(stage=stage)
 
             def _upsert_documents(docs: list, *, stage: str, batch_docs: int = 50) -> int:
-                """Chunk/embed/upsert docs. (legacy helper for non-Moodle sources)."""
-                nonlocal total_points_upserted
-                points_upserted = 0
+                """Chunk/embed/upsert docs (non-Moodle sources).
+
+                Documents are queued into the shared node buffer so embedding batches
+                stay full across document boundaries; the remainder is flushed once at
+                the end of the stage.
+                """
+                start_points = total_points_upserted
 
                 for batch_idx, batch in enumerate(tqdm(chunk_list(docs, batch_docs), desc=f"{stage} batches"), start=1):
                     self.ctx.checkpoint()
@@ -426,9 +431,11 @@ class Fetch_Data:
                         self.ctx.set_last(url=first_url)
 
                     for d in batch:
-                        points_upserted += _upsert_document_streaming(d, stage=stage)
+                        _queue_document(d, stage=stage)
 
-                return points_upserted
+                # Drain the remainder so nodes don't bleed into the next stage.
+                _flush_node_buffer(stage=stage)
+                return total_points_upserted - start_points
 
             # Moochup: delete by source and upsert
             with StageTimer(self.logger, self.ctx, "MOOCHUP"):
@@ -508,27 +515,25 @@ class Fetch_Data:
 
                         moodle_documents += 1
                         self.ctx.set_counter("moodle_documents", moodle_documents)
+                        # Queue the doc's chunks into the shared buffer. The actual
+                        # embed+upsert happens later when the buffer fills (or on the
+                        # end-of-stage flush), so this event means "chunked & queued",
+                        # not "persisted".
+                        _queue_document(doc, stage="MOODLE_UPSERT")
                         self.logger.info(
                             "MOODLE_DOC %s",
                             format_kv(
                                 RUN_ID=self.run_id,
                                 COURSE_ID=course_id,
                                 MODULE_ID=module_id,
-                                EVENT="UPSERT_DOC_BEGIN",
-                            ),
-                        )
-                        _upsert_document_streaming(doc, stage="MOODLE_UPSERT")
-                        self.logger.info(
-                            "MOODLE_DOC %s",
-                            format_kv(
-                                RUN_ID=self.run_id,
-                                COURSE_ID=course_id,
-                                MODULE_ID=module_id,
-                                EVENT="UPSERT_DOC_END",
+                                EVENT="DOC_QUEUED",
                             ),
                         )
 
                         # Additional periodic cleanup handled by _maybe_cleanup and course-boundary cleanup above
+
+                    # Drain any nodes still buffered from the last course(s).
+                    _flush_node_buffer(stage="MOODLE_UPSERT")
 
                 watchdog.stop()
                 watchdog = None

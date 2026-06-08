@@ -19,6 +19,8 @@ jobs:
             dockerfile: src/frontend/Dockerfile
           - image: rest-api
             dockerfile: src/api/Dockerfile
+          - image: loader
+            dockerfile: src/loaders/Dockerfile
 
     steps:
       - name: Checkout repository

@@ -13,6 +13,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from src.env import env
+
 
 class ResourceFileType(StrEnum):
     """Unterstützte Dateitypen für Resource-Module."""
@@ -102,6 +104,9 @@ class Resource(BaseModel):
         elif self.is_html:
             return self._extract_html(file_bytes, logger)
         elif self.is_audio:
+            if not env.AUDIO_TRANSCRIPTION_ENABLED:
+                logger.debug(f"Audio-Transkription deaktiviert, überspringe {self.filename}")
+                return ""
             return self._extract_audio(file_bytes, logger)
         elif self.is_txt:
             return self._extract_txt(file_bytes, logger)
@@ -254,6 +259,9 @@ class Resource(BaseModel):
                         
                         # Audio in ZIP
                         elif file_ext in ['wav', 'mp3', 'm4a']:
+                            if not env.AUDIO_TRANSCRIPTION_ENABLED:
+                                logger.debug(f"Audio-Transkription deaktiviert, überspringe {relative_path}")
+                                continue
                             try:
                                 audio = Audio()
                                 with open(file_path, 'rb') as f:

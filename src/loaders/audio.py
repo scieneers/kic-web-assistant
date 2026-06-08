@@ -16,8 +16,6 @@ import tempfile
 import wave
 from pathlib import Path
 
-from vosk import Model, KaldiRecognizer
-
 
 class Audio:
     """
@@ -38,11 +36,16 @@ class Audio:
     # Path to the Vosk model directory
     # You can download models from: https://alphacephei.com/vosk/models
     # Recommended for German: vosk-model-de-0.21 or vosk-model-small-de-0.15
-    MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "src/loaders/models/vosk_model/vosk-model-de-0.21")
+    MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "src/loaders/models/vosk_model/vosk-model-small-de-0.15")
 
     def __init__(self) -> None:
         self.logger = logging.getLogger("loader.audio")
-        
+
+        # Imported lazily: vosk is a Linux-only dependency (see pyproject.toml),
+        # so importing this module must not require it. It is only needed once an
+        # Audio instance is actually constructed to transcribe a file.
+        from vosk import Model
+
         # Load Vosk model
         if not os.path.exists(self.MODEL_PATH):
             self.logger.error(
@@ -134,7 +137,9 @@ class Audio:
                             f"framerate={wf.getframerate()}"
                         )
                     
-                    # Create recognizer
+                    # Create recognizer (vosk is Linux-only; import lazily)
+                    from vosk import KaldiRecognizer
+
                     rec = KaldiRecognizer(self.model, wf.getframerate())
                     rec.SetWords(True)
                     

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 import time
 import unicodedata
@@ -13,6 +14,7 @@ from typing import Iterable, Optional
 from bs4 import BeautifulSoup, ParserRejectedMarkup
 from llama_index.core import Document
 from pydantic import ValidationError
+from tqdm import tqdm
 
 from src.env import env
 from src.loaders.APICaller import APICaller
@@ -75,6 +77,17 @@ class Moodle:
         courses = caller.getJSON()
         course_url = self.base_url + "course/view.php?id="
         courses = [MoodleCourse(url=course_url, **course) for course in courses if course["visible"] == 1]
+
+        # Testing-only knob: cap the number of courses ingested. Unset (<=0) means all.
+        limit = int(os.getenv("MOODLE_COURSE_LIMIT", "0"))
+        if limit > 0:
+            self.logger.warning(
+                "MOODLE_COURSE_LIMIT=%s set: ingesting only the first %s of %s visible courses",
+                limit,
+                limit,
+                len(courses),
+            )
+            courses = courses[:limit]
 
         return courses
 
@@ -149,7 +162,11 @@ class Moodle:
 
         progress_every = int(os.getenv("RUN_MOODLE_PROGRESS_EVERY", "50"))
 
-        for i, course in enumerate(courses):
+        # Fortschrittsbalken über alle Kurse. Zählt genau einmal pro Kurs weiter
+        # (nicht pro yield), da pro Kurs mehrere Dokumente erzeugt werden.
+        course_progress = tqdm(courses, desc="Moodle: Kurse", unit="Kurs")
+        for i, course in enumerate(course_progress):
+            course_progress.set_postfix_str(f"id={course.id} ({i + 1}/{len(courses)})")
             self.logger.debug("Processing course id=%s (%s/%s)", course.id, i + 1, len(courses))
 
             # Load the lightweight course structure first.
@@ -274,7 +291,10 @@ class Moodle:
 
         progress_every = int(os.getenv("RUN_MOODLE_PROGRESS_EVERY", "50"))
 
-        for i, course in enumerate(courses):
+        # Fortschrittsbalken über alle Kurse. Zählt genau einmal pro Kurs weiter.
+        course_progress = tqdm(courses, desc="Moodle: Kurse", unit="Kurs")
+        for i, course in enumerate(course_progress):
+            course_progress.set_postfix_str(f"id={course.id} ({i + 1}/{len(courses)})")
             self.logger.debug("Processing course id=%s (%s/%s)", course.id, i + 1, len(courses))
 
             if self.run_ctx:
@@ -508,11 +528,21 @@ class Moodle:
         with tempfile.TemporaryDirectory() as tmp_dir:
             # H5P-Package herunterladen
             local_filename = h5pfile_call.getFile(activity.filename, tmp_dir)
-            
+
             # h5p.json für library-Feld extrahieren
-            with zipfile.ZipFile(local_filename, "r") as zip_ref:
-                zip_ref.extract("h5p.json", tmp_dir)
-                zip_ref.extract("content/content.json", tmp_dir)
+            try:
+                with zipfile.ZipFile(local_filename, "r") as zip_ref:
+                    zip_ref.extract("h5p.json", tmp_dir)
+                    zip_ref.extract("content/content.json", tmp_dir)
+            except zipfile.BadZipFile as exc:
+                # Korruptes/kein H5P-Paket (z.B. HTML-Fehlerseite statt ZIP).
+                # Modul überspringen statt den ganzen Lauf abzubrechen; lokal das
+                # defekte Paket für die Fehleranalyse aufheben.
+                self.logger.warning(
+                    f"Ungültiges H5P-ZIP für Modul {module.id} ({activity.filename}): {exc}"
+                )
+                self._save_bad_h5p_zip(local_filename, module, activity)
+                return f"Ungültiges H5P-ZIP-Paket: {exc}"
             
             # Lade h5p.json für library-Informationen
             h5p_json = f"{tmp_dir}/h5p.json"
@@ -560,8 +590,38 @@ class Moodle:
                 self.logger.info(f"Modul {module.id} erfolgreich verarbeitet")
             
             return err
-        
+
         return None
+
+    @staticmethod
+    def _is_local_run() -> bool:
+        """True, wenn nicht in Azure (App Service/Functions) ausgeführt.
+
+        Azure injiziert WEBSITE_INSTANCE_ID auf jeder Instanz; lokal ist die
+        Variable nie gesetzt. So bleibt das Aufheben defekter Pakete eine reine
+        Entwickler-Hilfe und produziert in der Cloud keine verwaisten Dateien.
+        """
+        return not os.getenv("WEBSITE_INSTANCE_ID")
+
+    def _save_bad_h5p_zip(self, local_filename: str, module, activity) -> None:
+        """Kopiert ein defektes H5P-ZIP zur Fehleranalyse beiseite (nur lokal).
+
+        Muss aufgerufen werden, solange das umgebende TemporaryDirectory noch
+        existiert, da local_filename sonst bereits gelöscht ist.
+        """
+        if not self._is_local_run():
+            return
+        try:
+            dest_dir = Path(os.getenv("H5P_BAD_ZIP_DIR", "bad_h5p_zips"))
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            # Modul-ID voranstellen, damit der Dateiname eindeutig und auffindbar ist.
+            safe_name = os.path.basename(activity.filename or "unknown.h5p")
+            dest = dest_dir / f"{module.id}_{safe_name}"
+            shutil.copyfile(local_filename, dest)
+            self.logger.info(f"Defektes H5P-Paket gespeichert unter {dest}")
+        except Exception as exc:
+            # Das Aufheben ist Best-Effort und darf den Lauf nie beeinflussen.
+            self.logger.warning(f"Konnte defektes H5P-Paket nicht speichern: {exc}")
 
     def extract_glossary(self, module):
         """

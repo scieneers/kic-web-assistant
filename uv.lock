@@ -1,6 +1,11 @@
 version = 1
 revision = 3
 requires-python = "==3.11.*"
+resolution-markers = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin'",
+    "sys_platform != 'darwin' and sys_platform != 'linux'",
+]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -1286,7 +1291,8 @@ dependencies = [
     { name = "qdrant-client" },
     { name = "ragas" },
     { name = "retry" },
-    { name = "vosk", marker = "sys_platform == 'linux'" },
+    { name = "vosk", version = "0.3.44", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "vosk", version = "0.3.45", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "webvtt-py" },
     { name = "youtube-transcript-api" },
 ]
@@ -1363,6 +1369,7 @@ requires-dist = [
     { name = "tiktoken", marker = "extra == 'ragas'", specifier = "~=0.12.0" },
     { name = "trubrics", extras = ["streamlit"], marker = "extra == 'frontend'", specifier = "~=1.6.2" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.24.0.post1,<0.25" },
+    { name = "vosk", marker = "sys_platform == 'darwin'", specifier = ">=0.3.38,<0.3.45" },
     { name = "vosk", marker = "sys_platform == 'linux'", specifier = ">=0.3.45,<1" },
     { name = "webvtt-py", specifier = "~=0.4.6" },
     { name = "youtube-transcript-api", specifier = "~=0.6.2" },
@@ -3422,14 +3429,35 @@ wheels = [
 
 [[package]]
 name = "vosk"
+version = "0.3.44"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "cffi", marker = "sys_platform == 'darwin'" },
+    { name = "requests", marker = "sys_platform == 'darwin'" },
+    { name = "srt", marker = "sys_platform == 'darwin'" },
+    { name = "tqdm", marker = "sys_platform == 'darwin'" },
+    { name = "websockets", marker = "sys_platform == 'darwin'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/19/5e8299237bc2005c3d155d3b48adba6fd6484465ad5c970302fc1d37947d/vosk-0.3.44-py3-none-macosx_10_6_universal2.whl", hash = "sha256:029d0b3d6a5cff874c575b8a5814a4cccfb37608cff52e846c02a8c67a882801", size = 4710953, upload-time = "2022-09-25T19:11:57.513Z" },
+]
+
+[[package]]
+name = "vosk"
 version = "0.3.45"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "sys_platform == 'linux'",
+]
 dependencies = [
-    { name = "cffi" },
-    { name = "requests" },
-    { name = "srt" },
-    { name = "tqdm" },
-    { name = "websockets" },
+    { name = "cffi", marker = "sys_platform == 'linux'" },
+    { name = "requests", marker = "sys_platform == 'linux'" },
+    { name = "srt", marker = "sys_platform == 'linux'" },
+    { name = "tqdm", marker = "sys_platform == 'linux'" },
+    { name = "websockets", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/6d/728d89a4fe8d0573193eb84761b6a55e25690bac91e5bbf30308c7f80051/vosk-0.3.45-py3-none-linux_armv7l.whl", hash = "sha256:4221f83287eefe5abbe54fc6f1da5774e9e3ffcbbdca1705a466b341093b072e", size = 2388263, upload-time = "2022-12-14T23:13:34.467Z" },

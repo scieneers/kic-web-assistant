@@ -39,10 +39,23 @@ class VectorDBQdrant:
         elif mode == "auto":
             is_dev = env.ENVIRONMENT == "DEV"
             timeout = 120 if is_dev else 30
-            self.logger.info(
-                "Connecting to Qdrant at %s (ENVIRONMENT=%s, timeout=%ss)", env.QDRANT_URL, env.ENVIRONMENT, timeout
+            # Local dev: a plain-http or localhost URL points at a container (e.g. `task qdrant`),
+            # so connect over the URL's own port/scheme without TLS or an api key.
+            is_local = env.QDRANT_URL.startswith("http://") or any(
+                host in env.QDRANT_URL for host in ("localhost", "127.0.0.1")
             )
-            self.client = QdrantClient(url=env.QDRANT_URL, port=443, https=True, timeout=timeout, api_key=env.QDRANT_API_KEY)
+            if is_local:
+                self.logger.info(
+                    "Connecting to local Qdrant at %s (ENVIRONMENT=%s, timeout=%ss)", env.QDRANT_URL, env.ENVIRONMENT, timeout
+                )
+                self.client = QdrantClient(url=env.QDRANT_URL, timeout=timeout)
+            else:
+                self.logger.info(
+                    "Connecting to Qdrant at %s (ENVIRONMENT=%s, timeout=%ss)", env.QDRANT_URL, env.ENVIRONMENT, timeout
+                )
+                self.client = QdrantClient(
+                    url=env.QDRANT_URL, port=443, https=True, timeout=timeout, api_key=env.QDRANT_API_KEY
+                )
             _ = self.client.get_collections()
         elif mode == "memory":
             self.client = QdrantClient(":memory:")
@@ -115,25 +128,19 @@ class VectorDBQdrant:
                 _ = self.client.create_payload_index(
                     collection_name=collection_name,
                     field_name="source",
-                    field_schema=models.PayloadSchemaParams(
-                        type="keyword"
-                    )
+                    field_schema=models.PayloadSchemaType.KEYWORD,
                 )
 
                 _ = self.client.create_payload_index(
                     collection_name=collection_name,
                     field_name="course_id",
-                    field_schema=models.PayloadSchemaParams(
-                        type="keyword"
-                    )
+                    field_schema=models.PayloadSchemaType.KEYWORD,
                 )
 
                 _ = self.client.create_payload_index(
                     collection_name=collection_name,
                     field_name="module_id",
-                    field_schema=models.PayloadSchemaParams(
-                        type="keyword"
-                    )
+                    field_schema=models.PayloadSchemaType.KEYWORD,
                 )
 
                 print(f"Created hybrid collection '{collection_name}' with dense (size={vector_size}) and sparse vectors.")
@@ -163,11 +170,21 @@ class VectorDBQdrant:
         """
         qdrant_points = [PointStruct(**point) for point in points]
         try:
+            # Keep real multiprocessing (parallel=4), but pick a fork-safe start
+            # method per platform. On macOS, both the default "fork" and Qdrant's
+            # preferred "forkserver" fork from a parent that has already initialized
+            # the Objective-C runtime, which crashes the workers
+            # ("+[NSCharacterSet initialize] ... fork()"); they then never populate
+            # the result queue and the parent raises _queue.Empty. "spawn" execs a
+            # fresh interpreter and inherits no Obj-C state, so it is safe. On Linux
+            # we let Qdrant default (method=None -> "forkserver"), which is faster.
+            start_method = "spawn" if sys.platform == "darwin" else None
             operation_info = self.client.upload_points(
                 collection_name=collection_name,
                 points=qdrant_points,
-                parallel=4,
-                max_retries=3
+                parallel=10,
+                method=start_method,
+                max_retries=3,
             )
         except ResponseHandlingException as e:
             # Z.B. httpx.RemoteProtocolError: "Server disconnected without sending a response".
