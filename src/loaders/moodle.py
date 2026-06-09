@@ -110,7 +110,20 @@ class Moodle:
             params={**self.function_params, "courseids[0]": course_id},
             wsfunction="mod_h5pactivity_get_h5pactivities_by_courses",
         )
-        ids_json = h5p_module_ids_caller.getJSON()
+        try:
+            ids_json = h5p_module_ids_caller.getJSON()
+        except Exception as e:
+            # Moodle core bug: when an H5P activity has a missing/orphaned backing
+            # file, the webservice raises a server-side PHP error
+            # ("Call to a member function get_pathnamehash() on bool") for the
+            # *whole* course. We can't fix Moodle, so treat this course as having
+            # no H5P activities instead of aborting the entire ingestion run.
+            self.logger.warning(
+                "Moodle: get_h5p_module_ids failed for course_id=%s, skipping H5P activities: %s",
+                course_id,
+                e,
+            )
+            return []
         h5p_activities = [H5PActivities(**activity) for activity in ids_json["h5pactivities"]]
         return h5p_activities
 
