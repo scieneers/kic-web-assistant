@@ -24,6 +24,8 @@ class Vimeo:
         url = self.api_endpoint + video_id + "/texttracks"
         texttrack_caller = APICaller(url=url, headers=self.headers)
         err_message = None
+        response_json = None
+        result_index = None
 
         try:
             response_json = texttrack_caller.getJSON()["data"]
@@ -56,8 +58,9 @@ class Vimeo:
                 result_index = None
                 err_message = "Transcript liegt nicht (in Deutsch oder Englisch) vor"
         except requests.exceptions.HTTPError as err:
-            if err.response.status_code == 404:
-                return None, "Transcript konnte nicht abgerufen werden"
+            status_code = err.response.status_code if err.response is not None else "unknown"
+            self.logger.warn(f"Failed to fetch texttracks for video {video_id} (status {status_code})")
+            return None, "Transcript konnte nicht abgerufen werden"
         return (response_json[result_index], None) if result_index is not None else (None, err_message)
 
     def get_transcript(self, video_id: str, fallback_transcript: str | None = None, fallback_transcript_content: str | None = None) -> Optional[TextTrack]:
