@@ -203,25 +203,25 @@ class VectorDBQdrant:
         """
         qdrant_points = [PointStruct(**point) for point in points]
         try:
-            # Keep real multiprocessing (parallel=4), but pick a fork-safe start
-            # method per platform. On macOS, both the default "fork" and Qdrant's
-            # preferred "forkserver" fork from a parent that has already initialized
-            # the Objective-C runtime, which crashes the workers
-            # ("+[NSCharacterSet initialize] ... fork()"); they then never populate
-            # the result queue and the parent raises _queue.Empty. "spawn" execs a
-            # fresh interpreter and inherits no Obj-C state, so it is safe. On Linux
-            # we let Qdrant default (method=None -> "forkserver"), which is faster.
-            start_method = "spawn" if sys.platform == "darwin" else None
+            # parallel=1 keeps the upload in-process: qdrant-client takes a plain
+            # sequential code path and never starts its ParallelWorkerPool. We saw
+            # the pool raise "RuntimeError: Thread unexpectedly terminated" in the
+            # Azure Functions sandbox, where a forked worker gets OOM-killed and the
+            # parent concludes a worker died without reporting a result. Since the
+            # caller already loops over size-bounded batches, the pool added almost
+            # no throughput here. Staying single-process also sidesteps the macOS
+            # fork/Objective-C crash, so no per-platform start method is needed.
             operation_info = self.client.upload_points(
                 collection_name=collection_name,
                 points=qdrant_points,
-                parallel=10,
-                method=start_method,
+                parallel=1,
                 max_retries=3,
             )
-        except ResponseHandlingException as e:
-            # Z.B. httpx.RemoteProtocolError: "Server disconnected without sending a response".
-            # Nur diesen Batch überspringen und weitermachen, statt den gesamten Lauf abzubrechen.
+        except (ResponseHandlingException, RuntimeError) as e:
+            # ResponseHandlingException z.B. httpx.RemoteProtocolError ("Server
+            # disconnected without sending a response"); RuntimeError as a defensive
+            # net for qdrant-client's parallel/transport edge cases. Nur diesen Batch
+            # überspringen und weitermachen, statt den gesamten Lauf abzubrechen.
             self.logger.warning(
                 "Qdrant upsert failed: collection=%s points=%s exc=%s",
                 collection_name,
