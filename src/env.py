@@ -18,9 +18,6 @@ class EnvHelper(BaseModel):
         default="DEV", description="Whether to use production or dev APIs from ki-campus sites"
     )
     DEBUG_MODE: bool = False
-    # Gate audio transcription (Vosk). Off by default: the deployed loader image ships
-    # without the Vosk model or ffmpeg, so leaving this on would crash audio resources.
-    # The code path is intact -- flip to True (and ship model + ffmpeg) to re-enable.
     AUDIO_TRANSCRIPTION_ENABLED: bool = False
     REST_API_KEYS: list[str] = []
 

@@ -151,11 +151,7 @@ tasks:
       - az acr login --name kicacrdev.azurecr.io
 
   deploy-loader:
-    desc: |
-      Promote a loader image onto the data-loader Function App (out-of-band, like restapi/frontend).
-      Usage: task deploy-loader ENV=dev [-- <version>]   (version defaults to git short SHA)
-      Mirrors Terraform's lifecycle{ignore_changes} on the docker block: TF owns the resource,
-      this owns the running image.
+    desc: "Promote a loader image onto the data-loader Function App. Usage: task deploy-loader ENV=dev [-- <version>]"
     vars:
       ENV: '{{.ENV | default "dev"}}'
       ACR: 'kicacr{{.ENV | default "dev"}}.azurecr.io'

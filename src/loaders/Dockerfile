@@ -12,9 +12,6 @@ WORKDIR /home/site/wwwroot
 RUN pip install uv
 
 COPY uv.lock pyproject.toml ./
-# `uv sync` only targets a project venv, but the Azure Functions host runs the system
-# interpreter (/usr/local/bin/python) and won't see a venv. Export the locked deps and
-# install them into the system environment instead (--system is valid for `uv pip`).
 RUN uv export --frozen --no-dev --no-emit-project --extra azfunction --format requirements-txt > requirements.txt \
     && uv pip install --system -r requirements.txt
 

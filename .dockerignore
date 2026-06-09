@@ -4,8 +4,5 @@ qdrant_storage
 exploration
 out
 FailedTranscripts.xlsx
-# Vosk model + audio fixtures: audio transcription is disabled (AUDIO_TRANSCRIPTION_ENABLED),
-# so the model must NOT bloat the image. Keeps local builds matching the CI build (where the
-# untracked model dir is absent). Re-include deliberately if audio is ever re-enabled.
 src/loaders/models/vosk_model
 bad_h5p_zips

@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 import warnings
 from typing import List
 
@@ -35,7 +36,7 @@ class VectorDBQdrant:
             timeout = _DEPRECATED_MODES[mode]
             self.logger.info("Connecting to Qdrant at %s (legacy mode='%s', timeout=%ss)", env.QDRANT_URL, mode, timeout)
             self.client = QdrantClient(url=env.QDRANT_URL, port=443, https=True, timeout=timeout, api_key=env.QDRANT_API_KEY)
-            _ = self.client.get_collections()
+            self._probe_connection()
         elif mode == "auto":
             is_dev = env.ENVIRONMENT == "DEV"
             timeout = 120 if is_dev else 30
@@ -56,7 +57,7 @@ class VectorDBQdrant:
                 self.client = QdrantClient(
                     url=env.QDRANT_URL, port=443, https=True, timeout=timeout, api_key=env.QDRANT_API_KEY
                 )
-            _ = self.client.get_collections()
+            self._probe_connection()
         elif mode == "memory":
             self.client = QdrantClient(":memory:")
         elif mode == "disk":
@@ -71,6 +72,38 @@ class VectorDBQdrant:
                 raise e
         else:
             raise ValueError(f"Invalid mode '{mode}'. Must be 'auto', 'memory', or 'disk'.")
+
+    def _probe_connection(self, attempts: int = 4, base_delay: float = 1.0) -> None:
+        """Verify connectivity with a lightweight get_collections() call.
+
+        `get_collections()` is one of Qdrant's cheapest endpoints, so a failure
+        here is almost always a transient transport blip (server restarting,
+        momentary network hiccup) rather than a slow query. We retry such
+        failures with exponential backoff so a brief outage doesn't abort an
+        entire ingestion run at construction time. A non-transient error
+        (e.g. UnexpectedResponse from a bad api key) is not caught here and
+        surfaces immediately.
+        """
+        last_err: ResponseHandlingException | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                _ = self.client.get_collections()
+                return
+            except ResponseHandlingException as e:
+                last_err = e
+                if attempt == attempts:
+                    break
+                delay = base_delay * (2 ** (attempt - 1))
+                self.logger.warning(
+                    "Qdrant connectivity probe failed (attempt %s/%s): %s. Retrying in %.1fs...",
+                    attempt,
+                    attempts,
+                    e,
+                    delay,
+                )
+                time.sleep(delay)
+        self.logger.error("Qdrant connectivity probe failed after %s attempts.", attempts)
+        raise last_err
 
     def as_llama_vector_store(self, collection_name) -> QdrantVectorStore:
         return QdrantVectorStore(client=self.client, collection_name=collection_name, max_retries=10)
