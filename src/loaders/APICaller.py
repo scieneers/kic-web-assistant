@@ -9,6 +9,21 @@ from pydantic import HttpUrl
 # requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
 
+class MoodleMaintenanceError(Exception):
+    """Raised when the Moodle webservice reports that the whole site is down.
+
+    This is a *global* condition (e.g. errorcode "sitemaintenance"): every
+    subsequent API call will fail too, so callers must abort the run rather than
+    skip the offending module. Skipping would let the ingestion delete existing
+    indexed data and replace it with incomplete content during the outage.
+    """
+
+
+# Moodle webservice errorcodes that mean the entire site is unavailable.
+# These are NOT per-resource failures, so they must abort the whole run.
+_SITE_DOWN_ERRORCODES = {"sitemaintenance", "maintenance", "servicenotavailable"}
+
+
 class APICaller:
     def __init__(self, url: HttpUrl, params: dict = {}, headers: dict = {}, **kwargs) -> None:
         self.logger = logging.getLogger("loader")
@@ -53,6 +68,9 @@ class APICaller:
         if isinstance(response_json, dict) and "exception" in response_json:
             errorcode = response_json.get("errorcode", "UnknownError")
             message = response_json.get("message", "No message provided")
+            if errorcode in _SITE_DOWN_ERRORCODES:
+                # Whole site is down — abort the run instead of failing this one call.
+                raise MoodleMaintenanceError(f"{errorcode}: {message}")
             raise Exception(f"{errorcode}: {message}")
         return response_json
 

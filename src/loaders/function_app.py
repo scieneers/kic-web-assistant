@@ -2,9 +2,33 @@ import os
 import sys
 import json
 import logging
+from datetime import timedelta
 
 import azure.functions as func
 import azure.durable_functions as df
+
+# Sentinel embedded in the activity's failure message when Moodle is in
+# maintenance mode. The orchestrator string-matches on this to decide whether to
+# wait-and-retry (vs. failing immediately on any other error). It is independent
+# of the exception class so it survives Durable's serialization and the differing
+# import roots between the activity and the loaders package.
+MOODLE_MAINTENANCE_SENTINEL = "MOODLE_MAINTENANCE"
+
+
+def _is_maintenance_error(exc: BaseException) -> bool:
+    """True if exc (or anything in its cause/context chain) is a Moodle site-down error.
+
+    Matched by class name rather than import to avoid coupling to the loaders
+    package's deploy path.
+    """
+    seen = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if type(cur).__name__ == "MoodleMaintenanceError":
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 current = os.path.dirname(os.path.realpath(__file__))
 parent = os.path.dirname(current)
@@ -100,9 +124,30 @@ async def start_ingest(req: func.HttpRequest, client: df.DurableOrchestrationCli
 def ingest_orchestrator(context: df.DurableOrchestrationContext):
     """Orchestrator that coordinates data ingestion activities."""
     payload = context.get_input() or {}
-    # Call the activity function that does the actual work
-    result = yield context.call_activity("run_data_extraction", payload)
-    return result
+
+    # Retry ONLY when Moodle is in maintenance mode (the whole site is down).
+    # Any other failure surfaces immediately. We can't use call_activity_with_retry
+    # for this because its RetryOptions retries on *any* exception; instead we loop
+    # with a durable timer and re-dispatch only on the maintenance sentinel.
+    # Reading env here is replay-safe (deterministic within a run).
+    retry_interval_min = int(os.getenv("INGEST_RETRY_INTERVAL_MINUTES", "30"))
+    retry_max_attempts = int(os.getenv("INGEST_RETRY_MAX_ATTEMPTS", "6"))
+
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            result = yield context.call_activity("run_data_extraction", payload)
+            return result
+        except Exception as e:
+            is_maintenance = MOODLE_MAINTENANCE_SENTINEL in str(e)
+            if is_maintenance and attempt < retry_max_attempts:
+                # Site is down — wait via a durable timer, then re-dispatch.
+                deadline = context.current_utc_datetime + timedelta(minutes=retry_interval_min)
+                yield context.create_timer(deadline)
+                continue
+            # Non-maintenance failure, or maintenance retries exhausted: fail the run.
+            raise
 
 
 # 3. Activity Function - Does the actual work
@@ -124,6 +169,12 @@ def run_data_extraction(payload) -> str:
         # Durable Functions will JSON-serialize dict outputs.
         return result
     except Exception as e:
+        if _is_maintenance_error(e):
+            # Tag the failure so the orchestrator waits-and-retries instead of
+            # failing the run. The whole Moodle site is down; retrying later is
+            # the right move, and continuing would risk deleting indexed data.
+            logger.warning("Moodle site in maintenance mode; signaling orchestrator to retry: %s", e)
+            raise Exception(f"{MOODLE_MAINTENANCE_SENTINEL}: {e}") from e
         logger.exception("Data extraction failed")
         raise
 

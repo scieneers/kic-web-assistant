@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from tqdm import tqdm
 
 from src.env import env
-from src.loaders.APICaller import APICaller
+from src.loaders.APICaller import APICaller, MoodleMaintenanceError
 from src.loaders.failed_transcripts import (
     FailedCourse,
     FailedModule,
@@ -112,6 +112,9 @@ class Moodle:
         )
         try:
             ids_json = h5p_module_ids_caller.getJSON()
+        except MoodleMaintenanceError:
+            # Whole site is down — abort the run, don't treat as "no H5P activities".
+            raise
         except Exception as e:
             # Moodle core bug: when an H5P activity has a missing/orphaned backing
             # file, the webservice raises a server-side PHP error
@@ -495,12 +498,20 @@ class Moodle:
         return err_message if err_message is not None else None
 
     def extract_videotime(self, module):  # TODO: rename method
-        videotime_data = self.get_videotime_content(module.id)
-        
+        try:
+            videotime_data = self.get_videotime_content(module.id)
+        except MoodleMaintenanceError:
+            # Whole site is down — let this propagate to abort the run.
+            raise
+        except Exception as e:
+            error_msg = f"Fehler beim Laden von VideoTime-Modul {module.id}: {str(e)}"
+            self.logger.error(error_msg)
+            return error_msg
+
         # Übertrage intro, falls vorhanden und nicht leer
         if videotime_data.get('intro') and videotime_data['intro'].strip():
             module.intro = videotime_data['intro']
-        
+
         try:
             videotime = Video(**videotime_data)
         except ValidationError as e:
@@ -695,7 +706,10 @@ class Moodle:
             
             self.logger.info(f"Glossary {glossary_id} erfolgreich geladen: {len(entries)}/{total_count} Einträge")
             return None
-            
+
+        except MoodleMaintenanceError:
+            # Whole site is down — abort the run instead of marking this module failed.
+            raise
         except Exception as e:
             error_msg = f"Fehler beim Laden von Glossary {module.id}: {str(e)}"
             self.logger.error(error_msg)
@@ -1236,7 +1250,10 @@ class Moodle:
             # - mod_glossary_get_glossaries_by_courses
             # - mod_page_get_pages_by_courses
             # etc.
-            
+
+        except MoodleMaintenanceError:
+            # Whole site is down — abort the run instead of continuing with empty intros.
+            raise
         except Exception as e:
             self.logger.warning(f"Fehler beim Laden der Module-Intros für Kurs {course_id}: {e}")
     
