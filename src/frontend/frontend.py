@@ -9,7 +9,7 @@ from streamlit_feedback import streamlit_feedback
 
 from src.env import env
 from src.llm.objects.LLMs import Models
-from src.vectordb.qdrant import VectorDBQdrant
+from src.vectordb.azure_search import VectorDBAzureSearch
 
 
 # Texts shown while waiting for the first streamed token.
@@ -85,7 +85,7 @@ def get_api_client() -> httpx.Client:
 # selection is done, we remove the prefix.
 @st.cache_resource
 def create_courses_modules_tree() -> list:
-    course_records, module_records = VectorDBQdrant().get_course_module_records("web_assistant_hybrid")
+    course_records, module_records = VectorDBAzureSearch().get_course_module_records()
     tree_dict = {}
 
     # Sets to track unique course_ids and module_ids

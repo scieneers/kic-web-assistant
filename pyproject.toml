@@ -9,14 +9,14 @@ authors = [
 readme = "README.md"
 requires-python = "~=3.11.0"
 dependencies = [
-    "qdrant-client>=1.16.0",
+    "azure-search-documents>=11.5.2,<12",
+    "azure-identity>=1.19.0,<2",
     "llama-index==0.14.22",
     "llama-index-embeddings-azure-openai==0.5.2",
     "llama-index-llms-azure-openai==0.5.5",
     "llama-index-llms-openai-like==0.7.2",
     "llama-index-llms-azure-inference==0.7.0",
     "llama-index-callbacks-langfuse==0.5.0",
-    "llama-index-vector-stores-qdrant==0.10.1",
     "llamaapi~=0.1.36",
     "langgraph>=1.0.0,<2",
     "langgraph-checkpoint>=2.0.0,<3",
@@ -40,7 +40,6 @@ dependencies = [
     "vosk>=0.3.45,<1; sys_platform == 'linux'",
     "vosk>=0.3.38,<0.3.45; sys_platform == 'darwin'",
     "ragas==0.3.8",
-    "fastembed>=0.8.0,<1",
 ]
 
 [project.optional-dependencies]

@@ -18,18 +18,18 @@ from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.env import env
 from src.llm.assistant import KICampusAssistant
 from src.llm.objects.LLMs import Models
-from src.vectordb.qdrant import VectorDBQdrant
+from src.vectordb.azure_search import VectorDBAzureSearch
 from src.llm.streaming import TokenCallbackContext
 
 # Lazy singletons - initialized on first request to avoid blocking app startup
-_vector_db: VectorDBQdrant | None = None
+_vector_db: VectorDBAzureSearch | None = None
 _assistant: KICampusAssistant | None = None
 
 
-def get_vector_db() -> VectorDBQdrant:
+def get_vector_db() -> VectorDBAzureSearch:
     global _vector_db
     if _vector_db is None:
-        _vector_db = VectorDBQdrant()
+        _vector_db = VectorDBAzureSearch()
     return _vector_db
 
 

@@ -158,7 +158,7 @@ class Moodle:
         - yields the course-level Document first
         - then yields one Document per module
 
-        The caller can delete old Qdrant points once per course and then upsert
+        The caller can delete old documents once per course and then upsert
         documents incrementally.
         """
 

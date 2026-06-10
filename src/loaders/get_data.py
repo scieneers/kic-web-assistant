@@ -1,42 +1,71 @@
+import json
 import logging
 import os
 import time
-from datetime import datetime
-from typing import List
 import uuid
 import gc
 
-from qdrant_client.http import models
 from tqdm import tqdm
 
 from src.env import env
 from src.llm.objects.LLMs import LLM
-from fastembed import SparseTextEmbedding
 from src.loaders.drupal import Drupal
 from src.loaders.moochup import Moochup
 from src.loaders.moodle import Moodle
 from src.loaders.helper import iter_nodes_from_document_hierarchical
-from src.vectordb.qdrant import VectorDBQdrant
+from src.vectordb.azure_search import VectorDBAzureSearch, sanitize_key
 from src.loaders.run_logger import Heartbeat, RunContext, RunLogger, StageTimer, Watchdog, format_kv
 
-SNAPSHOTS_TO_KEEP = 3
+
+def _as_int(value) -> int | None:
+    """Coerce a metadata value to int for an Edm.Int64 field, or None.
+
+    Loaders normally provide int course/module ids, but a stray string would
+    otherwise fail the whole upload batch. Unconvertible values fall back to
+    None at the top level (the original is still preserved in metadata_json).
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # A full run takes about 2,5 hours (2025-02-11)
 class Fetch_Data:
-    def _embed_and_upsert_nodes(
-        self,
-        nodes: list,
-        *,
-        stage: str,
-        calculate_point_size,
-        batch_by_size,
-        max_batch_bytes: int,
-    ) -> int:
-        """Embed a small batch of nodes and upsert them.
+    @staticmethod
+    def _build_document(node, text: str, md: dict, dense_vec: list[float]) -> dict:
+        """Map a chunked node into an Azure AI Search document.
+
+        Explicit, typed fields cover everything we filter or display on; the
+        full original metadata is preserved verbatim in `metadata_json` so the
+        retriever can reconstruct the node losslessly. Only declared index
+        fields are included - Azure rejects unknown fields.
+        """
+        raw_id = node.node_id or str(uuid.uuid4())
+        return {
+            "id": sanitize_key(raw_id),
+            "text": text,
+            "source": md.get("source"),
+            "type": md.get("type"),
+            "course_id": _as_int(md.get("course_id")),
+            "module_id": _as_int(md.get("module_id")),
+            "url": md.get("url"),
+            "fullname": md.get("fullname"),
+            "title": md.get("title"),
+            "is_important": md.get("is_important"),
+            "date_created": md.get("date_created"),
+            "metadata_json": json.dumps(md, default=str, ensure_ascii=False),
+            "dense": dense_vec,
+        }
+
+    def _embed_and_upsert_nodes(self, nodes: list, *, stage: str) -> int:
+        """Embed a small batch of nodes and upsert them into Azure AI Search.
 
         Designed to be called with *small* `nodes` batches (e.g. 32-64) to keep
-        memory bounded.
+        memory bounded. The store internally chunks the upload to Azure's batch
+        limits (<=1000 docs and <=16 MB per request).
         """
         if not nodes:
             return 0
@@ -44,71 +73,42 @@ class Fetch_Data:
         texts_to_embed = [n.get_content() for n in nodes]
         dense_embeddings = self.embedder.get_text_embedding_batch(texts_to_embed)
 
-        hybrid_points: list[dict] = []
-        sparse_embeddings_batch = list(self.sparse_encoder.embed(texts_to_embed))
-        
-        for index, (node, dense_vec) in enumerate(zip(nodes, dense_embeddings)):
-            text = node.get_content()
-            sparse_result = sparse_embeddings_batch[index]
-            sparse_dict = {
-                "indices": sparse_result.indices.tolist(),
-                "values": sparse_result.values.tolist()
-            }
-            hybrid_points.append(
-                {
-                    "id": node.node_id or str(uuid.uuid4()),
-                    "vector": {"dense": dense_vec, "sparse": sparse_dict},
-                    "payload": {"text": text, **node.metadata},
-                }
-            )
+        documents: list[dict] = [
+            self._build_document(node, node.get_content(), node.metadata or {}, dense_vec)
+            for node, dense_vec in zip(nodes, dense_embeddings)
+        ]
 
-        points_upserted = 0
-        for size_batch_idx, size_batch in enumerate(batch_by_size(hybrid_points, max_batch_bytes), start=1):
-            batch_size_mb = sum(calculate_point_size(p) for p in size_batch) / (1024 * 1024)
-            self.logger.info(
-                "QDRANT_UPSERT_BEGIN %s",
-                format_kv(
-                    RUN_ID=self.run_id,
-                    STAGE=stage,
-                    COLLECTION=env.QDRANT_COLLECTION,
-                    BATCH_POINT_GROUP=size_batch_idx,
-                    BATCH_POINTS=len(size_batch),
-                    BATCH_MB=round(batch_size_mb, 2),
-                ),
-            )
-            t_upsert = time.time()
-            self.dev_vector_store.upsert(env.QDRANT_COLLECTION, size_batch)
-            self.logger.info(
-                "QDRANT_UPSERT_END %s",
-                format_kv(
-                    RUN_ID=self.run_id,
-                    STAGE=stage,
-                    COLLECTION=env.QDRANT_COLLECTION,
-                    BATCH_POINT_GROUP=size_batch_idx,
-                    BATCH_POINTS=len(size_batch),
-                    ELAPSED_MS=int((time.time() - t_upsert) * 1000),
-                ),
-            )
-            points_upserted += len(size_batch)
+        self.logger.info(
+            "AZURE_SEARCH_UPSERT_BEGIN %s",
+            format_kv(RUN_ID=self.run_id, STAGE=stage, INDEX=env.AZURE_SEARCH_INDEX, DOCS=len(documents)),
+        )
+        t_upsert = time.time()
+        uploaded = self.search_store.upload_documents(env.AZURE_SEARCH_INDEX, documents)
+        self.logger.info(
+            "AZURE_SEARCH_UPSERT_END %s",
+            format_kv(
+                RUN_ID=self.run_id,
+                STAGE=stage,
+                INDEX=env.AZURE_SEARCH_INDEX,
+                DOCS=uploaded,
+                ELAPSED_MS=int((time.time() - t_upsert) * 1000),
+            ),
+        )
 
         # Help GC by dropping large structures promptly
-        del hybrid_points
+        del documents
         del dense_embeddings
         del texts_to_embed
-        return points_upserted
+        return uploaded
 
     def sanity_check(self):
-        # Check if URLs are missing in metadata,
-        # every point needs a non-empty url field in the metadata
-        query_filter = models.Filter(must=[models.IsEmptyCondition(is_empty=models.PayloadField(key="url"))])
-
-        if self.dev_vector_store.query_with_filter(env.QDRANT_COLLECTION, query_filter) != ([], None):
+        # Every document needs a non-empty url so we can link back to content.
+        if self.search_store.any_match("url eq null or url eq ''", index_name=env.AZURE_SEARCH_INDEX):
             self.logger.error("Missing URLs in Metadata, linking to content not possible in all cases")
 
     def __init__(self, run_id: str | None = None, preset_log_url: str | None = None):
         self.DATA_PATH = "./data"
         self.embedder = LLM().get_embedder()
-        self.sparse_encoder = SparseTextEmbedding("Qdrant/bm42-all-minilm-l6-v2-attentions")  # NEW: FastEmbed BM42 sparse encoder
         self.logger = logging.getLogger("loader")
         self.logger.propagate = False
         if not self.logger.handlers:
@@ -122,7 +122,7 @@ class Fetch_Data:
             self.logger.addHandler(console_handler)
         self.logger.setLevel(logging.DEBUG if env.DEBUG_MODE else logging.INFO)
 
-        # Create a per-run ID so we can correlate stdout, blob log, and Qdrant state.
+        # Create a per-run ID so we can correlate stdout, blob log, and index state.
         self.run_id = run_id or RunLogger.new_run_id()
         self.run_logger = RunLogger(run_id=self.run_id, logger_name="loader")
         # Optional: append to Azure Append Blob if RUN_LOGS_BLOB_CONNECTION_STRING is set
@@ -135,8 +135,7 @@ class Fetch_Data:
         # If start_ingest already created a SAS URL for this run, keep it.
         self.preset_log_url = preset_log_url
 
-        self.dev_vector_store = VectorDBQdrant(mode="auto")
-        self.prod_vector_store = VectorDBQdrant(mode="prod_remote")
+        self.search_store = VectorDBAzureSearch()
 
         self.logger.info("Starting data extraction...")
 
@@ -181,9 +180,6 @@ class Fetch_Data:
                 counts[s] = counts.get(s, 0) + 1
             return counts
 
-        # Qdrant payload size limit: 32MB, we target 30MB to be safe
-        MAX_BATCH_SIZE_BYTES = 30 * 1024 * 1024  # 30 MB
-
         # Chunking defaults (token-aware). Tune via env vars.
         chunk_size_tokens = int(os.getenv("CHUNK_SIZE_TOKENS", "500"))
         chunk_overlap_tokens = int(os.getenv("CHUNK_OVERLAP_TOKENS", "83"))
@@ -195,42 +191,9 @@ class Fetch_Data:
             chunk_overlap_tokens = max(0, chunk_size_tokens // 6)
 
         # Chunking implementation lives in src/loaders/helper.py so we can reuse/test it.
-
-        def calculate_point_size(point: dict) -> int:
-            """Calculate the exact JSON payload size of a single point in bytes."""
-            import json
-
-            return len(json.dumps(point, default=str).encode("utf-8"))
-
-        def batch_by_size(points: list, max_size_bytes: int):
-            """Yield batches of points that fit within the size limit."""
-            current_batch = []
-            current_size = 0
-
-            for point in points:
-                point_size = calculate_point_size(point)
-
-                # If a single point exceeds the limit, log warning and send it alone
-                if point_size > max_size_bytes:
-                    if current_batch:
-                        yield current_batch
-                        current_batch = []
-                        current_size = 0
-                    yield [point]  # Send oversized point alone
-                    continue
-
-                # Check if adding this point would exceed the limit
-                if current_size + point_size > max_size_bytes:
-                    yield current_batch
-                    current_batch = [point]
-                    current_size = point_size
-                else:
-                    current_batch.append(point)
-                    current_size += point_size
-
-            # Don't forget the last batch
-            if current_batch:
-                yield current_batch
+        # Azure AI Search batch limits (<=1000 docs and <=16 MB/request) are
+        # enforced inside VectorDBAzureSearch.upload_documents, so the loader no
+        # longer needs its own size-based batching.
 
         # Provide a read-only link to the run log (if blob logging is enabled)
         log_url = self.preset_log_url or self.run_logger.get_readonly_sas_url(expiry_hours=24)
@@ -244,7 +207,7 @@ class Fetch_Data:
             format_kv(
                 RUN_ID=self.run_id,
                 EVENT="STARTED",
-                COLLECTION=env.QDRANT_COLLECTION,
+                INDEX=env.AZURE_SEARCH_INDEX,
                 DEBUG_MODE=getattr(env, "DEBUG_MODE", False),
             ),
         )
@@ -262,41 +225,17 @@ class Fetch_Data:
         moochup_documents = 0
 
         try:
-            # Optional snapshots (can be slow/large). Controlled via env.
-            if os.getenv("QDRANT_SNAPSHOTS_ENABLED", "true").lower() in {"1", "true", "yes"}:
-                with StageTimer(self.logger, self.ctx, "SNAPSHOT"):
-                    self.logger.info("Create Snapshot of previous data collection...")
-                    if self.dev_vector_store.client.collection_exists(env.QDRANT_COLLECTION):
-                        _ = self.dev_vector_store.client.create_snapshot(collection_name=env.QDRANT_COLLECTION, wait=False)
-
-                        # There will likely be one additional snapshot because the snapshot created in the previous step has not yet been added to the list.
-                        all_snapshots: List[models.SnapshotDescription] = self.dev_vector_store.client.list_snapshots(
-                            collection_name=env.QDRANT_COLLECTION
-                        )
-                        sorted_snapshots = self.sort_snapshots_by_creation_time(all_snapshots)
-                        if len(all_snapshots) >= SNAPSHOTS_TO_KEEP:
-                            for snapshot in sorted_snapshots[SNAPSHOTS_TO_KEEP:]:
-                                self.logger.debug("Deleting snapshot %s", snapshot.name)
-                                self.dev_vector_store.client.delete_snapshot(
-                                    collection_name=env.QDRANT_COLLECTION, snapshot_name=snapshot.name
-                                )
-            else:
-                self.logger.info(
-                    "QDRANT_SNAPSHOTS %s",
-                    format_kv(RUN_ID=self.run_id, EVENT="SKIPPED", REASON="QDRANT_SNAPSHOTS_ENABLED=false"),
-                )
-
-            # Ensure collection exists (no more delete/recreate each run)
-            with StageTimer(self.logger, self.ctx, "QDRANT_ENSURE_COLLECTION"):
+            # Ensure the index exists. It is created once with a fixed vector
+            # dimension; thereafter we only delete+upsert (no recreate per run).
+            # Azure AI Search has no Qdrant-style snapshot API, so backups are an
+            # infra concern, not part of the loader.
+            with StageTimer(self.logger, self.ctx, "AZURE_SEARCH_ENSURE_INDEX"):
                 sample_embedding = self.embedder.get_text_embedding("test")
                 embedding_dim = len(sample_embedding)
                 self.logger.info("Detected embedding dimension: %s", embedding_dim)
-                # Keep a cheap zero-vector around for metadata-only points (e.g., ModuleFingerprint)
-                zero_dense_vec = [0.0] * embedding_dim
-                self.dev_vector_store.create_collection(
-                    collection_name=env.QDRANT_COLLECTION,
+                self.search_store.create_index(
+                    index_name=env.AZURE_SEARCH_INDEX,
                     vector_size=embedding_dim,
-                    enable_sparse=True,
                 )
 
             # Memory controls (important for Azure Functions ~2.5GB cap)
@@ -370,13 +309,7 @@ class Fetch_Data:
                 if not node_buffer:
                     return 0
                 batch_state["counter"] += 1
-                points_upserted = self._embed_and_upsert_nodes(
-                    node_buffer,
-                    stage=stage,
-                    calculate_point_size=calculate_point_size,
-                    batch_by_size=batch_by_size,
-                    max_batch_bytes=MAX_BATCH_SIZE_BYTES,
-                )
+                points_upserted = self._embed_and_upsert_nodes(node_buffer, stage=stage)
                 node_buffer.clear()
                 _maybe_cleanup(batch_state["counter"])
                 total_points_upserted += points_upserted
@@ -447,12 +380,7 @@ class Fetch_Data:
                     self.ctx.set_counter("moochup_courses", moochup_documents)
 
                     # Delete existing Moochup points
-                    self.dev_vector_store.delete_by_filter(
-                        env.QDRANT_COLLECTION,
-                        models.Filter(
-                            must=[models.FieldCondition(key="source", match=models.MatchValue(value="Moochup"))]
-                        ),
-                    )
+                    self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Moochup'")
                     _upsert_documents(moochup_docs, stage="MOOCHUP_UPSERT")
                 else:
                     self.logger.warning("Skipping MOOCHUP due to RUN_SOURCES filter")
@@ -497,14 +425,9 @@ class Fetch_Data:
                             deleted_course_summary.add(course_id)
                             moodle_courses_done += 1
                             self.ctx.set_counter("moodle_courses_done", moodle_courses_done)
-                            self.dev_vector_store.delete_by_filter(
-                                env.QDRANT_COLLECTION,
-                                models.Filter(
-                                    must=[
-                                        models.FieldCondition(key="source", match=models.MatchValue(value="Moodle")),
-                                        models.FieldCondition(key="course_id", match=models.MatchValue(value=course_id)),
-                                    ]
-                                ),
+                            self.search_store.delete_by_filter(
+                                env.AZURE_SEARCH_INDEX,
+                                f"source eq 'Moodle' and course_id eq {int(course_id)}",
                             )
 
                         # Skip per-course "Kurs" docs after first insert (avoids duplicates)
@@ -557,19 +480,14 @@ class Fetch_Data:
                     if drupal_documents == 0:
                         self.logger.warning("Drupal extraction returned 0 documents")
 
-                    self.dev_vector_store.delete_by_filter(
-                        env.QDRANT_COLLECTION,
-                        models.Filter(
-                            must=[models.FieldCondition(key="source", match=models.MatchValue(value="Drupal"))]
-                        ),
-                    )
+                    self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Drupal'")
                     _upsert_documents(drupal_docs, stage="DRUPAL_UPSERT")
                 else:
                     self.logger.warning("Skipping DRUPAL due to RUN_SOURCES filter")
 
             # NOTE: We no longer migrate DEV->PROD automatically in streaming mode.
             # Running two endpoints with migrate+recreate can wipe data. Handle promotion separately.
-            self.logger.info("Finished incremental delete+upsert into Dev Qdrant.")
+            self.logger.info("Finished incremental delete+upsert into Azure AI Search.")
 
             with StageTimer(self.logger, self.ctx, "SANITY_CHECK"):
                 self.sanity_check()
@@ -630,17 +548,6 @@ class Fetch_Data:
                 self.run_logger.detach()
             except Exception:
                 pass
-
-    def sort_snapshots_by_creation_time(
-        self, snapshots: List[models.SnapshotDescription]
-    ) -> List[models.SnapshotDescription]:
-        return sorted(
-            snapshots,
-            key=lambda snapshot: datetime.fromisoformat(snapshot.creation_time)
-            if snapshot.creation_time
-            else datetime.min,
-            reverse=True,
-        )
 
 
 if __name__ == "__main__":

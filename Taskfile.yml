@@ -12,23 +12,6 @@ tasks:
         echo "TARGET: {{ .TARGET }}"
         echo "REGISTRY: {{ .REGISTRY }}"
 
-  qdrant:
-    desc: Start a local Qdrant container (REST :6333, gRPC :6334). Dashboard at http://localhost:6333/dashboard
-    cmds:
-      - docker compose up -d qdrant
-      - echo "Qdrant is up -> http://localhost:6333/dashboard"
-
-  qdrant-logs:
-    desc: Tail the logs of the local Qdrant container
-    cmds:
-      - docker compose logs -f qdrant
-
-  qdrant-down:
-    desc: Stop and remove the local Qdrant container (storage in ./db/qdrant is kept)
-    cmds:
-      - docker compose stop qdrant
-      - docker compose rm -f qdrant
-
   build-frontend:
     desc: Build the docker image for the streamlit frontend
     vars:

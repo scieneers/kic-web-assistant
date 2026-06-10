@@ -50,10 +50,8 @@ class EnvHelper(BaseModel):
     DRUPAL_PASSWORD: str = "UNSET"
     DRUPAL_GRANT_TYPE: str = "password"
 
-    QDRANT_API_KEY: str = "UNSET"
-    QDRANT_URL: str = "UNSET"
-    # Default Qdrant collection to search in and write new vectors to.
-    QDRANT_COLLECTION: str = "aichat"
+    AZURE_SEARCH_ENDPOINT: str = "UNSET"
+    AZURE_SEARCH_INDEX: str = "aichat"
 
     DATA_SOURCE_MOODLE_URL: str = "UNSET"
     DATA_SOURCE_MOODLE_TOKEN: str = "UNSET"
