@@ -11,6 +11,8 @@ import zipfile
 from pathlib import Path
 from typing import Iterable, Optional
 
+import requests
+
 from bs4 import BeautifulSoup, ParserRejectedMarkup
 from llama_index.core import Document
 from pydantic import ValidationError
@@ -455,12 +457,40 @@ class Moodle:
         err_message = None
 
         for content in module.contents:
-            if content.type in ["gif?forcedownload=1", "png?forcedownload=1"]:
+            # A page bundles its HTML body plus any embedded files. Embedded H5P
+            # packages get routed through the H5P pipeline; the HTML body is
+            # parsed for text and video links; everything else (images, ...) is
+            # skipped since it is not parseable as HTML. The validator leaves
+            # `type` as None for ".html" files and otherwise stores the file
+            # extension (with any "?forcedownload=1" suffix).
+            content_type = (content.type or "html").lower()
+            if content_type.startswith("h5p"):
+                # Eingebettetes H5P-Paket über dieselbe Pipeline wie eigenständige
+                # H5P-Module verarbeiten (befüllt module.h5p_content_type,
+                # module.interactive_video, ...).
+                try:
+                    h5p_err = self._process_h5p_package(
+                        module, content.fileurl, content.filename
+                    )
+                except requests.exceptions.HTTPError as err:
+                    self.logger.warning(
+                        f"Failed to download embedded H5P {content.fileurl}: {err}"
+                    )
+                    continue
+                if h5p_err:
+                    err_message = h5p_err
+                continue
+            if not content_type.startswith("html"):
                 continue
             page_content_caller = APICaller(url=content.fileurl, params=self.download_params)
             try:
                 soup = BeautifulSoup(page_content_caller.getText(), "html.parser")
             except ParserRejectedMarkup:
+                continue
+            except requests.exceptions.HTTPError as err:
+                # A single missing/forbidden page resource must not abort the
+                # whole ingestion run; skip it and keep processing.
+                self.logger.warning(f"Failed to download page content {content.fileurl}: {err}")
                 continue
             links = soup.find_all("a")
 
@@ -547,11 +577,21 @@ class Moodle:
         """Extrahiert H5P-Inhalte und routet zu entsprechender Klasse."""
         if activity.intro:
             module.intro = activity.intro
-        h5pfile_call = APICaller(url=activity.fileurl, params=self.download_params)
-        
+        return self._process_h5p_package(module, activity.fileurl, activity.filename)
+
+    def _process_h5p_package(self, module, fileurl, filename):
+        """Lädt ein H5P-Paket, ermittelt den Typ und ruft den passenden Handler.
+
+        Geteilte Kernlogik, die sowohl von eigenständigen H5P-Modulen
+        (extract_h5p) als auch von in Seiten eingebetteten H5P-Dateien
+        (extract_page) genutzt wird. Befüllt das übergebene Modul und gibt eine
+        Fehlermeldung zurück (oder None bei Erfolg).
+        """
+        h5pfile_call = APICaller(url=fileurl, params=self.download_params)
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             # H5P-Package herunterladen
-            local_filename = h5pfile_call.getFile(activity.filename, tmp_dir)
+            local_filename = h5pfile_call.getFile(filename, tmp_dir)
 
             # h5p.json für library-Feld extrahieren
             try:
@@ -563,11 +603,11 @@ class Moodle:
                 # Modul überspringen statt den ganzen Lauf abzubrechen; lokal das
                 # defekte Paket für die Fehleranalyse aufheben.
                 self.logger.warning(
-                    f"Ungültiges H5P-ZIP für Modul {module.id} ({activity.filename}): {exc}"
+                    f"Ungültiges H5P-ZIP für Modul {module.id} ({filename}): {exc}"
                 )
-                self._save_bad_h5p_zip(local_filename, module, activity)
+                self._save_bad_h5p_zip(local_filename, module, filename)
                 return f"Ungültiges H5P-ZIP-Paket: {exc}"
-            
+
             # Lade h5p.json für library-Informationen
             h5p_json = f"{tmp_dir}/h5p.json"
             with open(h5p_json, "r") as json_file:
@@ -627,7 +667,7 @@ class Moodle:
         """
         return not os.getenv("WEBSITE_INSTANCE_ID")
 
-    def _save_bad_h5p_zip(self, local_filename: str, module, activity) -> None:
+    def _save_bad_h5p_zip(self, local_filename: str, module, filename) -> None:
         """Kopiert ein defektes H5P-ZIP zur Fehleranalyse beiseite (nur lokal).
 
         Muss aufgerufen werden, solange das umgebende TemporaryDirectory noch
@@ -639,7 +679,7 @@ class Moodle:
             dest_dir = Path(os.getenv("H5P_BAD_ZIP_DIR", "bad_h5p_zips"))
             dest_dir.mkdir(parents=True, exist_ok=True)
             # Modul-ID voranstellen, damit der Dateiname eindeutig und auffindbar ist.
-            safe_name = os.path.basename(activity.filename or "unknown.h5p")
+            safe_name = os.path.basename(filename or "unknown.h5p")
             dest = dest_dir / f"{module.id}_{safe_name}"
             shutil.copyfile(local_filename, dest)
             self.logger.info(f"Defektes H5P-Paket gespeichert unter {dest}")
