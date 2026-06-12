@@ -10,10 +10,80 @@ Deep inside the LLM layer we can check whether a token callback is present.
 from __future__ import annotations
 
 import contextvars
+import re
 from typing import Callable, Optional
 
 
 TokenCallback = Callable[[str], None]
+
+
+# Matches a complete citation marker like [doc12].
+_COMPLETE_CITATION_RE = re.compile(r"\[doc\d+\]")
+# Literal prefix every citation marker starts with.
+_CITATION_PREFIX = "[doc"
+
+
+def _is_partial_citation(s: str) -> bool:
+    """True if `s` (which starts with '[') could still grow into a [docN] marker.
+
+    Examples that are partial: "[", "[d", "[do", "[doc", "[doc1", "[doc12".
+    Examples that are not:     "[x", "[doc1x" (diverged from the marker shape).
+    """
+    if len(s) <= len(_CITATION_PREFIX):
+        return _CITATION_PREFIX.startswith(s)
+    if not s.startswith(_CITATION_PREFIX):
+        return False
+    # After "[doc" we expect only digits and no closing bracket yet (a closed
+    # marker would already have matched _COMPLETE_CITATION_RE).
+    return s[len(_CITATION_PREFIX):].isdigit()
+
+
+class CitationStreamFilter:
+    """Strips [docN] citation markers from a token stream on the fly.
+
+    Tokens can split a marker across chunks (e.g. "[doc", "1", "]"), so we keep a
+    small buffer and only release text that can no longer become part of a marker.
+    Complete [docN] markers are dropped from the live stream; the final answer
+    (with clickable title links) is delivered separately as the non-streamed
+    result, so the markers are never lost — only hidden while streaming.
+    """
+
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def feed(self, delta: str) -> str:
+        """Append `delta` and return the text that is safe to emit right now."""
+        self._buffer += delta
+        out = ""
+        while self._buffer:
+            bracket = self._buffer.find("[")
+            if bracket == -1:
+                # No '[' left -> the whole buffer is safe to emit.
+                out += self._buffer
+                self._buffer = ""
+                break
+            # Everything before the first '[' is safe to emit.
+            out += self._buffer[:bracket]
+            self._buffer = self._buffer[bracket:]
+            # Buffer now starts with '['.
+            match = _COMPLETE_CITATION_RE.match(self._buffer)
+            if match:
+                # Drop the complete marker and keep scanning.
+                self._buffer = self._buffer[match.end():]
+                continue
+            if _is_partial_citation(self._buffer):
+                # Might still complete into a marker -> hold back for more tokens.
+                break
+            # A '[' that cannot be a citation -> emit it and continue scanning.
+            out += "["
+            self._buffer = self._buffer[1:]
+        return out
+
+    def flush(self) -> str:
+        """Emit whatever remains once the stream ends (e.g. an unclosed marker)."""
+        out = self._buffer
+        self._buffer = ""
+        return out
 
 
 # If set (per-request), the LLM layer will push generated token deltas into this callback.

@@ -15,7 +15,7 @@ from llama_index.llms.openai_like import OpenAILike
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.env import env
-from src.llm.streaming import stream_phase_var, token_callback_var
+from src.llm.streaming import CitationStreamFilter, stream_phase_var, token_callback_var
 
 TIME_TO_WAIT_FOR_GWDG = 7  # in seconds
 TIME_TO_RESET_UNAVAILABLE_STATUS = 60 * 5  # in seconds
@@ -120,6 +120,21 @@ class LLM:
         # deltas. Instead we try streaming; if it fails, we fall back to a
         # single non-streaming completion and emit it as one chunk.
         if token_callback is not None and stream_phase == "final":
+            # Hide [docN] citation markers while streaming. The full answer
+            # returned below keeps the markers intact so the CitationParser can
+            # later turn them into clickable [title] links in the final message.
+            citation_filter = CitationStreamFilter()
+
+            def _emit(text: str) -> None:
+                filtered = citation_filter.feed(text)
+                if filtered:
+                    token_callback(filtered)
+
+            def _emit_flush() -> None:
+                tail = citation_filter.flush()
+                if tail:
+                    token_callback(tail)
+
             try:
                 streaming_resp = chat_engine.stream_chat(message=query)
                 full_text = ""
@@ -155,7 +170,10 @@ class LLM:
                         continue
 
                     full_text += delta
-                    token_callback(delta)
+                    _emit(delta)
+
+                # Release any text still held back by the citation filter.
+                _emit_flush()
 
                 # In some edge cases, streaming yields chunks but we still couldn't
                 # derive deltas. Fall back to final response string.
@@ -164,14 +182,16 @@ class LLM:
                         streaming_resp, "unformatted_response", ""
                     )
                     if full_text:
-                        token_callback(full_text)
+                        _emit(full_text)
+                        _emit_flush()
 
                 return SerializableChatMessage(role="assistant", content=full_text)
             except Exception:
                 # Fall back to non-streaming and emit as a single chunk.
                 response = chat_engine.chat(message=query)
                 text = response.response if isinstance(response.response, str) else str(response.response)
-                token_callback(text)
+                _emit(text)
+                _emit_flush()
                 return SerializableChatMessage(role="assistant", content=text)
 
         result = [None]  # Use a list to hold the result (mutable object to modify inside threads)
