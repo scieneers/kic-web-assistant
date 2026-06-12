@@ -1,45 +1,59 @@
+import logging
+
 from langfuse.decorators import observe
-from lingua import Language, LanguageDetectorBuilder
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
+from src.llm.objects.LLMs import LLM, Models
+from src.llm.prompts.prompt_loader import load_prompt
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_LANGUAGE = "German"
+# Guard against the model leaking a sentence into the answer's system prompt.
+# A language name is a single short word; anything longer is treated as unusable.
+MAX_LANGUAGE_NAME_LEN = 30
 
 
 class LanguageDetector:
+    """Detects the answer language for a query using a small LLM.
+
+    Replaces the previous statistical (lingua) detector. The LLM understands
+    short/mixed/technical queries and, unlike a statistical detector, honors
+    explicit requests such as "Bitte antworte auf Englisch".
+    """
+
     def __init__(self):
-        languages = [
-            Language.ENGLISH,
-            Language.GERMAN,
-        ]
-        self.detector = LanguageDetectorBuilder.from_languages(*languages).build()
+        self.llm = LLM()
+        self.prompt = load_prompt("language_detector_prompt")
 
     @observe()
     def detect(self, query: str, chat_history: list[SerializableChatMessage] | None = None) -> str:
-        """Detect language from current query and chat history context.
-        
-        Uses the full conversation history to determine the dominant language,
-        preventing incorrect language switches when users use short queries like
-        'Tell me more' or 'Was ist das?'
-        
+        """Detect the language the assistant should answer in.
+
         Args:
-            query: The current user query
-            chat_history: Previous messages in the conversation (optional)
-            
+            query: The current user query.
+            chat_history: Previous messages, used to disambiguate short queries.
+
         Returns:
-            Detected language name (e.g., 'German', 'English')
+            Language name in English (e.g. 'German', 'English'). Falls back to
+            'German' if the LLM call fails or returns something unusable.
         """
-        # Combine recent history with current query for better detection
-        text_to_analyze = query
-        
-        if chat_history:
-            # Take last 3 messages for context (more recent = more relevant)
-            recent_messages = chat_history[-3:] if len(chat_history) > 3 else chat_history
-            history_text = " ".join([msg.content for msg in recent_messages if msg.content])
-            # Prioritize current query but include history for context
-            text_to_analyze = f"{query} {history_text}"
-        
-        language = self.detector.detect_language_of(text_to_analyze)
-        if language is None:
-            return "German"
-        camelcase_name = language.name.capitalize()
-        
-        return camelcase_name
+        try:
+            # The mini model is selected internally and is independent of the
+            # conversation model, so detection latency never depends on GWDG.
+            response = self.llm.chat(
+                query=query,
+                chat_history=chat_history or [],
+                model=Models.MINI,
+                system_prompt=self.prompt,
+            )
+            language = (response.content or "").strip()
+
+            if not language or len(language) > MAX_LANGUAGE_NAME_LEN:
+                logger.warning("Unusable language detection result %r, defaulting to %s", language, DEFAULT_LANGUAGE)
+                return DEFAULT_LANGUAGE
+
+            return language
+        except Exception as exc:
+            logger.warning("Language detection failed, defaulting to %s", DEFAULT_LANGUAGE, exc_info=exc)
+            return DEFAULT_LANGUAGE

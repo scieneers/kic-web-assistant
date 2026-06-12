@@ -2,6 +2,6 @@ local.settings.json
 .vscode
 exploration
 out
-FailedTranscripts.xlsx
+documentation/FailedTranscripts.xlsx
 src/loaders/models/vosk_model
 bad_h5p_zips

@@ -1,0 +1,37 @@
+info:
+  name: 15b Azure follow-up short (-> English, needs history)
+  type: http
+  seq: 19
+
+http:
+  method: post
+  url: http://localhost:8000/api/chat
+  headers:
+    - name: accept
+      value: application/json
+    - name: Api-Key
+      value: scieneers-vWSpYwjG*NIcWHjv*(Lh3C0YliQG!-dO
+    - name: Content-Type
+      value: application/json
+  body:
+    type: json
+    data: |-
+      {
+        "user_query": {
+          "content": "Tell me more.",
+          "role": "user"
+        },
+        "thread_id": "lang-test-15-en",
+        "model": "Azure-Fallback"
+      }
+  auth:
+    type: apikey
+    key: api-key
+    value: scieneers-5UReJ*K-mwvKB3yHIbitPm8MMhpFu95r
+    placement: header
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

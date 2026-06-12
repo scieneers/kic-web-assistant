@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Konfiguration
-EXCEL_PATH = Path("Oct_Nov_KIC-course completion rate.xlsx")
+EXCEL_PATH = Path("documentation/Oct_Nov_KIC-course completion rate.xlsx")
 OUTPUT_CSV = Path("outputs/h5p_transcript_availability.csv")
 
 

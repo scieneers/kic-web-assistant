@@ -258,7 +258,7 @@ if __name__ == "__main__":
     logger.info("  ✓ Verbunden\n")
     
     # 2. Lade Live-Kurse aus Excel
-    excel_path = Path(__file__).parent.parent.parent.parent / "Oct_Nov_KIC-course completion rate.xlsx"
+    excel_path = Path(__file__).parent.parent.parent.parent / "documentation" / "Oct_Nov_KIC-course completion rate.xlsx"
     logger.info(f"📂 Lese Excel-Datei: {excel_path}")
     course_ids = load_live_courses(str(excel_path))
     

@@ -284,9 +284,9 @@ class Moodle:
 
         # Best-effort: write failed transcripts report
         try:
-            save_failed_transcripts_to_excel(transcripts=failedTranscripts, file_name="FailedTranscripts.xlsx")
+            save_failed_transcripts_to_excel(transcripts=failedTranscripts, file_name="documentation/FailedTranscripts.xlsx")
         except Exception as e:
-            self.logger.warning("Failed to write FailedTranscripts.xlsx: %s", e)
+            self.logger.warning("Failed to write documentation/FailedTranscripts.xlsx: %s", e)
 
 
     def iter_course_documents(self) -> Iterable[tuple[MoodleCourse, list[Document]]]:
@@ -388,9 +388,9 @@ class Moodle:
 
         # Keep current behavior of saving failed transcript report (best-effort)
         try:
-            save_failed_transcripts_to_excel(transcripts=failedTranscripts, file_name="FailedTranscripts.xlsx")
+            save_failed_transcripts_to_excel(transcripts=failedTranscripts, file_name="documentation/FailedTranscripts.xlsx")
         except Exception as e:
-            self.logger.warning("Failed to write FailedTranscripts.xlsx: %s", e)
+            self.logger.warning("Failed to write documentation/FailedTranscripts.xlsx: %s", e)
 
     def get_toc_document(self, courses) -> Document:
         toc_str = "List of all available courses:\n"

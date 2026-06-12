@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ⚙️ KONFIGURATION: Welches H5P-Modul soll analysiert werden?
 TARGET_MODULE_ID = 2195  # Die Modul-ID (coursemodule ID)
 COURSE_NAME_HINT = "Introduction to Machine Learning Part 1"  # Optional: Kurs-Name für Suche
-EXCEL_PATH = Path("Oct_Nov_KIC-course completion rate.xlsx")  # Excel mit Kurs-Liste
+EXCEL_PATH = Path("documentation/Oct_Nov_KIC-course completion rate.xlsx")  # Excel mit Kurs-Liste
 OUTPUT_DIR = Path(__file__).parent / "interactive_video_analysis"
 
 

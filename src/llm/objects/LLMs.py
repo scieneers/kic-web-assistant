@@ -24,6 +24,9 @@ class Models(str, Enum):
     AZURE_FALLBACK = "Azure-Fallback"
     LLAMA3 = "Llama3"
     GEMMA4_31B = "Gemma4"
+    # Small/cheap Azure model for auxiliary calls (e.g. language detection).
+    # Not exposed to the frontend; selected internally by helper steps.
+    MINI = "Azure-Mini"
 
 class LLM:
     gwdg_unavailable = False
@@ -45,6 +48,18 @@ class LLM:
                 llm = AzureOpenAI(
                     model=env.AZURE_FALLBACK_MODEL,
                     deployment=env.AZURE_FALLBACK_DEPLOYMENT,
+                    api_key=env.AZURE_OPENAI_API_KEY,
+                    azure_endpoint=env.AZURE_OPENAI_URL,
+                    api_version="2024-12-01-preview",
+                    callback_manager=Settings.callback_manager,
+                )
+            case Models.MINI:
+                # GPT-5-family reasoning model: like AZURE_FALLBACK, do NOT set
+                # temperature/max_tokens (the API rejects temperature != 1 and
+                # uses max_completion_tokens). The prompt keeps the output short.
+                llm = AzureOpenAI(
+                    model=env.AZURE_MINI_MODEL,
+                    deployment=env.AZURE_MINI_DEPLOYMENT,
                     api_key=env.AZURE_OPENAI_API_KEY,
                     azure_endpoint=env.AZURE_OPENAI_URL,
                     api_version="2024-12-01-preview",

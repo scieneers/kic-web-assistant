@@ -1,0 +1,30 @@
+opencollection: 1.0.0
+
+info:
+  name: FU Language Detector
+  description: |-
+    Manual test suite for the LLM-based language detector (gpt-5-mini).
+    Endpoint: POST /api/chat (non-streaming) on http://localhost:8000.
+
+    How to read results: the API response does not contain detected_language
+    directly — judge by the language the assistant ANSWERS in, or inspect the
+    Langfuse trace's detect_language_node generation.
+
+    Folders:
+      A - Plain detection (German/English/other)
+      B - German + English jargon (the lingua failure mode)
+      C - Explicit "answer in X" requests
+      D - Short follow-ups that need chat history (run the *setup first)
+      E - Ambiguous -> German fallback
+      F - Mid-conversation language switch (run the *setup first)
+
+    Note: history tests rely on the in-memory checkpointer keyed by thread_id.
+    Run each *setup request before its follow-up, and re-run setups after a
+    server restart. Until gpt-5-mini is provisioned and AZURE_MINI_* is set,
+    every request falls back to "German".
+bundled: false
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git

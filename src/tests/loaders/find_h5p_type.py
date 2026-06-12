@@ -29,7 +29,7 @@ from src.loaders.moodle import Moodle
 H5P_TYPE_TO_FIND = "H5P.CoursePresentation"  # <--- Hier den gesuchten H5P-Typ eintragen
 
 # IMPORTANT_COURSES aus Datei laden
-IMPORTANT_COURSES_FILE = Path(__file__).parents[3] / "IMPORTANT_COURSES.txt"
+IMPORTANT_COURSES_FILE = Path(__file__).parents[3] / "documentation" / "IMPORTANT_COURSES.txt"
 
 
 def load_important_courses():

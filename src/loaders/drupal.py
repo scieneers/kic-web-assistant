@@ -56,7 +56,7 @@ class Drupal:
 
     def _load_important_courses(self) -> set[int]:
         """Load important course IDs from IMPORTANT_COURSES.txt"""
-        important_courses_file = Path(__file__).parent / "IMPORTANT_COURSES.txt"
+        important_courses_file = Path(__file__).parents[2] / "documentation" / "IMPORTANT_COURSES.txt"
         try:
             content = important_courses_file.read_text().strip()
             # Parse the list format: [99, 106, 313, ...]

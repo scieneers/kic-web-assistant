@@ -36,8 +36,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-EXCEL_PATH = Path("Oct_Nov_KIC-course completion rate.xlsx")
-IMPORTANT_COURSES_FILE = Path("IMPORTANT_COURSES.txt")
+EXCEL_PATH = Path("documentation/Oct_Nov_KIC-course completion rate.xlsx")
+IMPORTANT_COURSES_FILE = Path("documentation/IMPORTANT_COURSES.txt")
 
 
 def setup_production_moodle():

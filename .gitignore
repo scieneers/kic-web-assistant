@@ -12,7 +12,7 @@ tmp
 db
 
 ## Failed Transcripts
-FailedTranscripts.xlsx
+documentation/FailedTranscripts.xlsx
 
 ## Big models
 **/vosk_model/vosk-model-de-0.21

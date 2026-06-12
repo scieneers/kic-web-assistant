@@ -29,17 +29,22 @@ def build_multi_hop_graph() -> StateGraph:
     Builds the multi_hop subgraph for complex queries.
     
     Flow:
-    START → decompose → retrieve_multi_parallel → synthesize → rerank 
-          → detect_language → answer → citation → END
-    
+        START ─┬→ decompose → retrieve_multi → synthesize → rerank ─┐
+               └→ detect_language ────────────────────────────────┴→ answer → citation → END
+
     Key features:
     - decompose_query: Breaks complex query into self-contained sub-queries
     - retrieve_multi_parallel: Retrieves chunks for all sub-queries simultaneously
     - synthesize_answer: Combines and deduplicates all contexts
     - rerank_chunks: Selects top-N most relevant for original query
+
+    Language detection runs in parallel with the whole retrieval pipeline (it
+    only needs the query + chat history), so its LLM call adds ~0 wall-clock.
+    The answer node joins both branches; detected_language and the retrieval
+    keys are disjoint state fields, so the parallel writes never collide.
     """
     graph = StateGraph(GraphState)
-    
+
     # Add nodes
     graph.add_node("decompose_node", decompose_query)
     graph.add_node("retrieve_multi_node", retrieve_multi_parallel)
@@ -48,15 +53,17 @@ def build_multi_hop_graph() -> StateGraph:
     graph.add_node("detect_language_node", detect_language)
     graph.add_node("answer_node", generate_answer)
     graph.add_node("citation_node", parse_citations)
-    
-    # Linear flow with parallel retrieval
+
+    # Fan out: the multi-hop retrieval pipeline and language detection run concurrently.
     graph.add_edge(START, "decompose_node")
+    graph.add_edge(START, "detect_language_node")
     graph.add_edge("decompose_node", "retrieve_multi_node")
     graph.add_edge("retrieve_multi_node", "synthesize_node")
     graph.add_edge("synthesize_node", "rerank_node")
-    graph.add_edge("rerank_node", "detect_language_node")
+    # Fan in: answer waits for both the reranked sources and the detected language.
+    graph.add_edge("rerank_node", "answer_node")
     graph.add_edge("detect_language_node", "answer_node")
     graph.add_edge("answer_node", "citation_node")
     graph.add_edge("citation_node", END)
-    
+
     return graph.compile()

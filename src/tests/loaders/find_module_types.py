@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 TARGET_MODULE_TYPES = ["hvp","label", "lesson", "url", "data"]
 
 # Important Courses
-IMPORTANT_COURSES_FILE = Path(__file__).parent.parent.parent.parent / "IMPORTANT_COURSES.txt"
+IMPORTANT_COURSES_FILE = Path(__file__).parent.parent.parent.parent / "documentation" / "IMPORTANT_COURSES.txt"
 
 
 
