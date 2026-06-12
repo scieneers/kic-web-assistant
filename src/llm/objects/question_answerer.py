@@ -18,9 +18,7 @@ ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL = """Entschuldigung, ich habe deine Frage ni
 ANSWER_NOT_FOUND_SECOND_TIME_MOODLE = """Es tut mir leid, aber ich konnte die benötigten Informationen im Kurs nicht finden, um deine Frage zu beantworten. Schau bitte im Kurs selbst nach, um weitere Hilfe zu erhalten. Hier ist der Kurslink: https://moodle.ki-campus.org/course/view.php?id={course_id}
 """
 
-SHORT_SYSTEM_PROMPT = load_prompt("short_system_prompt")
-
-SYSTEM_PROMPT = load_prompt("long_system_prompt")
+SYSTEM_PROMPT = load_prompt("system_prompt")
 
 USER_QUERY_WITH_SOURCES_PROMPT = """
 [doc{index}]
@@ -64,12 +62,11 @@ class QuestionAnswerer:
         course_id: int,
     ) -> SerializableChatMessage:
         
-        if model != Models.AZURE_FALLBACK:
-            system_prompt = SHORT_SYSTEM_PROMPT.format(language=language)
-            formatted_sources = format_sources(sources, max_length=8000)
-        else:
-            system_prompt = SYSTEM_PROMPT.format(language=language)
-            formatted_sources = format_sources(sources, max_length=sys.maxsize)
+        # All supported models now use the same system prompt and the full set
+        # of reranked sources. The former short/long split and the 8k source cap
+        # were only needed for models that are no longer in use.
+        system_prompt = SYSTEM_PROMPT.format(language=language)
+        formatted_sources = format_sources(sources, max_length=sys.maxsize)
 
         prompted_user_query = f"<QUERY>:\n {query}\n\n{formatted_sources}"
 
