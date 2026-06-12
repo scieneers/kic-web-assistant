@@ -3,9 +3,6 @@
 **/__pycache__
 **/.pytest_cache
 
-## vector store
-**/qdrant_storage
-
 # Local environment variables and keys
 .env
 

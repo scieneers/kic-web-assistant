@@ -6,11 +6,12 @@
 
 # Local development
 
-## VectorDB [Qdrant](https://github.com/qdrant/qdrant-client)
-`docker pull qdrant/qdrant:v1.6.1`
-`docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage:z qdrant/qdrant:v1.6.1`
+## VectorDB: Azure AI Search
+The vector store is [Azure AI Search](https://learn.microsoft.com/azure/search/). Auth is keyless via `DefaultAzureCredential`, so for local development run `az login` and make sure your IP is in the service's `allowed_ip_ranges`.
 
-`client = QdrantClient(host =QDRANT_URL, api_key=QDRANT_TOKEN, port=6333, grpc_port=6334 , https=False, prefer_grpc=True)`
+Set the following environment variables:
+- `AZURE_SEARCH_ENDPOINT`
+- `AZURE_SEARCH_INDEX`
 
 ## Run frontent: streamlit
 Go into the src/frontend folder and run:

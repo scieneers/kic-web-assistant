@@ -1,6 +1,5 @@
 local.settings.json
 .vscode
-qdrant_storage
 exploration
 out
 FailedTranscripts.xlsx

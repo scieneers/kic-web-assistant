@@ -227,8 +227,7 @@ class Fetch_Data:
         try:
             # Ensure the index exists. It is created once with a fixed vector
             # dimension; thereafter we only delete+upsert (no recreate per run).
-            # Azure AI Search has no Qdrant-style snapshot API, so backups are an
-            # infra concern, not part of the loader.
+            # Backups are an infra concern, not part of the loader.
             with StageTimer(self.logger, self.ctx, "AZURE_SEARCH_ENSURE_INDEX"):
                 sample_embedding = self.embedder.get_text_embedding("test")
                 embedding_dim = len(sample_embedding)

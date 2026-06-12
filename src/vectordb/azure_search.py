@@ -44,7 +44,7 @@ def sanitize_key(raw: str) -> str:
 
 
 class VectorDBAzureSearch:
-    """Azure AI Search replacement for the former Qdrant abstraction.
+    """Azure AI Search vector database abstraction.
 
     Auth is keyless: the deployed service rejects API keys
     (``local_authentication_enabled = false``), so we always use
@@ -216,7 +216,7 @@ class VectorDBAzureSearch:
     def delete_by_filter(self, index_name: str, odata_filter: str) -> int:
         """Delete every document matching an OData filter.
 
-        Replaces Qdrant's single-call delete-by-filter: search the matching
+        Azure AI Search has no single-call delete-by-filter: search the matching
         keys, then delete them in key batches. Preserves the per-course
         (Moodle) and per-source (Drupal, Moochup) deletion semantics.
         """
@@ -254,8 +254,7 @@ class VectorDBAzureSearch:
         """Hybrid search: BM25 over ``text`` + vector over ``dense``.
 
         Azure AI Search fuses the two result sets with Reciprocal Rank Fusion
-        automatically when both ``search_text`` and a vector query are supplied,
-        so this is the behavioral equivalent of the old Qdrant prefetch + RRF.
+        automatically when both ``search_text`` and a vector query are supplied.
         Returns raw result dicts (each carries ``@search.score``).
         """
         client = self._client(index_name)
@@ -279,7 +278,7 @@ class VectorDBAzureSearch:
     def get_course_module_records(self, index_name: str | None = None):
         """Return (course_records, module_records) for the frontend tree.
 
-        Mirrors the old Qdrant scroll: each record exposes a ``.payload`` dict.
+        Each record exposes a ``.payload`` dict.
         Course records have a ``course_id`` but no ``module_id``; module records
         carry a ``module_id``.
         """

@@ -14,7 +14,7 @@ def _build_odata_filter(
 ) -> str:
     """Translate the retrieval filter into an Azure AI Search OData expression.
 
-    Mirrors the previous Qdrant filter logic:
+    Filter logic:
       - always exclude internal ModuleFingerprint bookkeeping docs
       - with no course/module given, restrict to Drupal content
       - course_id may be a single value or a list (OData ``search.in``)
