@@ -2,10 +2,14 @@
 Node wrapper for contextualizing user query and routing to appropriate scenario.
 """
 
+import logging
+
 from langfuse.decorators import observe
 
 from src.llm.state.models import GraphState
 from src.llm.state.socratic_routing import reset_socratic_state
+
+logger = logging.getLogger(__name__)
 
 # Module-level singleton
 _contextualizer_instance = None
@@ -55,30 +59,40 @@ def contextualize_and_route(state: GraphState) -> dict:
     # Cleaned user response for entry/exit intent (socratic mode)
     response_clean = user_query.lower().strip()
 
+    logger.debug(
+        "contextualize_and_route: query=%r, model=%s, socratic_mode=%s, history_len=%d",
+        user_query[:80],
+        model,
+        socratic_mode,
+        len(chat_history),
+    )
+
     # Handle socratic mode if active (only if socratic is enabled)
     if socratic_mode is not None and enable_socratic:
         # Socratic mode is active - check if user wants to continue
         continue_socratic = response_clean not in ["exit", "quit", "stop", "stopp", "beende den lernmodus", "ich möchte aufhören"]
-        
+
         if not continue_socratic:
+            logger.debug("Socratic exit detected — resetting socratic state → mode=exit_complete")
             # User wants to exit - provide prefabricated message and skip LLM call
-            
+
             exit_message = "Du hast den Lernmodus verlassen. Wenn du weitere Fragen hast, stehe ich dir gerne zur Verfügung!"
-            
+
             # Reset all socratic state (user exited)
             socratic_reset = reset_socratic_state()
-            
+
             # Return with prefabricated answer and special mode to skip to END
             return {
                 **socratic_reset,  # Reset all socratic fields
                 "mode": "exit_complete",
                 "answer": exit_message
             }
-        
+
         else:
             # User wants to continue socratic
             mode = "socratic"
-            
+            logger.debug("Socratic mode continuing: sub_mode=%s", socratic_mode)
+
             # Contextualize only if in core mode (retrieval needed)
             if socratic_mode == "core":
                 # Use socratic-specific contextualization
@@ -89,10 +103,11 @@ def contextualize_and_route(state: GraphState) -> dict:
                     model=model,
                     learning_objective=learning_objective
                 )
+                logger.debug("Socratic contextualized_query=%r", contextualized_query[:80] if contextualized_query else None)
             else:
                 # For contract, diagnose, hinting, reflection: no contextualization needed
                 contextualized_query = None
-            
+
             # Keep socratic_mode as-is (managed by socratic nodes)
             return {
                 "mode": mode,
@@ -102,24 +117,28 @@ def contextualize_and_route(state: GraphState) -> dict:
         # Normal mode handling (no active socratic session)
         # Check if user wants to start socratic mode (only if enabled)
         if enable_socratic and response_clean in ["start socratic", "begin socratic", "enter socratic", "unterstütze mich beim lernen"]:
+            logger.debug("Socratic mode triggered by user command → mode=socratic, sub_mode=contract")
             return {
                 "mode": "socratic",
                 "socratic_mode": "contract"
             }
-        
+
         # Classify scenario based on original query
         mode = contextualizer.classify_scenario(query=user_query, model=model)
-        
+        logger.debug("Scenario classified → mode=%s", mode)
+
         # Contextualize query if needed
         if mode == "no_vectordb" or mode == "multi_hop":
             contextualized_query = None
+            logger.debug("No contextualization for mode=%s", mode)
         else:
             contextualized_query = contextualizer.contextualize(
                 query=user_query,
                 chat_history=chat_history,
                 model=model
             )
-        
+            logger.debug("Contextualized query=%r", contextualized_query[:80] if contextualized_query else None)
+
         return {
             "mode": mode,
             "contextualized_query": contextualized_query,

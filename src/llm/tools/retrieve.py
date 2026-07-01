@@ -2,9 +2,13 @@
 Node wrapper for retrieving relevant chunks from vector database.
 """
 
+import logging
+
 from langfuse.decorators import observe
 
 from src.llm.state.models import GraphState
+
+logger = logging.getLogger(__name__)
 
 # Module-level singleton
 _retriever_instance = None
@@ -37,15 +41,24 @@ def retrieve_chunks(state: GraphState) -> dict:
     module_id = state["runtime_config"]["module_id"]
     query = state["contextualized_query"]
     retrieve_top_n = state["system_config"]["retrieve_top_n"]
-    
+
+    logger.debug(
+        "retrieve_chunks: query=%r, course_id=%s, module_id=%s, top_n=%d",
+        query[:80] if query else None,
+        course_id,
+        module_id,
+        retrieve_top_n,
+    )
+
     # Get singleton retriever
     retriever = get_retriever(use_hybrid=True, n_chunks=retrieve_top_n)
-    
+
     # Retrieve chunks (returns SerializableTextNode)
     nodes = retriever.retrieve(
         query=query,
         course_id=course_id,
         module_id=module_id
     )
-    
+
+    logger.debug("retrieve_chunks: returned %d chunks", len(nodes))
     return {"retrieved": nodes}

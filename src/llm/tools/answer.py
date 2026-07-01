@@ -2,9 +2,13 @@
 Node wrapper for generating answers using QuestionAnswerer.
 """
 
+import logging
+
 from langfuse.decorators import observe
 
 from src.llm.state.models import GraphState, get_doc_as_textnodes
+
+logger = logging.getLogger(__name__)
 
 # Module-level singleton
 _question_answerer_instance = None
@@ -34,7 +38,7 @@ def generate_answer(state: GraphState) -> dict:
     """
     # Get singleton question answerer
     answerer = get_question_answerer()
-    
+
     # Get variables from state (convert to LlamaIndex types)
     query = state["user_query"]
     chat_history = state["chat_history"]
@@ -43,7 +47,16 @@ def generate_answer(state: GraphState) -> dict:
     model = state["runtime_config"]["model"]
     is_moodle = state["runtime_config"]["course_id"] is not None
     course_id = state["runtime_config"]["course_id"]
-    
+
+    logger.debug(
+        "generate_answer: query=%r, model=%s, language=%s, sources=%d, is_moodle=%s",
+        query[:80],
+        model,
+        language,
+        len(sources),
+        is_moodle,
+    )
+
     # Generate answer
     response = answerer.answer_question(
         query=query,
@@ -54,6 +67,7 @@ def generate_answer(state: GraphState) -> dict:
         is_moodle=is_moodle,
         course_id=course_id
     )
-    
+
+    logger.debug("generate_answer: done, response_len=%d chars", len(response.content))
     # Extract answer text
     return {"answer": response.content}

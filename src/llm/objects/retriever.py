@@ -1,4 +1,5 @@
 import json
+import logging
 
 from langfuse.decorators import observe
 
@@ -6,6 +7,8 @@ from src.env import env
 from src.llm.objects.LLMs import LLM
 from src.vectordb.azure_search import VectorDBAzureSearch
 from src.api.models.serializable_text_node import SerializableTextNode
+
+logger = logging.getLogger(__name__)
 
 
 def _build_odata_filter(
@@ -21,21 +24,32 @@ def _build_odata_filter(
       - module_id is an exact match
     """
     clauses: list[str] = ["type ne 'ModuleFingerprint'"]
+    reasons: list[str] = ["always: exclude bookkeeping docs"]
 
     if course_id is None and module_id is None:
         clauses.append("source eq 'Drupal'")
+        reasons.append("no course/module given: restrict to Drupal content")
 
     if course_id is not None:
         if isinstance(course_id, (list, tuple)):
             ids = ",".join(str(int(c)) for c in course_id)
             clauses.append(f"search.in(course_id, '{ids}', ',')")
+            reasons.append(f"course_id list provided: filter to courses {list(course_id)}")
         else:
             clauses.append(f"course_id eq {int(course_id)}")
+            reasons.append(f"course_id provided: filter to course {course_id}")
 
     if module_id is not None:
         clauses.append(f"module_id eq {int(module_id)}")
+        reasons.append(f"module_id provided: filter to module {module_id}")
 
-    return " and ".join(clauses)
+    odata_filter = " and ".join(clauses)
+    logger.debug(
+        "OData filter built: %r\n  Clauses:\n%s",
+        odata_filter,
+        "\n".join(f"    - {r}" for r in reasons),
+    )
+    return odata_filter
 
 
 class KiCampusRetriever:

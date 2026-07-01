@@ -1,6 +1,7 @@
 from typing import Annotated
 
 import json
+import logging
 import queue
 import threading
 import uuid
@@ -20,6 +21,20 @@ from src.llm.assistant import KICampusAssistant
 from src.llm.objects.LLMs import Models
 from src.vectordb.azure_search import VectorDBAzureSearch
 from src.llm.streaming import TokenCallbackContext
+
+# Set DEBUG level for all src.llm.* loggers when DEBUG_MODE is enabled.
+# Third-party libraries stay at WARNING to avoid noise.
+if env.DEBUG_MODE:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s - %(levelname)-8s - %(name)s - %(message)s",
+    )
+    logging.getLogger("src.llm").setLevel(logging.DEBUG)
+else:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s - %(levelname)-8s - %(name)s - %(message)s",
+    )
 
 # Lazy singletons - initialized on first request to avoid blocking app startup
 _vector_db: VectorDBAzureSearch | None = None

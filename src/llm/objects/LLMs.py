@@ -1,4 +1,5 @@
 import datetime
+import logging
 import threading
 from enum import Enum
 
@@ -16,6 +17,8 @@ from llama_index.llms.openai_like import OpenAILike
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.env import env
 from src.llm.streaming import CitationStreamFilter, stream_phase_var, token_callback_var
+
+logger = logging.getLogger(__name__)
 
 TIME_TO_WAIT_FOR_GWDG = 7  # in seconds
 TIME_TO_RESET_UNAVAILABLE_STATUS = 60 * 5  # in seconds
@@ -107,17 +110,27 @@ class LLM:
         token_callback = token_callback_var.get()
         stream_phase = stream_phase_var.get()
 
+        logger.debug("LLM.chat() requested model=%s, query_preview=%r", model, query[:80])
+
         if LLM.gwdg_unavailable and LLM.gwdg_unavailable_since:
             if datetime.datetime.now() - LLM.gwdg_unavailable_since > datetime.timedelta(
                 seconds=TIME_TO_RESET_UNAVAILABLE_STATUS
             ):
+                logger.debug("GWDG unavailability window expired — resetting to available")
                 LLM.gwdg_unavailable = False
                 LLM.gwdg_unavailable_since = None
 
         # If GWDG is unavailable, use Azure fallback model instead
         if LLM.gwdg_unavailable:
+            logger.debug(
+                "GWDG marked unavailable (since %s) — overriding model %s → %s",
+                LLM.gwdg_unavailable_since,
+                model,
+                Models.AZURE_FALLBACK,
+            )
             model = Models.AZURE_FALLBACK
 
+        logger.debug("Using model=%s", model)
         llm = self.get_model(model)
         # Convert SerializableChatMessage to ChatMessage for SimpleChatEngine
         chat_history_messages = [msg.to_chat_message() for msg in chat_history]
@@ -211,18 +224,42 @@ class LLM:
 
         result = [None]  # Use a list to hold the result (mutable object to modify inside threads)
 
+        _orig_excepthook = threading.excepthook
+
+        def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
+            # Intercept unhandled exceptions from llama_index internal threads
+            # (e.g. write_response_to_history) so they go through our logger
+            # instead of being printed raw to stderr by Python.
+            logger.warning(
+                "Unhandled exception in llama_index internal thread %r — likely GWDG stream failure",
+                args.thread.name if args.thread else "unknown",
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+
         def target():
             try:
                 result.append(chat_engine.chat(message=query))  # Execute the chat function
             except Exception as e:
+                logger.warning("GWDG target() thread raised exception", exc_info=True)
                 result.append(e)  # If error, store the exception in the result
 
+        threading.excepthook = _thread_excepthook
         thread = threading.Thread(target=target)
         thread.start()
         thread.join(timeout=TIME_TO_WAIT_FOR_GWDG)
+        threading.excepthook = _orig_excepthook
 
         if thread.is_alive() or isinstance(result[-1], Exception) or result[-1] is None:
             # GWDG timeout or error - fallback to Azure model
+            reason = "timeout" if thread.is_alive() else ("exception" if isinstance(result[-1], Exception) else "None response")
+            exc = result[-1] if isinstance(result[-1], Exception) else None
+            logger.warning(
+                "GWDG call failed (%s) after %ss — switching to Azure fallback and marking GWDG unavailable%s",
+                reason,
+                TIME_TO_WAIT_FOR_GWDG,
+                f": {exc}" if exc else "",
+                exc_info=exc,
+            )
             LLM.gwdg_unavailable = True
             LLM.gwdg_unavailable_since = datetime.datetime.now()
             llm = self.get_model(Models.AZURE_FALLBACK)
