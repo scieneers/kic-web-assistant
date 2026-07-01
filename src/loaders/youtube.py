@@ -11,6 +11,7 @@ from youtube_transcript_api import (
     TranscriptsDisabled,
     YouTubeTranscriptApi,
 )
+from youtube_transcript_api._errors import YouTubeRequestFailed
 from youtube_transcript_api.formatters import WebVTTFormatter
 
 from src.loaders.helper import convert_vtt_to_text
@@ -29,11 +30,11 @@ class Youtube:
             transcript_json = transcript.fetch()
             # Mitigation of API rate limit? :(
             time.sleep(3)
-        except (NoTranscriptFound, TranscriptsDisabled, ParseError, requests.exceptions.RequestException):
+        except (NoTranscriptFound, TranscriptsDisabled, ParseError, requests.exceptions.RequestException, YouTubeRequestFailed) as e:
             # Kein oder kein gültiges Transcript verfügbar (nicht in DE/EN, kaputte/unerwartete Antwort
             # oder Netzwerk-/Chunked-Encoding-Fehler) – Run nicht abbrechen.
             # Nur eine knappe Warnung ohne langen Exception-Text loggen.
-            logger.warning("Failed to retrieve YouTube transcript for video %s", video_id)
+            logger.warning("Failed to retrieve YouTube transcript for video %s: %s", video_id, type(e).__name__)
             err_message = "Transcript liegt nicht (in Deutsch oder Englisch) oder in gültiger Form vor"
             return None, err_message
         formatter = WebVTTFormatter()
