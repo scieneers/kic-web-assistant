@@ -16,7 +16,7 @@ from llama_index.llms.openai_like import OpenAILike
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.env import env
-from src.llm.streaming import CitationStreamFilter, stream_phase_var, token_callback_var
+from src.llm.streaming import CitationStreamFilter, citation_resolver_var, stream_phase_var, token_callback_var
 
 logger = logging.getLogger(__name__)
 
@@ -148,20 +148,25 @@ class LLM:
         # deltas. Instead we try streaming; if it fails, we fall back to a
         # single non-streaming completion and emit it as one chunk.
         if token_callback is not None and stream_phase == "final":
-            # Hide [docN] citation markers while streaming. The full answer
-            # returned below keeps the markers intact so the CitationParser can
-            # later turn them into clickable [title] links in the final message.
-            citation_filter = CitationStreamFilter()
+            resolver = citation_resolver_var.get()
+            if resolver is not None:
+                # question_answerer.py set up a CitationStreamResolver that resolves
+                # [docN] markers to links in real-time — use it directly.
+                _emit = resolver.feed
+                _emit_flush = resolver.flush
+            else:
+                # No resolver (e.g. no_vector_db path) — fall back to dropping markers.
+                citation_filter = CitationStreamFilter()
 
-            def _emit(text: str) -> None:
-                filtered = citation_filter.feed(text)
-                if filtered:
-                    token_callback(filtered)
+                def _emit(text: str) -> None:
+                    filtered = citation_filter.feed(text)
+                    if filtered:
+                        token_callback(filtered)
 
-            def _emit_flush() -> None:
-                tail = citation_filter.flush()
-                if tail:
-                    token_callback(tail)
+                def _emit_flush() -> None:
+                    tail = citation_filter.flush()
+                    if tail:
+                        token_callback(tail)
 
             try:
                 streaming_resp = chat_engine.stream_chat(message=query)
@@ -218,8 +223,18 @@ class LLM:
                 # Fall back to non-streaming and emit as a single chunk.
                 response = chat_engine.chat(message=query)
                 text = response.response if isinstance(response.response, str) else str(response.response)
-                _emit(text)
-                _emit_flush()
+                # Do NOT emit the text if:
+                # (a) real streaming already started (SmartStreamCallback
+                #     switched out of peeking mode) — would append noise, or
+                # (b) the fallback is the "NO ANSWER FOUND" sentinel — emitting
+                #     it would push the peek buffer over the threshold and leak
+                #     the sentinel into the stream even for short responses.
+                _cb = citation_resolver_var.get()
+                already_streamed = _cb is not None and not getattr(_cb, "_peeking", True)
+                is_sentinel = text.strip() == "NO ANSWER FOUND"
+                if not already_streamed and not is_sentinel:
+                    _emit(text)
+                    _emit_flush()
                 return SerializableChatMessage(role="assistant", content=text)
 
         result = [None]  # Use a list to hold the result (mutable object to modify inside threads)

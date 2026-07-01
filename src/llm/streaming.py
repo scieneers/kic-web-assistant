@@ -15,6 +15,7 @@ from typing import Callable, Optional
 
 
 TokenCallback = Callable[[str], None]
+CitationResolve = Callable[[str], str]  # [docN] marker → replacement string (or "" to drop)
 
 
 # Matches a complete citation marker like [doc12].
@@ -86,9 +87,135 @@ class CitationStreamFilter:
         return out
 
 
+class CitationStreamResolver:
+    """Resolves [docN] citation markers in a token stream on the fly.
+
+    Like CitationStreamFilter but calls a provided ``resolve`` callable on each
+    complete marker instead of dropping it.  The resolved text (or "" to drop)
+    is forwarded directly to ``callback``.
+
+    Tracks everything emitted via ``emitted_text`` so callers can use the
+    resolved output as the authoritative final text.
+    """
+
+    def __init__(self, resolve: CitationResolve, callback: TokenCallback) -> None:
+        self._resolve = resolve
+        self._callback = callback
+        self._buffer = ""
+        self._emitted = ""
+
+    def feed(self, delta: str) -> None:
+        self._buffer += delta
+        out = ""
+        while self._buffer:
+            bracket = self._buffer.find("[")
+            if bracket == -1:
+                out += self._buffer
+                self._buffer = ""
+                break
+            out += self._buffer[:bracket]
+            self._buffer = self._buffer[bracket:]
+            match = _COMPLETE_CITATION_RE.match(self._buffer)
+            if match:
+                out += self._resolve(match.group())
+                self._buffer = self._buffer[match.end():]
+                continue
+            if _is_partial_citation(self._buffer):
+                break
+            out += "["
+            self._buffer = self._buffer[1:]
+        if out:
+            self._emitted += out
+            self._callback(out)
+
+    def flush(self) -> None:
+        if self._buffer:
+            self._emitted += self._buffer
+            self._callback(self._buffer)
+            self._buffer = ""
+
+    @property
+    def emitted_text(self) -> str:
+        """The accumulated text that was emitted to the callback so far."""
+        return self._emitted
+
+
+class SmartStreamCallback:
+    """Combines NO ANSWER FOUND sentinel detection with CitationStreamResolver.
+
+    Buffers only the first ~20 characters. Once more text arrives it's clear
+    the response is a real answer, so the buffer is flushed and real-time mode
+    takes over. If the stream ends with exactly "NO ANSWER FOUND", the buffered
+    sentinel is discarded and the friendly message is sent instead.
+
+    Must be called in this order:
+        1. feed(delta) — for every streaming token
+        2. flush()    — called by LLMs.py at end of stream (before NO ANSWER check)
+        3. finalize() — called by question_answerer AFTER NO ANSWER check
+    """
+
+    _SENTINEL = "NO ANSWER FOUND"
+    _THRESHOLD = len(_SENTINEL) + 5  # buffer until we're sure it's not the sentinel
+
+    def __init__(self, resolver: "CitationStreamResolver", outer_callback: TokenCallback) -> None:
+        self._resolver = resolver
+        self._outer_callback = outer_callback
+        self._peeking = True
+        self._peek_buffer: list[str] = []
+        self._accumulated_len = 0
+
+    def feed(self, delta: str) -> None:
+        if not self._peeking:
+            self._resolver.feed(delta)
+            return
+        self._peek_buffer.append(delta)
+        self._accumulated_len += len(delta)
+        if self._accumulated_len > self._THRESHOLD:
+            self._switch_to_realtime()
+
+    def _switch_to_realtime(self) -> None:
+        self._peeking = False
+        for t in self._peek_buffer:
+            self._resolver.feed(t)
+        self._peek_buffer = []
+
+    def flush(self) -> None:
+        """Called by LLMs.py when the stream ends — hold off if still peeking."""
+        if not self._peeking:
+            self._resolver.flush()
+
+    def finalize(self, is_no_answer: bool, friendly_message: str = "") -> None:
+        """Called by question_answerer AFTER the NO ANSWER FOUND check.
+
+        For sentinel responses: discards buffered tokens silently.  The caller
+        is responsible for setting the correct response.content; that value
+        reaches the user via the ``final`` event in rest.py — NOT as a streaming
+        token here.  Emitting the friendly message as a token caused a race
+        where it arrived in the queue before (or interleaved with) real streamed
+        content, corrupting the display.
+        For normal responses: switches to real-time (if still peeking) and
+        flushes the resolver's internal citation buffer.
+        """
+        if is_no_answer:
+            self._peek_buffer = []
+            # Deliberately do NOT call outer_callback here.
+            # The friendly message is delivered by the ``final`` NDJSON event.
+        else:
+            if self._peeking:
+                self._switch_to_realtime()
+            self._resolver.flush()
+
+
 # If set (per-request), the LLM layer will push generated token deltas into this callback.
 token_callback_var: contextvars.ContextVar[Optional[TokenCallback]] = contextvars.ContextVar(
     "kic_token_callback",
+    default=None,
+)
+
+
+# When set, LLMs.py uses this resolver instead of CitationStreamFilter.
+citation_resolver_var: contextvars.ContextVar[Optional[CitationStreamResolver]] = contextvars.ContextVar(
+    "kic_citation_resolver",
     default=None,
 )
 

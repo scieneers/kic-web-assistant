@@ -89,7 +89,7 @@ class CitationParser:
                     title = _get_display_title(doc)
                     replacement_text = CITATION_TEXT.format(url=doc.metadata.get("url"), title=title)
                     seen_urls.add(doc.metadata.get("url"))
-                    answer = re.sub(rf"[, ]*\[doc{i}\]", rf"{replacement_text}", answer)
+                    answer = re.sub(rf"[, ]*\[doc{i}\]", lambda m: replacement_text, answer)
                 else:
                     answer = re.sub(rf"[, ]*\[doc{i}\]", "", answer)
             except IndexError:
