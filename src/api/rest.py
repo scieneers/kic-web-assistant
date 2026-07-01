@@ -295,6 +295,19 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
+class ChatHistoryResponse(BaseModel):
+    thread_id: str = Field(description="Die Thread-ID der Konversation.")
+    messages: list[SerializableChatMessage] = Field(description="Alle gespeicherten Nachrichten der Konversation.")
+
+
+@app.get("/api/chat/history/{thread_id}", dependencies=[Depends(api_key_auth)])
+def get_chat_history(thread_id: str) -> ChatHistoryResponse:
+    """Gibt den gespeicherten Gesprächsverlauf zurück (z.B. nach Page-Reload in Moodle).
+    Gibt eine leere Liste zurück wenn die Session abgelaufen oder unbekannt ist."""
+    messages = get_assistant().get_chat_history(thread_id)
+    return ChatHistoryResponse(thread_id=thread_id, messages=messages)
+
+
 class FeedbackRequest(BaseModel):
     response_id: str = Field(description="The ID of the response that the feedback belongs to.")
     feedback: str | None = Field(description="Feedback on the conversation.", default=None)

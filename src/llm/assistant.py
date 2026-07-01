@@ -1,6 +1,7 @@
 import uuid
+from collections import OrderedDict
 from langfuse.decorators import observe, langfuse_context
-from langgraph.graph import StateGraph, START, END 
+from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
@@ -11,6 +12,43 @@ from src.llm.graphs.no_vector_db import build_no_vectordb_graph
 from src.llm.graphs.simple_hop import build_simple_hop_graph
 from src.llm.graphs.multi_hop import build_multi_hop_graph
 from src.llm.graphs.socratic import build_socratic_graph
+
+
+class BoundedMemorySaver(MemorySaver):
+    """MemorySaver mit maximalem Thread-Limit (FIFO-Verdrängung).
+
+    Verhindert unbegrenztes Speicherwachstum bei langer Backend-Laufzeit.
+    Sobald max_threads überschritten wird, fliegt der älteste Thread raus.
+    """
+
+    def __init__(self, max_threads: int = 500):
+        super().__init__()
+        self.max_threads = max_threads
+        self._thread_order: OrderedDict[str, None] = OrderedDict()
+
+    def _register_and_evict(self, thread_id: str) -> None:
+        if thread_id in self._thread_order:
+            return
+        self._thread_order[thread_id] = None
+        if len(self._thread_order) > self.max_threads:
+            oldest_id, _ = self._thread_order.popitem(last=False)
+            # MemorySaver speichert intern unter self.storage und self.writes
+            try:
+                self.storage.pop(oldest_id, None)
+            except AttributeError:
+                pass
+            try:
+                self.writes.pop(oldest_id, None)
+            except AttributeError:
+                pass
+
+    def put(self, config, checkpoint, metadata, new_versions):
+        self._register_and_evict(config["configurable"]["thread_id"])
+        return super().put(config, checkpoint, metadata, new_versions)
+
+    async def aput(self, config, checkpoint, metadata, new_versions):
+        self._register_and_evict(config["configurable"]["thread_id"])
+        return await super().aput(config, checkpoint, metadata, new_versions)
 
 
 class KICampusAssistant:
@@ -36,9 +74,10 @@ class KICampusAssistant:
             "enable_socratic": enable_socratic,
         }
         
-        # Initialize checkpoint/persistence backend
-        # MemorySaver for development --> replace with PostgresSQL for production
-        self.checkpointer = MemorySaver()
+        # In-memory persistence for the duration of the backend runtime.
+        # No database persistence — conversations are lost on server restart.
+        # Bounded to 500 threads; oldest conversation is evicted when limit is exceeded.
+        self.checkpointer = BoundedMemorySaver(max_threads=500)
 
         # Compile main router graph
         self.graph = self._build_main_graph()
@@ -140,15 +179,15 @@ class KICampusAssistant:
         # Versuche, bestehenden State zu laden
         try:
             checkpoint = self.graph.get_state(config)
-            
+
             if checkpoint and checkpoint.values:
                 # State existiert → Nur neue Query + runtime_config updaten
                 # Lade bestehende chat_history (OHNE neue User-Message, die kommt später)
                 existing_history = checkpoint.values.get("chat_history", [])
-                
+
                 # Limitiere Chat-History auf letzte 6 Nachrichten
                 limited_existing_history = self.limit_chat_history(existing_history, limit=6)
-                
+
                 state_update: GraphState = {
                     "user_query": query,
                     "chat_history": limited_existing_history,
@@ -160,7 +199,7 @@ class KICampusAssistant:
                     }
                 }
                 return state_update, config, thread_id
-        
+
         except Exception:
             # Checkpoint existiert nicht oder Fehler beim Laden
             pass
@@ -177,7 +216,7 @@ class KICampusAssistant:
             },
             "system_config": self.system_config
         }
-        
+
         return initial_state, config, thread_id
 
     @observe()
@@ -290,6 +329,18 @@ class KICampusAssistant:
 
         # Return SerializableChatMessage and thread_id
         return (assistant_message, thread_id)
+
+
+    def get_chat_history(self, thread_id: str) -> list[SerializableChatMessage]:
+        """Gibt die gespeicherte Konversation zurück. Leer wenn thread_id unbekannt."""
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            checkpoint = self.graph.get_state(config)
+            if checkpoint and checkpoint.values:
+                return checkpoint.values.get("chat_history", [])
+        except Exception:
+            pass
+        return []
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import json
+import time
 import httpx
 import streamlit as st
 import random
@@ -192,7 +193,36 @@ def reset_history():
     st.session_state.messages = []
     st.session_state.course_id = None
     st.session_state.module_id = None
-    st.session_state.thread_id = None  # Reset thread_id for new conversation
+    st.session_state.thread_id = None
+    st.session_state.last_activity = None
+    st.session_state._auto_restored = False
+    st.experimental_set_query_params()
+
+
+SESSION_TTL = 30 * 60  # 30 Minuten – muss mit Backend-Wert übereinstimmen
+
+
+def _load_session_from_backend(thread_id: str, auto_restored: bool = False) -> None:
+    """Lädt Gesprächsverlauf vom Backend – simuliert Moodle-Page-Reload.
+
+    auto_restored=True: vom URL-Query-Param ausgelöst (Reload-Simulation).
+    auto_restored=False: manuell über Sidebar-Eingabe ausgelöst.
+    """
+    response = get_api_client().get(
+        f"/api/chat/history/{thread_id}",
+        headers={"Api-Key": env.REST_API_KEYS[0]},
+    )
+    if response.status_code != 200:
+        st.sidebar.error(f"Session nicht gefunden: {response.status_code}")
+        return
+    data = response.json()
+    messages = data.get("messages", [])
+    st.session_state.thread_id = thread_id
+    st.session_state.last_activity = time.time()
+    st.session_state._auto_restored = auto_restored
+    st.session_state.messages = [
+        {"role": msg["role"], "content": msg["content"]} for msg in messages
+    ]
 
 
 def submit_feedback(feedback: dict, trace_id: str):
@@ -221,7 +251,13 @@ if "module_id" not in st.session_state:
     st.session_state.module_id = None
 
 if "thread_id" not in st.session_state:
-    st.session_state.thread_id = None  # Managed by backend, stored for UI display
+    st.session_state.thread_id = None
+
+if "last_activity" not in st.session_state:
+    st.session_state.last_activity = None
+
+if "_auto_restored" not in st.session_state:
+    st.session_state._auto_restored = False
 
 
 with st.sidebar:
@@ -247,6 +283,24 @@ with st.sidebar:
         label="Make a selection to talk to a course - or module",
     )
 
+    st.divider()
+    st.caption("🧪 Moodle-Simulation")
+    if st.session_state.thread_id:
+        if st.session_state._auto_restored:
+            st.success("↩ Session wiederhergestellt (Reload)")
+        st.text("Aktive Session-ID:")
+        st.code(st.session_state.thread_id, language=None)
+    else:
+        st.text("Keine aktive Session")
+
+    load_id = st.text_input("Session-ID laden", placeholder="thread_id hier einfügen…", key="load_session_input")
+    if st.button("Laden", key="load_session_btn") and load_id:
+        _load_session_from_backend(load_id.strip())
+        st.rerun()
+    if st.button("Neue Session", key="new_session_btn"):
+        reset_history()
+        st.rerun()
+
 # Initialize assistant
 if "api_client" not in st.session_state or not st.session_state.api_client:
     with st.empty():  # Use st.empty to hold the place for conditional messages
@@ -257,9 +311,14 @@ if "api_client" not in st.session_state or not st.session_state.api_client:
 with st.chat_message("assistant"):
     st.write("Herzlich willkommen auf dem KI-Campus! Wie kann ich dir weiterhelfen?")
 
-# Initialize chat history & display chat messages from history on app rerun
+# Initialize chat history — auf frischem Page-Load URL-Param prüfen (Moodle: localStorage)
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    url_thread_id = st.experimental_get_query_params().get("thread_id", [None])[0]
+    if url_thread_id:
+        _load_session_from_backend(url_thread_id, auto_restored=True)
+        st.rerun()  # Sidebar neu rendern damit Badge + Session-ID sofort sichtbar sind
+    else:
+        st.session_state.messages = []
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -268,12 +327,22 @@ for message in st.session_state.messages:
 
 # React to user input
 if query := st.chat_input("Wie lautet Ihre Frage?"):
+    # TTL-Check: Session nach 30 min Inaktivität zurücksetzen
+    if (
+        st.session_state.last_activity is not None
+        and time.time() - st.session_state.last_activity > SESSION_TTL
+    ):
+        reset_history()
+        st.info("Session abgelaufen – neue Konversation gestartet.")
+
+    st.session_state.last_activity = time.time()
+
     with st.chat_message("user"):
         st.markdown(query)
 
     # Store user message in UI history (for display only)
     st.session_state.messages.append({"role": MessageRole.USER, "content": query})
-    
+
     payload = {
         "user_query": {"role": MessageRole.USER, "content": query},  # Single message object (not array)
         "model": st.session_state.llm_select.value
@@ -334,6 +403,11 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
 
     # Store assistant response in UI history (for display only)
     st.session_state.messages.append({"role": MessageRole.ASSISTANT, "content": streamed_text})
+    # URL-Param setzen (Moodle-Analog: localStorage.setItem) → überlebt Browser-Reload
+    if st.session_state.thread_id:
+        st.experimental_set_query_params(thread_id=st.session_state.thread_id)
+    # Rerun so the sidebar shows the updated thread_id immediately.
+    st.rerun()
 
 if trace_id := st.session_state.get("trace_id"):
     streamlit_feedback(
