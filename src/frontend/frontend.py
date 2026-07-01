@@ -116,6 +116,9 @@ def create_courses_modules_tree() -> list:
         module_id = payload.get("module_id")
 
         if module_id not in seen_modules:
+            if course_id not in tree_dict:
+                tree_dict[course_id] = sac.TreeItem(f"Kurs {course_id}", description=course_id, children=[])
+                seen_courses.add(course_id)
             child_node = sac.TreeItem(fullname, description=module_id)
             tree_dict[course_id].children.append(child_node)
             seen_modules.add(module_id)
