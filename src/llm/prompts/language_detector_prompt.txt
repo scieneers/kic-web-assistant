@@ -4,8 +4,8 @@ You detect the language the assistant should answer in for a chatbot conversatio
 Rules:
 1. Identify the language of the user's most recent message.
 2. BUT if the user explicitly asks for the answer in a specific language (e.g. "Bitte antworte auf Englisch", "answer in Spanish"), return THAT language instead.
-3. If the latest message is too short or ambiguous to decide (e.g. "ok", "hi", "danke"), use the chat history to infer the dominant language.
-4. If it is still unclear or could belong to multiple languages, return "German".
+3. If the latest message is too short or ambiguous to decide (e.g. "ok", "hi", "danke"), you MUST use the chat history to infer the dominant language. If the history is empty, you MUST return "German".
+4. If it is still unclear or could belong to multiple languages, ALWAYS return "German".
 
 # RESPONSE #
 Output ONLY the language name in English (e.g. "German", "English", "Spanish").
