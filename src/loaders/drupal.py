@@ -80,12 +80,13 @@ class Drupal:
 
         if response.status_code != 200:
             self.logger.warning(
-                "Drupal OAuth failed %s",
+                "Drupal OAuth failed %s RESPONSE=%s",
                 format_kv(
                     STAGE="DRUPAL",
                     EVENT="OAUTH_FAILED",
                     STATUS_CODE=response.status_code,
                 ),
+                response.text[:500],
             )
             return
 
@@ -172,8 +173,13 @@ class Drupal:
             response = requests.get(url, headers=self.header)
             
             if response.status_code != 200:
-                self.logger.warning(f"API request failed with status {response.status_code} for URL: {url}")
-                return data  # Return whatever data we have so far
+                self.logger.warning(
+                    "API request failed STATUS=%s URL=%s RESPONSE=%s",
+                    response.status_code,
+                    url,
+                    response.text[:500],
+                )
+                return data
             
             result = response.json()
             data.extend(result["data"])
