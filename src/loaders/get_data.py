@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -5,7 +6,6 @@ import time
 import uuid
 import gc
 
-from tqdm import tqdm
 
 from src.env import env
 from src.llm.objects.LLMs import LLM
@@ -15,6 +15,43 @@ from src.loaders.moodle import Moodle
 from src.loaders.helper import iter_nodes_from_document_hierarchical
 from src.vectordb.azure_search import VectorDBAzureSearch, sanitize_key
 from src.loaders.run_logger import Heartbeat, RunContext, RunLogger, StageTimer, Watchdog, format_kv
+
+
+def _source_doc_key(doc) -> str:
+    """Stable identifier for a source document (pre-chunking)."""
+    md = getattr(doc, "metadata", None) or {}
+    source = md.get("source", "unknown")
+    if source == "Drupal":
+        return md.get("url") or f"drupal:{getattr(doc, 'doc_id', '')}"
+    if source == "Moodle":
+        course_id = md.get("course_id", "")
+        module_id = md.get("module_id")
+        suffix = str(module_id) if module_id is not None else "summary"
+        return f"moodle:{course_id}:{suffix}"
+    if source == "Moochup":
+        return md.get("url") or f"moochup:{md.get('course_id', getattr(doc, 'doc_id', ''))}"
+    return md.get("url") or f"{source}:{getattr(doc, 'doc_id', '')}"
+
+
+def _content_hash(doc, chunk_size: int, chunk_overlap: int) -> str:
+    """SHA-256 fingerprint of text + key metadata + chunking params (truncated to 16 hex chars).
+
+    Including chunk_size/chunk_overlap means a parameter change automatically
+    invalidates all existing hashes and triggers a full re-embed on the next run.
+    """
+    md = getattr(doc, "metadata", None) or {}
+    stable = (
+        (getattr(doc, "text", None) or "")
+        + (md.get("title") or "")
+        + (md.get("url") or "")
+        + f"|cs={chunk_size}|co={chunk_overlap}"
+    )
+    return hashlib.sha256(stable.encode()).hexdigest()[:16]
+
+
+def _odata_escape(value: str) -> str:
+    """Escape a string value for embedding in an OData filter expression."""
+    return value.replace("'", "''")
 
 
 def _as_int(value) -> int | None:
@@ -58,6 +95,8 @@ class Fetch_Data:
             "date_created": md.get("date_created"),
             "metadata_json": json.dumps(md, default=str, ensure_ascii=False),
             "dense": dense_vec,
+            "source_doc_key": md.get("source_doc_key"),
+            "content_hash": md.get("content_hash"),
         }
 
     def _embed_and_upsert_nodes(self, nodes: list, *, stage: str) -> int:
@@ -71,7 +110,17 @@ class Fetch_Data:
             return 0
 
         texts_to_embed = [n.get_content() for n in nodes]
+        t_embed = time.time()
         dense_embeddings = self.embedder.get_text_embedding_batch(texts_to_embed)
+        self.logger.info(
+            "EMBED_BATCH %s",
+            format_kv(
+                RUN_ID=self.run_id,
+                STAGE=stage,
+                NODES=len(texts_to_embed),
+                ELAPSED_MS=int((time.time() - t_embed) * 1000),
+            ),
+        )
 
         documents: list[dict] = [
             self._build_document(node, node.get_content(), node.metadata or {}, dense_vec)
@@ -152,34 +201,6 @@ class Fetch_Data:
                 format_kv(RUN_ID=self.run_id, EVENT="SOURCE_FILTER_ENABLED", RUN_SOURCES=",".join(sorted(run_sources))),
             )
 
-        def chunk_list(lst, chunk_size):
-            """Yield successive chunk_size-sized chunks from lst."""
-            for i in range(0, len(lst), chunk_size):
-                yield lst[i : i + chunk_size]
-
-        def _doc_source(doc) -> str | None:
-            try:
-                md = getattr(doc, "metadata", None) or {}
-                src = md.get("source")
-                return str(src) if src is not None else None
-            except Exception:
-                return None
-
-        def _doc_url(doc) -> str | None:
-            try:
-                md = getattr(doc, "metadata", None) or {}
-                url = md.get("url")
-                return str(url) if url is not None else None
-            except Exception:
-                return None
-
-        def _batch_source_counts(docs: list) -> dict[str, int]:
-            counts: dict[str, int] = {}
-            for d in docs:
-                s = _doc_source(d) or "UNKNOWN"
-                counts[s] = counts.get(s, 0) + 1
-            return counts
-
         # Chunking defaults (token-aware). Tune via env vars.
         chunk_size_tokens = int(os.getenv("CHUNK_SIZE_TOKENS", "500"))
         chunk_overlap_tokens = int(os.getenv("CHUNK_OVERLAP_TOKENS", "83"))
@@ -221,8 +242,14 @@ class Fetch_Data:
         moodle_courses_total = 0
         moodle_courses_done = 0
         moodle_documents = 0
+        moodle_skipped = 0
+        moodle_stale_deleted = 0
         drupal_documents = 0
+        drupal_skipped = 0
+        drupal_stale_deleted = 0
         moochup_documents = 0
+        moochup_skipped = 0
+        moochup_stale_deleted = 0
 
         try:
             # Ensure the index exists. It is created once with a fixed vector
@@ -253,9 +280,6 @@ class Fetch_Data:
                     LOG_RSS_EVERY_N_BATCHES=log_rss_every,
                 ),
             )
-
-            # Track one course document per course (small; used for discoverability)
-            ingested_course_summaries: set[int] = set()
 
             def _rss_mb() -> float | None:
                 try:
@@ -332,59 +356,68 @@ class Fetch_Data:
                     if len(node_buffer) >= embed_nodes_batch:
                         _flush_node_buffer(stage=stage)
 
-            def _upsert_documents(docs: list, *, stage: str, batch_docs: int = 50) -> int:
-                """Chunk/embed/upsert docs (non-Moodle sources).
-
-                Documents are queued into the shared node buffer so embedding batches
-                stay full across document boundaries; the remainder is flushed once at
-                the end of the stage.
-                """
-                start_points = total_points_upserted
-
-                for batch_idx, batch in enumerate(tqdm(chunk_list(docs, batch_docs), desc=f"{stage} batches"), start=1):
-                    self.ctx.checkpoint()
-                    source_counts = _batch_source_counts(batch)
-                    first_url = _doc_url(batch[0]) if batch else None
-                    last_url = _doc_url(batch[-1]) if batch else None
-                    self.logger.info(
-                        "DOC_BATCH %s",
-                        format_kv(
-                            RUN_ID=self.run_id,
-                            STAGE=stage,
-                            EVENT="DOC_BATCH",
-                            BATCH_DOC_INDEX=batch_idx,
-                            DOCS_IN_BATCH=len(batch),
-                            SOURCES=str(source_counts),
-                            FIRST_URL=first_url,
-                            LAST_URL=last_url,
-                        ),
-                    )
-                    if batch:
-                        self.ctx.set_last(url=first_url)
-
-                    for d in batch:
-                        _queue_document(d, stage=stage)
-
-                # Drain the remainder so nodes don't bleed into the next stage.
-                _flush_node_buffer(stage=stage)
-                return total_points_upserted - start_points
-
-            # Moochup: delete by source and upsert
+            # Moochup: hash-based delta upsert
             with StageTimer(self.logger, self.ctx, "MOOCHUP"):
                 if run_sources is None or "MOOCHUP" in run_sources:
-                    self.logger.info("Loading Moodle data from Moochup API...")
+                    self.logger.info("Loading Moochup data...")
                     moochup_docs = Moochup(env.DATA_SOURCE_MOOCHUP_MOODLE_URL).get_course_documents()
                     moochup_documents = len(moochup_docs)
                     self.ctx.set_counter("moochup_documents", moochup_documents)
                     self.ctx.set_counter("moochup_courses", moochup_documents)
 
-                    # Delete existing Moochup points
-                    self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Moochup'")
-                    _upsert_documents(moochup_docs, stage="MOOCHUP_UPSERT")
+                    moochup_existing = self.search_store.load_content_hashes("Moochup", env.AZURE_SEARCH_INDEX)
+                    # Migration guard: old chunks (pre-hash) have no source_doc_key and are
+                    # invisible to the stale cleanup. Delete them once so the index starts clean.
+                    if not moochup_existing and self.search_store.any_match(
+                        "source eq 'Moochup' and source_doc_key eq null", index_name=env.AZURE_SEARCH_INDEX
+                    ):
+                        self.logger.info(
+                            "MIGRATION_GUARD %s",
+                            format_kv(RUN_ID=self.run_id, SOURCE="Moochup", EVENT="DELETE_OLD_SCHEMA"),
+                        )
+                        self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Moochup'")
+                    moochup_seen: set[str] = set()
+
+                    for doc in moochup_docs:
+                        self.ctx.checkpoint()
+                        key = _source_doc_key(doc)
+                        new_hash = _content_hash(doc, chunk_size_tokens, chunk_overlap_tokens)
+                        moochup_seen.add(key)
+                        doc.metadata["source_doc_key"] = key
+                        doc.metadata["content_hash"] = new_hash
+
+                        if key not in moochup_existing:
+                            _queue_document(doc, stage="MOOCHUP_UPSERT")
+                        elif moochup_existing[key] != new_hash:
+                            self.search_store.delete_by_filter(
+                                env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                            )
+                            _queue_document(doc, stage="MOOCHUP_UPSERT")
+                        else:
+                            moochup_skipped += 1
+
+                    _flush_node_buffer(stage="MOOCHUP_UPSERT")
+
+                    stale = moochup_existing.keys() - moochup_seen
+                    for key in stale:
+                        self.search_store.delete_by_filter(
+                            env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                        )
+                    moochup_stale_deleted = len(stale)
+
+                    self.logger.info(
+                        "MOOCHUP_DELTA %s",
+                        format_kv(
+                            RUN_ID=self.run_id,
+                            TOTAL=moochup_documents,
+                            SKIPPED=moochup_skipped,
+                            STALE_DELETED=moochup_stale_deleted,
+                        ),
+                    )
                 else:
                     self.logger.warning("Skipping MOOCHUP due to RUN_SOURCES filter")
 
-            # Moodle: stream per course; delete+upsert per course_id
+            # Moodle: stream per course; hash-based delta per module
             moodle_watchdog_s = int(os.getenv("RUN_MOODLE_WATCHDOG_SECONDS", "1800"))
             watchdog = Watchdog(self.logger, self.ctx, "MOODLE", threshold_seconds=moodle_watchdog_s)
             if run_sources is None or "MOODLE" in run_sources:
@@ -400,69 +433,96 @@ class Fetch_Data:
                     except Exception:
                         moodle_courses_total = 0
 
+                    moodle_existing = self.search_store.load_content_hashes("Moodle", env.AZURE_SEARCH_INDEX)
+                    if not moodle_existing and self.search_store.any_match(
+                        "source eq 'Moodle' and source_doc_key eq null", index_name=env.AZURE_SEARCH_INDEX
+                    ):
+                        self.logger.info(
+                            "MIGRATION_GUARD %s",
+                            format_kv(RUN_ID=self.run_id, SOURCE="Moodle", EVENT="DELETE_OLD_SCHEMA"),
+                        )
+                        self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Moodle'")
+                    moodle_seen: set[str] = set()
                     prev_course_id: int | None = None
-                    # Track per-course state to avoid duplicate deletes within a run
-                    deleted_course_summary: set[int] = set()
 
                     for course, doc in moodle.iter_course_documents_stream():
                         course_id = int(getattr(course, "id", 0))
+                        module_id = doc.metadata.get("module_id") if doc.metadata else None
 
-                        # Determine whether this is the per-course summary doc or a module doc.
-                        module_id = None
-                        if getattr(doc, "metadata", None):
-                            module_id = doc.metadata.get("module_id")
-
-                        # Course boundary cleanup (before starting the next course)
+                        # GC at course boundaries to keep memory bounded
                         if prev_course_id is not None and course_id != prev_course_id:
                             gc.collect()
                             _malloc_trim()
                         prev_course_id = course_id
 
-                        # Maintain a stable single course summary point per course by deleting old
-                        # summaries and chunks before inserting the new ones.
-                        if module_id is None and course_id not in deleted_course_summary:
-                            deleted_course_summary.add(course_id)
+                        key = _source_doc_key(doc)
+                        new_hash = _content_hash(doc, chunk_size_tokens, chunk_overlap_tokens)
+
+                        # Skip duplicates within the same run (course summary may appear multiple times)
+                        if key in moodle_seen:
+                            continue
+                        moodle_seen.add(key)
+
+                        if module_id is None:
                             moodle_courses_done += 1
                             self.ctx.set_counter("moodle_courses_done", moodle_courses_done)
-                            self.search_store.delete_by_filter(
-                                env.AZURE_SEARCH_INDEX,
-                                f"source eq 'Moodle' and course_id eq {int(course_id)}",
+
+                        doc.metadata["source_doc_key"] = key
+                        doc.metadata["content_hash"] = new_hash
+
+                        if key not in moodle_existing:
+                            moodle_documents += 1
+                            self.ctx.set_counter("moodle_documents", moodle_documents)
+                            _queue_document(doc, stage="MOODLE_UPSERT")
+                            self.logger.info(
+                                "MOODLE_DOC %s",
+                                format_kv(RUN_ID=self.run_id, COURSE_ID=course_id, MODULE_ID=module_id, EVENT="DOC_NEW"),
                             )
-
-                        # Skip per-course "Kurs" docs after first insert (avoids duplicates)
-                        if module_id is None:
-                            if course_id in ingested_course_summaries:
-                                continue
-                            ingested_course_summaries.add(course_id)
-
-                        moodle_documents += 1
-                        self.ctx.set_counter("moodle_documents", moodle_documents)
-                        # Queue the doc's chunks into the shared buffer. The actual
-                        # embed+upsert happens later when the buffer fills (or on the
-                        # end-of-stage flush), so this event means "chunked & queued",
-                        # not "persisted".
-                        _queue_document(doc, stage="MOODLE_UPSERT")
-                        self.logger.info(
-                            "MOODLE_DOC %s",
-                            format_kv(
-                                RUN_ID=self.run_id,
-                                COURSE_ID=course_id,
-                                MODULE_ID=module_id,
-                                EVENT="DOC_QUEUED",
-                            ),
-                        )
-
-                        # Additional periodic cleanup handled by _maybe_cleanup and course-boundary cleanup above
+                        elif moodle_existing[key] != new_hash:
+                            moodle_documents += 1
+                            self.ctx.set_counter("moodle_documents", moodle_documents)
+                            self.search_store.delete_by_filter(
+                                env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                            )
+                            _queue_document(doc, stage="MOODLE_UPSERT")
+                            self.logger.info(
+                                "MOODLE_DOC %s",
+                                format_kv(RUN_ID=self.run_id, COURSE_ID=course_id, MODULE_ID=module_id, EVENT="DOC_UPDATED"),
+                            )
+                        else:
+                            moodle_skipped += 1
+                            self.logger.debug(
+                                "MOODLE_DOC %s",
+                                format_kv(RUN_ID=self.run_id, COURSE_ID=course_id, MODULE_ID=module_id, EVENT="DOC_SKIPPED"),
+                            )
 
                     # Drain any nodes still buffered from the last course(s).
                     _flush_node_buffer(stage="MOODLE_UPSERT")
+
+                    # Clean up modules/courses that no longer exist in Moodle
+                    moodle_stale = moodle_existing.keys() - moodle_seen
+                    for key in moodle_stale:
+                        self.search_store.delete_by_filter(
+                            env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                        )
+                    moodle_stale_deleted = len(moodle_stale)
+
+                    self.logger.info(
+                        "MOODLE_DELTA %s",
+                        format_kv(
+                            RUN_ID=self.run_id,
+                            TOTAL_SEEN=len(moodle_seen),
+                            SKIPPED=moodle_skipped,
+                            STALE_DELETED=moodle_stale_deleted,
+                        ),
+                    )
 
                 watchdog.stop()
                 watchdog = None
             else:
                 self.logger.warning("Skipping MOODLE due to RUN_SOURCES filter")
 
-            # Drupal: delete by source and upsert
+            # Drupal: hash-based delta upsert
             with StageTimer(self.logger, self.ctx, "DRUPAL"):
                 self.logger.info("Loading Drupal data from Drupal API...")
                 if run_sources is None or "DRUPAL" in run_sources:
@@ -479,8 +539,53 @@ class Fetch_Data:
                     if drupal_documents == 0:
                         self.logger.warning("Drupal extraction returned 0 documents")
 
-                    self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Drupal'")
-                    _upsert_documents(drupal_docs, stage="DRUPAL_UPSERT")
+                    drupal_existing = self.search_store.load_content_hashes("Drupal", env.AZURE_SEARCH_INDEX)
+                    if not drupal_existing and self.search_store.any_match(
+                        "source eq 'Drupal' and source_doc_key eq null", index_name=env.AZURE_SEARCH_INDEX
+                    ):
+                        self.logger.info(
+                            "MIGRATION_GUARD %s",
+                            format_kv(RUN_ID=self.run_id, SOURCE="Drupal", EVENT="DELETE_OLD_SCHEMA"),
+                        )
+                        self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Drupal'")
+                    drupal_seen: set[str] = set()
+
+                    for doc in drupal_docs:
+                        self.ctx.checkpoint()
+                        key = _source_doc_key(doc)
+                        new_hash = _content_hash(doc, chunk_size_tokens, chunk_overlap_tokens)
+                        drupal_seen.add(key)
+                        doc.metadata["source_doc_key"] = key
+                        doc.metadata["content_hash"] = new_hash
+
+                        if key not in drupal_existing:
+                            _queue_document(doc, stage="DRUPAL_UPSERT")
+                        elif drupal_existing[key] != new_hash:
+                            self.search_store.delete_by_filter(
+                                env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                            )
+                            _queue_document(doc, stage="DRUPAL_UPSERT")
+                        else:
+                            drupal_skipped += 1
+
+                    _flush_node_buffer(stage="DRUPAL_UPSERT")
+
+                    stale = drupal_existing.keys() - drupal_seen
+                    for key in stale:
+                        self.search_store.delete_by_filter(
+                            env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                        )
+                    drupal_stale_deleted = len(stale)
+
+                    self.logger.info(
+                        "DRUPAL_DELTA %s",
+                        format_kv(
+                            RUN_ID=self.run_id,
+                            TOTAL=drupal_documents,
+                            SKIPPED=drupal_skipped,
+                            STALE_DELETED=drupal_stale_deleted,
+                        ),
+                    )
                 else:
                     self.logger.warning("Skipping DRUPAL due to RUN_SOURCES filter")
 
@@ -499,6 +604,8 @@ class Fetch_Data:
                     EVENT="COMPLETED",
                     ELAPSED_S=elapsed_s,
                     TOTAL_DOCUMENTS=(moochup_documents + moodle_documents + drupal_documents),
+                    TOTAL_SKIPPED=(moochup_skipped + moodle_skipped + drupal_skipped),
+                    TOTAL_STALE_DELETED=(moochup_stale_deleted + moodle_stale_deleted + drupal_stale_deleted),
                     POINTS_UPSERTED=total_points_upserted,
                 ),
             )
@@ -508,10 +615,16 @@ class Fetch_Data:
                 "log_url": log_url,
                 "counts": {
                     "moochup_documents": moochup_documents,
+                    "moochup_skipped": moochup_skipped,
+                    "moochup_stale_deleted": moochup_stale_deleted,
                     "moodle_documents": moodle_documents,
+                    "moodle_skipped": moodle_skipped,
+                    "moodle_stale_deleted": moodle_stale_deleted,
                     "moodle_courses_total": moodle_courses_total,
                     "moodle_courses_done": moodle_courses_done,
                     "drupal_documents": drupal_documents,
+                    "drupal_skipped": drupal_skipped,
+                    "drupal_stale_deleted": drupal_stale_deleted,
                     "total_documents": (moochup_documents + moodle_documents + drupal_documents),
                     "points_upserted": total_points_upserted,
                 },

@@ -78,24 +78,11 @@ class VectorDBAzureSearch:
     # Index management
     # ------------------------------------------------------------------
     def create_index(self, index_name: str, vector_size: int) -> None:
-        """Create the hybrid (vector + BM25) index if it does not already exist.
+        """Create or update the hybrid (vector + BM25) index.
 
-        The schema is fixed: explicit, typed fields for everything we filter or
-        display on, plus a ``metadata_json`` blob that preserves the full
-        original node metadata for lossless reconstruction at retrieval time.
+        Uses create_or_update_index so new fields (e.g. source_doc_key,
+        content_hash) are added to existing indexes without data loss.
         """
-        try:
-            self.index_client.get_index(index_name)
-            self.logger.info("Azure AI Search index '%s' already exists.", index_name)
-            return
-        except ResourceNotFoundError:
-            pass
-
-        self.logger.info(
-            "Azure AI Search create_index %s",
-            {"index": index_name, "vector_size": vector_size},
-        )
-
         fields = [
             SimpleField(name="id", type=SearchFieldDataType.String, key=True),
             # German analyzer: the corpus (KI-Campus) is predominantly German.
@@ -112,6 +99,11 @@ class VectorDBAzureSearch:
             SimpleField(name="date_created", type=SearchFieldDataType.String, filterable=True),
             # Lossless metadata round-trip; retrieval-only, never searched/filtered.
             SimpleField(name="metadata_json", type=SearchFieldDataType.String),
+            # Change-detection fields: one stable key per source document, one hash
+            # per content+chunking-params. Stored on every chunk so the hash lives
+            # and dies with the chunks (self-healing on partial failures).
+            SimpleField(name="source_doc_key", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="content_hash", type=SearchFieldDataType.String),
             SearchField(
                 name="dense",
                 type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
@@ -132,9 +124,9 @@ class VectorDBAzureSearch:
         )
 
         index = SearchIndex(name=index_name, fields=fields, vector_search=vector_search)
-        self.index_client.create_index(index)
+        self.index_client.create_or_update_index(index)
         self.logger.info(
-            "Created Azure AI Search index '%s' (dense dim=%s, hybrid vector+BM25).",
+            "Azure AI Search index '%s' schema ensured (dense dim=%s, hybrid vector+BM25).",
             index_name,
             vector_size,
         )
@@ -237,6 +229,37 @@ class VectorDBAzureSearch:
             return deleted
         self.logger.info("Azure AI Search delete_by_filter removed %s documents (index=%s).", deleted, index_name)
         return deleted
+
+    def load_content_hashes(self, source: str, index_name: str | None = None) -> dict[str, str]:
+        """Return {source_doc_key: content_hash} for all existing chunks of a source.
+
+        Multiple chunks share the same source_doc_key; only the first seen is kept
+        (they all carry an identical hash). Used by the loader to skip unchanged
+        documents and detect stale ones.
+        """
+        client = self._client(index_name)
+        existing: dict[str, str] = {}
+        try:
+            results = client.search(
+                search_text="*",
+                filter=f"source eq '{source}'",
+                select=["source_doc_key", "content_hash"],
+                top=1000,
+            )
+            for item in results:
+                key = item.get("source_doc_key")
+                h = item.get("content_hash")
+                if key and h and key not in existing:
+                    existing[key] = h
+        except HttpResponseError as e:
+            self.logger.warning("load_content_hashes failed (source=%s): %s", source, e)
+        self.logger.info(
+            "Loaded %s existing source keys (source=%s index=%s)",
+            len(existing),
+            source,
+            index_name or self.index_name,
+        )
+        return existing
 
     # ------------------------------------------------------------------
     # Search
