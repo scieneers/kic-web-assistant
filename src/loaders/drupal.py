@@ -47,12 +47,22 @@ class Drupal:
         requests.packages.urllib3.util.connection.HAS_IPV6 = False
 
         self.important_courses = self._load_important_courses()
-        self.oauth_token = self.get_oauth_token("https://ki-campus.org")
         self.header = {
-            "Authorization": f"Bearer {self.oauth_token}",
             "Accept": "application/vnd.api+json",
             "Accept-Language": "de",
         }
+        credentials_set = (
+            hasattr(env, "DRUPAL_CLIENT_ID")
+            and hasattr(env, "DRUPAL_CLIENT_SECRET")
+            and hasattr(env, "DRUPAL_USERNAME")
+            and hasattr(env, "DRUPAL_PASSWORD")
+        )
+        if credentials_set:
+            oauth_token = self.get_oauth_token("https://ki-campus.org")
+            if oauth_token:
+                self.header["Authorization"] = f"Bearer {oauth_token}"
+        else:
+            self.logger.info("Drupal: no credentials configured, running without authentication")
 
     def _load_important_courses(self) -> set[int]:
         """Load important course IDs from IMPORTANT_COURSES.txt"""
