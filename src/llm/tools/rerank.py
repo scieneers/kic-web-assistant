@@ -37,7 +37,7 @@ def rerank_chunks(state: GraphState) -> dict:
     """
     # Get necessary variables from state
     model = state["runtime_config"]["model"]
-    # Fallback to user_query if contextualized_query is not available (e.g., multi_hop)
+    # Fallback to user_query if contextualized_query is not available
     query = state["contextualized_query"] or state["user_query"]
     rerank_top_n = state["system_config"]["rerank_top_n"]
 

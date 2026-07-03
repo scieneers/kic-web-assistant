@@ -128,7 +128,7 @@ def contextualize_and_route(state: GraphState) -> dict:
         logger.debug("Scenario classified → mode=%s", mode)
 
         # Contextualize query if needed
-        if mode == "no_vectordb" or mode == "multi_hop":
+        if mode == "no_vectordb":
             contextualized_query = None
             logger.debug("No contextualization for mode=%s", mode)
         else:

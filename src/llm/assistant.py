@@ -10,7 +10,6 @@ from src.llm.state.models import GraphState
 from src.llm.tools.contextualize import contextualize_and_route
 from src.llm.graphs.no_vector_db import build_no_vectordb_graph
 from src.llm.graphs.simple_hop import build_simple_hop_graph
-from src.llm.graphs.multi_hop import build_multi_hop_graph
 from src.llm.graphs.socratic import build_socratic_graph
 
 
@@ -91,26 +90,23 @@ class KICampusAssistant:
         
         Scenarios:
         - no_vectordb: Conversational queries
-        - simple_hop: Standard RAG
-        - multi_hop: Complex multi-retrieval (placeholder)
-        - socratic: Guided learning (placeholder)
+        - simple_hop: Single-hop RAG retrieval
+        - socratic: Guided learning
         """
         # Compile subgraphs
         no_vectordb_graph = build_no_vectordb_graph()
         simple_hop_graph = build_simple_hop_graph()
-        multi_hop_graph = build_multi_hop_graph()
         socratic_graph = build_socratic_graph()
-        
+
         # Main router graph
         graph = StateGraph(GraphState)
-        
+
         # Add contextualize/routing node
         graph.add_node("contextualize_and_route", contextualize_and_route)
-        
+
         # Add subgraph nodes
         graph.add_node("no_vectordb", no_vectordb_graph)
         graph.add_node("simple_hop", simple_hop_graph)
-        graph.add_node("multi_hop", multi_hop_graph)
         graph.add_node("socratic", socratic_graph)
         
         # Start with contextualization and routing
@@ -123,7 +119,7 @@ class KICampusAssistant:
             # Special case: exit_complete skips directly to END --> used when exiting socratic mode
             if mode == "exit_complete":
                 return END
-            return mode  # Returns "no_vectordb", "simple_hop", "multi_hop" or "socratic"
+            return mode  # Returns "no_vectordb", "simple_hop" or "socratic"
         
         graph.add_conditional_edges(
             "contextualize_and_route",
@@ -133,7 +129,6 @@ class KICampusAssistant:
         # All subgraphs end at END
         graph.add_edge("no_vectordb", END)
         graph.add_edge("simple_hop", END)
-        graph.add_edge("multi_hop", END)
         graph.add_edge("socratic", END)
         
         return graph.compile(checkpointer=self.checkpointer)

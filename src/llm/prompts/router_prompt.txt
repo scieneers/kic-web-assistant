@@ -10,24 +10,18 @@ Classify the user's query into exactly ONE of the following scenarios, based on 
    - Conversational follow-ups: requests to simplify/rephrase previous responses, references to earlier conversation, follow-up clarifications based on chat history (e.g. "explain that simpler", "what was my first question?")
    - Out of Scope: general knowledge, everyday life questions, school knowledge, biology, astronomy, physics, sports, or anything NOT related to AI learning or KI-Campus
 
-2. **simple_hop**: A factual or conceptual question that can reasonably be answered using a single coherent topic area or closely related concepts
+2. **simple_hop**: Any factual or conceptual question that requires retrieval — including comparisons, syntheses, or multi-concept questions
    - Definitions, explanations, descriptions
    - How-something-works questions
    - Course- or module-related queries
-   - Comparisons of closely related concepts that are typically covered together (e.g. Machine Learning vs Deep Learning)
-
-3. **multi_hop**: A question that requires synthesizing information from clearly distinct or loosely related concepts that are unlikely to be covered within the same documents or topic scope
-   - Comparisons across substantially different concepts, methods, or application domains
-   - Requests that explicitly require combining perspectives from multiple independent sources
+   - Comparisons of concepts (closely or loosely related)
+   - Questions requiring synthesis across multiple topics
 
 # RESPONSE FORMAT #
 Return EXACTLY one of the following strings (no explanation):
 - no_vectordb
 - simple_hop
-- multi_hop
 
 # RULES #
-- Choose **multi_hop** ONLY if multiple, semantically distinct knowledge areas are required.
-- Do NOT choose multi_hop solely because a question is phrased as a comparison.
-- Default to "simple_hop" if uncertain.
+- Default to "simple_hop" for any question that requires retrieval.
 - Be precise and deterministic.

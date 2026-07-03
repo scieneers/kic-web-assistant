@@ -4,7 +4,7 @@ from llama_index.core.schema import TextNode
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.api.models.serializable_text_node import SerializableTextNode
 
-Scenario = Literal["no_vectordb", "simple_hop", "multi_hop", "socratic", "exit_complete"]
+Scenario = Literal["no_vectordb", "simple_hop", "socratic", "exit_complete"]
 SocraticMode = Literal["contract", "diagnose", "core"]
 # "core" routes to "hinting", "reflection", "explain" internally
 
@@ -29,10 +29,6 @@ class GraphState(TypedDict, total=False):
     # retrieval artifacts
     retrieved: List[SerializableTextNode]
     reranked: List[SerializableTextNode]
-
-    # multi_hop specific artifacts
-    sub_queries: List[str]  # Decomposed sub-questions for multi-hop
-    multi_contexts: List[List[SerializableTextNode]]  # Retrieved contexts per sub-query (parallel)
 
     # socratic specific artifacts
     socratic_mode: Optional[SocraticMode]  # Internal routing: "contract" | "diagnose" | "core" ("hinting", "reflection" and "explain" handled in core)
