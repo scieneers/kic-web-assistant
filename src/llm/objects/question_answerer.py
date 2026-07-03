@@ -64,10 +64,6 @@ class QuestionAnswerer:
         course_id: int,
     ) -> SerializableChatMessage:
         
-        system_prompt = SYSTEM_PROMPT.format(language=language)
-        formatted_sources = format_sources(sources, max_length=sys.maxsize)
-        prompted_user_query = f"<QUERY>:\n {query}\n\n{formatted_sources}"
-
         # Determine whether the previous assistant turn was already a "no answer"
         # before starting the LLM call — needed to pick the right fallback message.
         previous_bot_response_was_no_answer = False
@@ -76,6 +72,25 @@ class QuestionAnswerer:
                 if msg.role == MessageRole.ASSISTANT:
                     previous_bot_response_was_no_answer = (msg.content == ANSWER_NOT_FOUND_FIRST_TIME)
                     break
+
+        # Early exit: no sources retrieved → skip both rerank and LLM answer call.
+        if not sources:
+            if not previous_bot_response_was_no_answer:
+                fallback = ANSWER_NOT_FOUND_FIRST_TIME
+            elif is_moodle and course_id is not None:
+                fallback = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id=course_id)
+            elif is_moodle:
+                fallback = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id="UNKNOWN")
+            else:
+                fallback = ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL
+            outer_cb = token_callback_var.get()
+            if outer_cb is not None:
+                outer_cb(fallback)
+            return SerializableChatMessage(role=MessageRole.ASSISTANT, content=fallback)
+
+        system_prompt = SYSTEM_PROMPT.format(language=language)
+        formatted_sources = format_sources(sources, max_length=sys.maxsize)
+        prompted_user_query = f"<QUERY>:\n {query}\n\n{formatted_sources}"
 
         # When streaming, replace [docN] markers with clickable links in real-time so
         # the streamed content already matches what the final event will send.
