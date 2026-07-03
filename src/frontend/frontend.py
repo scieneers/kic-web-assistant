@@ -242,7 +242,7 @@ def submit_feedback(feedback: dict, trace_id: str):
 st.title("KI-Campus Assistant")
 
 if "llm_select" not in st.session_state:
-    st.session_state.llm_select = Models.AZURE_FALLBACK
+    st.session_state.llm_select = Models.GEMMA4_31B
 
 if "course_id" not in st.session_state:
     st.session_state.course_id = None
@@ -261,13 +261,14 @@ if "_auto_restored" not in st.session_state:
 
 
 with st.sidebar:
+    _model_options = list(Models)
     st.session_state["llm_select"] = st.selectbox(
         "LLM Modelauswahl",
-        options=(model for model in Models),
-        index=0,
+        options=_model_options,
+        index=_model_options.index(Models.GEMMA4_31B),
         on_change=reset_history,
         format_func=lambda model: model.value,
-        placeholder=Models.AZURE_FALLBACK.name,
+        placeholder=Models.GEMMA4_31B.name,
     )
     st.divider()
 

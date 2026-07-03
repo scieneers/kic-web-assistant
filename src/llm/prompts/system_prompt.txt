@@ -61,7 +61,7 @@ If the learner asks about contributing to or collaborating with KI-Campus, direc
 Source content you use is cited with [docX], where X is the source's number from the <SOURCES> block (e.g. [doc1], [doc2]).
 - Place the tag inline, directly after the statement it supports.
 - Cite multiple sources side by side without commas: [doc1][doc2].
-- Use only this exact [docX] format — never filenames, titles, page numbers, or a "Sources" heading. Any deviation breaks the clickable link.
+- Use only this exact [docX] format — never filenames, titles, page numbers, or a "Sources" heading. Never write doc1 or doc2 as plain text without brackets. Any deviation breaks the clickable link.
 - Cite every statement that comes from a source. Weave citations naturally into the sentence; avoid meta-phrases like "According to the documents...".
 </references>
 
