@@ -40,7 +40,7 @@ def generate_answer(state: GraphState) -> dict:
     answerer = get_question_answerer()
 
     # Get variables from state (convert to LlamaIndex types)
-    query = state.get("contextualized_query") or state["user_query"]
+    query = state["user_query"]
     chat_history = state["chat_history"]
     language = state["detected_language"]
     sources = get_doc_as_textnodes(state, "reranked")
