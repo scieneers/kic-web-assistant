@@ -18,7 +18,9 @@ from src.api.models.serializable_text_node import SerializableTextNode
 from src.llm.objects.LLMs import Models
 from src.llm.objects.rerankers.base import BaseReranker, RerankResult
 
-_DEFAULT_MODEL = "BAAI/bge-reranker-v2-m3" # "bge-reranker-base" # alternatives, kleineres Modell
+BGE_LARGE_MODEL = "BAAI/bge-reranker-v2-m3"   # 568MB, multilingual (100+ languages)
+BGE_SMALL_MODEL = "BAAI/bge-reranker-base"    # 280MB, faster, primarily English
+_DEFAULT_MODEL = BGE_LARGE_MODEL
 
 
 class BGEReranker(BaseReranker):
