@@ -200,70 +200,45 @@ class ImageHotspotQuestion(H5PLeaf):
     def from_h5p_params(cls, library: str, params: dict) -> Optional['ImageHotspotQuestion']:
         """
         Extrahiert Image Hotspot Question aus params.
-        
-        Verarbeitet Struktur: params.question.task.elements[] und params.question.task.dropZones[]
+
+        H5P.ImageHotspots-Struktur: params.hotspots[].header + params.hotspots[].content[].params.text
         """
         try:
-            question_data = params.get("question", {})
-            task = question_data.get("task", {})
-            
-            elements = task.get("elements", [])
-            drop_zones = task.get("dropZones", [])
-            
-            if not elements or not drop_zones:
+            hotspots = params.get("hotspots", [])
+            if not hotspots:
                 return None
-            
-            # Baue Map: dropzone_index -> label
-            zone_labels = {}
-            for zone_idx, zone in enumerate(drop_zones):
-                label_html = zone.get("label", f"Zone {zone_idx}")
-                # Entferne HTML-Tags aus Label
-                label_clean = strip_html(label_html).strip()
-                zone_labels[zone_idx] = label_clean
-            
+
             mappings = []
-            
-            # Für jedes Element prüfe, ob es Text ist und welcher DropZone es zugeordnet ist
-            for elem_idx, element in enumerate(elements):
-                element_type = element.get("type", {})
-                element_library = element_type.get("library", "")
-                element_params = element_type.get("params", {})
-                
-                # Ignoriere Bilder (H5P.Image)
-                if "Image" in element_library:
-                    continue
-                
-                # Extrahiere Text aus H5P.AdvancedText oder H5P.Text
-                element_text = None
-                if "AdvancedText" in element_library or "Text" in element_library:
-                    text_html = element_params.get("text", "").strip()
+            for hotspot in hotspots:
+                header = strip_html(hotspot.get("header", "")).strip()
+                content_texts = []
+                for item in hotspot.get("content", []):
+                    text_html = item.get("params", {}).get("text", "").strip()
                     if text_html:
-                        element_text = strip_html(text_html).strip()
-                
-                if not element_text:
-                    continue
-                
-                # Finde die korrekte DropZone für dieses Element
-                for zone_idx, zone in enumerate(drop_zones):
-                    correct_elements = zone.get("correctElements", [])
-                    # correctElements sind Strings oder Ints
-                    if str(elem_idx) in [str(ce) for ce in correct_elements]:
-                        zone_label = zone_labels.get(zone_idx, f"Zone {zone_idx}")
-                        mappings.append((element_text, zone_label))
-                        break
-            
+                        content_texts.append(strip_html(text_html).strip())
+                content = " ".join(content_texts).strip()
+                if header or content:
+                    mappings.append((header, content))
+
             if mappings:
                 return cls(type=library, mappings=mappings)
-        
+
         except Exception:
             pass
-        
+
         return None
-    
+
     def to_text(self) -> str:
-        """Formatiert die Zuordnungen als 'element_text: zone_label' Paare."""
+        """Formatiert Hotspots als 'Header: Inhalt' Zeilen."""
         if not self.mappings:
-            return "[Image Hotspot] Keine Zuordnungen gefunden"
-        
-        lines = [f"{text}: {label}" for text, label in self.mappings]
+            return "[Image Hotspot] Keine Hotspots gefunden"
+
+        lines = []
+        for header, content in self.mappings:
+            if header and content:
+                lines.append(f"{header}: {content}")
+            elif header:
+                lines.append(header)
+            elif content:
+                lines.append(content)
         return "\n".join(lines)

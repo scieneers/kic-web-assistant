@@ -265,9 +265,17 @@ class Moodle:
                     for module in topic.modules or []:
                         if module is None:
                             continue
+
+                        # Unbekannter Modultyp → kein Handler, Content wird fehlen
+                        if module.type is None:
+                            self.logger.warning(
+                                "CONTENT_GAP course_id=%s module_id=%s modname=%s name=%r — "
+                                "unbekannter Modultyp, kein Handler vorhanden",
+                                course.id, module.id, module.modname, module.name,
+                            )
+
                         try:
                             doc = module.to_document(course.id)
-                            yield course, doc
                         except Exception as e:
                             self.logger.warning(
                                 "Failed to build module Document (course_id=%s module_id=%s): %s",
@@ -275,6 +283,27 @@ class Moodle:
                                 getattr(module, "id", None),
                                 e,
                             )
+                            continue
+
+                        # Leerer oder sehr kurzer Text → Extraktion hat nichts geliefert
+                        text_len = len((doc.text or "").strip())
+                        name_only_len = len(f"Module Name: {module.name}".strip())
+                        if text_len == 0:
+                            self.logger.warning(
+                                "CONTENT_GAP course_id=%s module_id=%s modname=%s h5p=%s name=%r — "
+                                "Text ist leer nach Extraktion",
+                                course.id, module.id, module.modname,
+                                module.h5p_content_type or "-", module.name,
+                            )
+                        elif text_len <= name_only_len + 5:
+                            self.logger.warning(
+                                "CONTENT_GAP course_id=%s module_id=%s modname=%s h5p=%s name=%r — "
+                                "nur Modulname eingebettet, kein Inhalt extrahiert (%s Zeichen)",
+                                course.id, module.id, module.modname,
+                                module.h5p_content_type or "-", module.name, text_len,
+                            )
+
+                        yield course, doc
 
             # Release memory held by this course (modules can contain huge extracted texts)
             try:
