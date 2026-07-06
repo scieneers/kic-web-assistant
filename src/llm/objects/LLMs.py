@@ -168,6 +168,20 @@ class LLM:
                     if tail:
                         token_callback(tail)
 
+            _orig_excepthook_stream = threading.excepthook
+
+            def _stream_thread_excepthook(args: threading.ExceptHookArgs) -> None:
+                # LlamaIndex's write_response_to_history background thread can
+                # fail (e.g. GWDG 500) after our main loop already consumed the
+                # stream.  Route through logger instead of printing raw to stderr.
+                logger.warning(
+                    "Unhandled exception in LlamaIndex streaming thread %r — "
+                    "likely upstream API error (GWDG/Azure), stream already consumed",
+                    args.thread.name if args.thread else "unknown",
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+
+            threading.excepthook = _stream_thread_excepthook
             try:
                 streaming_resp = chat_engine.stream_chat(message=query)
                 full_text = ""
@@ -236,6 +250,8 @@ class LLM:
                     _emit(text)
                     _emit_flush()
                 return SerializableChatMessage(role="assistant", content=text)
+            finally:
+                threading.excepthook = _orig_excepthook_stream
 
         result = [None]  # Use a list to hold the result (mutable object to modify inside threads)
 
