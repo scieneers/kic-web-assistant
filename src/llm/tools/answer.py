@@ -7,6 +7,7 @@ import logging
 from langfuse.decorators import observe
 
 from src.llm.state.models import GraphState, get_doc_as_textnodes
+from src.llm.objects.question_answerer import NO_CONTENT_IN_MODULE
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,13 @@ def generate_answer(state: GraphState) -> dict:
     model = state["runtime_config"]["model"]
     is_moodle = state["runtime_config"]["course_id"] is not None
     course_id = state["runtime_config"]["course_id"]
+
+    # EmptyModule-Marker: Modul existiert, hat aber keinen extrahierbaren Inhalt.
+    # Kein LLM-Aufruf — direkt den fest definierten Fallback-Text zurückgeben.
+    if sources and all(s.metadata.get("type") == "EmptyModule" for s in sources):
+        module_name = sources[0].metadata.get("fullname", "Dieses Modul")
+        logger.debug("generate_answer: EmptyModule marker detected for %r — returning fixed fallback", module_name)
+        return {"answer": NO_CONTENT_IN_MODULE.format(module_name=module_name)}
 
     logger.debug(
         "generate_answer: query=%r, model=%s, language=%s, sources=%d, is_moodle=%s",

@@ -17,6 +17,11 @@ ANSWER_NOT_FOUND_FIRST_TIME = """Entschuldige, ich habe deine Frage nicht ganz v
 ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL = """Entschuldigung, ich habe deine Frage nicht immer noch verstanden, bitte wende dich an unseren Support unter support@ki-campus.org.
 """
 
+NO_RELEVANT_CONTENT = """Zu deiner Frage habe ich leider keine passenden Inhalte gefunden. Kannst du deine Frage anders formulieren oder konkretisieren?
+"""
+
+NO_CONTENT_IN_MODULE = "Das Modul '{module_name}' ist im Kurs vorhanden, enthält aber keinen weiteren Inhalt zu dem ich eine Antwort geben kann."
+
 ANSWER_NOT_FOUND_SECOND_TIME_MOODLE = """Es tut mir leid, aber ich konnte die benötigten Informationen im Kurs nicht finden, um deine Frage zu beantworten. Schau bitte im Kurs selbst nach, um weitere Hilfe zu erhalten. Hier ist der Kurslink: https://moodle.ki-campus.org/course/view.php?id={course_id}
 """
 
@@ -70,22 +75,21 @@ class QuestionAnswerer:
         if chat_history:
             for msg in reversed(chat_history):
                 if msg.role == MessageRole.ASSISTANT:
-                    previous_bot_response_was_no_answer = (msg.content == ANSWER_NOT_FOUND_FIRST_TIME)
+                    previous_bot_response_was_no_answer = (
+                        msg.content in (ANSWER_NOT_FOUND_FIRST_TIME, NO_RELEVANT_CONTENT)
+                    )
                     break
 
         # Early exit: no sources retrieved → skip both rerank and LLM answer call.
         if not sources:
             if not previous_bot_response_was_no_answer:
-                fallback = ANSWER_NOT_FOUND_FIRST_TIME
+                fallback = NO_RELEVANT_CONTENT
             elif is_moodle and course_id is not None:
                 fallback = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id=course_id)
             elif is_moodle:
                 fallback = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id="UNKNOWN")
             else:
                 fallback = ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL
-            outer_cb = token_callback_var.get()
-            if outer_cb is not None:
-                outer_cb(fallback)
             return SerializableChatMessage(role=MessageRole.ASSISTANT, content=fallback)
 
         system_prompt = SYSTEM_PROMPT.format(language=language)

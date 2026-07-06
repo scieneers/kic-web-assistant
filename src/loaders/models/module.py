@@ -172,13 +172,23 @@ class Module(BaseModel):
         
         text = "\n".join(text_parts)
 
+        # Leere Module: minimaler Marker-Text damit check_if_module_exists() in der API
+        # funktioniert. type="EmptyModule" signalisiert dem Retriever, diesen Chunk in
+        # generellen Suchen auszufiltern; im Modul-Kontext (module_id-Filter gesetzt)
+        # ist er auffindbar und liefert den fullname für den Fallback-Text.
+        name_only = f"Module Name: {self.name}"
+        is_empty = text.strip() in ("", name_only)
+        doc_type = "EmptyModule" if is_empty else "module"
+
         metadata = {
             "course_id": course_id,
             "module_id": self.id,
             "fullname": self.name,
-            "type": "module",
+            "type": doc_type,
             "source": "Moodle",
             "url": str(self.url),
+            "modname": self.modname,
+            **({"h5p_content_type": self.h5p_content_type} if self.h5p_content_type else {}),
         }
 
-        return Document(text=text, metadata=metadata)
+        return Document(text=name_only if is_empty else text, metadata=metadata)

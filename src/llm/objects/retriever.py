@@ -26,6 +26,10 @@ def _build_odata_filter(
     clauses: list[str] = ["type ne 'ModuleFingerprint'"]
     reasons: list[str] = ["always: exclude bookkeeping docs"]
 
+    if module_id is None:
+        clauses.append("type ne 'EmptyModule'")
+        reasons.append("no module_id: exclude empty-module markers")
+
     if course_id is None and module_id is None:
         clauses.append("source eq 'Drupal'")
         reasons.append("no course/module given: restrict to Drupal content")
