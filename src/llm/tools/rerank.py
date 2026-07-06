@@ -27,11 +27,8 @@ def get_reranker(reranker_type: RerankerType, top_n: int, min_score: float = 0.0
         elif reranker_type == "bge":
             from src.llm.objects.rerankers.bge_reranker import BGEReranker
             _reranker_instances[reranker_type] = BGEReranker(top_n=top_n)
-        elif reranker_type == "cohere":
-            from src.llm.objects.rerankers.cohere_reranker import CohereReranker
-            _reranker_instances[reranker_type] = CohereReranker(top_n=top_n)
         else:
-            raise ValueError(f"Unknown reranker_type: {reranker_type!r}. Choose: llm, azure_semantic, bge, cohere")
+            raise ValueError(f"Unknown reranker_type: {reranker_type!r}. Choose: llm, azure_semantic, bge")
     return _reranker_instances[reranker_type]
 
 
