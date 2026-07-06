@@ -129,16 +129,16 @@ class Fetch_Data:
 
         self.logger.info(
             "AZURE_SEARCH_UPSERT_BEGIN %s",
-            format_kv(RUN_ID=self.run_id, STAGE=stage, INDEX=env.AZURE_SEARCH_INDEX, DOCS=len(documents)),
+            format_kv(RUN_ID=self.run_id, STAGE=stage, INDEX=self.index_name, DOCS=len(documents)),
         )
         t_upsert = time.time()
-        uploaded = self.search_store.upload_documents(env.AZURE_SEARCH_INDEX, documents)
+        uploaded = self.search_store.upload_documents(self.index_name, documents)
         self.logger.info(
             "AZURE_SEARCH_UPSERT_END %s",
             format_kv(
                 RUN_ID=self.run_id,
                 STAGE=stage,
-                INDEX=env.AZURE_SEARCH_INDEX,
+                INDEX=self.index_name,
                 DOCS=uploaded,
                 ELAPSED_MS=int((time.time() - t_upsert) * 1000),
             ),
@@ -152,10 +152,10 @@ class Fetch_Data:
 
     def sanity_check(self):
         # Every document needs a non-empty url so we can link back to content.
-        if self.search_store.any_match("url eq null or url eq ''", index_name=env.AZURE_SEARCH_INDEX):
+        if self.search_store.any_match("url eq null or url eq ''", index_name=self.index_name):
             self.logger.error("Missing URLs in Metadata, linking to content not possible in all cases")
 
-    def __init__(self, run_id: str | None = None, preset_log_url: str | None = None):
+    def __init__(self, run_id: str | None = None, preset_log_url: str | None = None, index_name: str | None = None):
         self.DATA_PATH = "./data"
         self.embedder = LLM().get_embedder()
         self.logger = logging.getLogger("loader")
@@ -185,6 +185,7 @@ class Fetch_Data:
         self.preset_log_url = preset_log_url
 
         self.search_store = VectorDBAzureSearch()
+        self.index_name = index_name or env.AZURE_SEARCH_INDEX
 
         self.logger.info("Starting data extraction...")
 
@@ -228,7 +229,7 @@ class Fetch_Data:
             format_kv(
                 RUN_ID=self.run_id,
                 EVENT="STARTED",
-                INDEX=env.AZURE_SEARCH_INDEX,
+                INDEX=self.index_name,
                 DEBUG_MODE=getattr(env, "DEBUG_MODE", False),
             ),
         )
@@ -260,7 +261,7 @@ class Fetch_Data:
                 embedding_dim = len(sample_embedding)
                 self.logger.info("Detected embedding dimension: %s", embedding_dim)
                 self.search_store.create_index(
-                    index_name=env.AZURE_SEARCH_INDEX,
+                    index_name=self.index_name,
                     vector_size=embedding_dim,
                 )
 
@@ -365,17 +366,17 @@ class Fetch_Data:
                     self.ctx.set_counter("moochup_documents", moochup_documents)
                     self.ctx.set_counter("moochup_courses", moochup_documents)
 
-                    moochup_existing = self.search_store.load_content_hashes("Moochup", env.AZURE_SEARCH_INDEX)
+                    moochup_existing = self.search_store.load_content_hashes("Moochup", self.index_name)
                     # Migration guard: old chunks (pre-hash) have no source_doc_key and are
                     # invisible to the stale cleanup. Delete them once so the index starts clean.
                     if not moochup_existing and self.search_store.any_match(
-                        "source eq 'Moochup' and source_doc_key eq null", index_name=env.AZURE_SEARCH_INDEX
+                        "source eq 'Moochup' and source_doc_key eq null", index_name=self.index_name
                     ):
                         self.logger.info(
                             "MIGRATION_GUARD %s",
                             format_kv(RUN_ID=self.run_id, SOURCE="Moochup", EVENT="DELETE_OLD_SCHEMA"),
                         )
-                        self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Moochup'")
+                        self.search_store.delete_by_filter(self.index_name, "source eq 'Moochup'")
                     moochup_seen: set[str] = set()
 
                     for doc in moochup_docs:
@@ -390,7 +391,7 @@ class Fetch_Data:
                             _queue_document(doc, stage="MOOCHUP_UPSERT")
                         elif moochup_existing[key] != new_hash:
                             self.search_store.delete_by_filter(
-                                env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                                self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                             )
                             _queue_document(doc, stage="MOOCHUP_UPSERT")
                         else:
@@ -401,7 +402,7 @@ class Fetch_Data:
                     stale = moochup_existing.keys() - moochup_seen
                     for key in stale:
                         self.search_store.delete_by_filter(
-                            env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                            self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                         )
                     moochup_stale_deleted = len(stale)
 
@@ -433,15 +434,15 @@ class Fetch_Data:
                     except Exception:
                         moodle_courses_total = 0
 
-                    moodle_existing = self.search_store.load_content_hashes("Moodle", env.AZURE_SEARCH_INDEX)
+                    moodle_existing = self.search_store.load_content_hashes("Moodle", self.index_name)
                     if not moodle_existing and self.search_store.any_match(
-                        "source eq 'Moodle' and source_doc_key eq null", index_name=env.AZURE_SEARCH_INDEX
+                        "source eq 'Moodle' and source_doc_key eq null", index_name=self.index_name
                     ):
                         self.logger.info(
                             "MIGRATION_GUARD %s",
                             format_kv(RUN_ID=self.run_id, SOURCE="Moodle", EVENT="DELETE_OLD_SCHEMA"),
                         )
-                        self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Moodle'")
+                        self.search_store.delete_by_filter(self.index_name, "source eq 'Moodle'")
                     moodle_seen: set[str] = set()
                     prev_course_id: int | None = None
 
@@ -482,7 +483,7 @@ class Fetch_Data:
                             moodle_documents += 1
                             self.ctx.set_counter("moodle_documents", moodle_documents)
                             self.search_store.delete_by_filter(
-                                env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                                self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                             )
                             _queue_document(doc, stage="MOODLE_UPSERT")
                             self.logger.info(
@@ -503,7 +504,7 @@ class Fetch_Data:
                     moodle_stale = moodle_existing.keys() - moodle_seen
                     for key in moodle_stale:
                         self.search_store.delete_by_filter(
-                            env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                            self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                         )
                     moodle_stale_deleted = len(moodle_stale)
 
@@ -539,15 +540,15 @@ class Fetch_Data:
                     if drupal_documents == 0:
                         self.logger.warning("Drupal extraction returned 0 documents")
 
-                    drupal_existing = self.search_store.load_content_hashes("Drupal", env.AZURE_SEARCH_INDEX)
+                    drupal_existing = self.search_store.load_content_hashes("Drupal", self.index_name)
                     if not drupal_existing and self.search_store.any_match(
-                        "source eq 'Drupal' and source_doc_key eq null", index_name=env.AZURE_SEARCH_INDEX
+                        "source eq 'Drupal' and source_doc_key eq null", index_name=self.index_name
                     ):
                         self.logger.info(
                             "MIGRATION_GUARD %s",
                             format_kv(RUN_ID=self.run_id, SOURCE="Drupal", EVENT="DELETE_OLD_SCHEMA"),
                         )
-                        self.search_store.delete_by_filter(env.AZURE_SEARCH_INDEX, "source eq 'Drupal'")
+                        self.search_store.delete_by_filter(self.index_name, "source eq 'Drupal'")
                     drupal_seen: set[str] = set()
 
                     for doc in drupal_docs:
@@ -562,7 +563,7 @@ class Fetch_Data:
                             _queue_document(doc, stage="DRUPAL_UPSERT")
                         elif drupal_existing[key] != new_hash:
                             self.search_store.delete_by_filter(
-                                env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                                self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                             )
                             _queue_document(doc, stage="DRUPAL_UPSERT")
                         else:
@@ -573,7 +574,7 @@ class Fetch_Data:
                     stale = drupal_existing.keys() - drupal_seen
                     for key in stale:
                         self.search_store.delete_by_filter(
-                            env.AZURE_SEARCH_INDEX, f"source_doc_key eq '{_odata_escape(key)}'"
+                            self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                         )
                     drupal_stale_deleted = len(stale)
 
