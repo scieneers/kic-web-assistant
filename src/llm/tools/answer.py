@@ -37,8 +37,10 @@ def generate_answer(state: GraphState) -> dict:
     Returns:
         Updated state with generated answer
     """
-    # Get singleton question answerer
-    answerer = get_question_answerer()
+    # Fan-in guard: answer_node has two predecessors (rerank and detect_language).
+    # LangGraph invokes it after each branch completes; defer if rerank hasn't run yet.
+    if state.get("reranked") is None:
+        return {}
 
     # Get variables from state (convert to LlamaIndex types)
     query = state["user_query"]
@@ -55,6 +57,9 @@ def generate_answer(state: GraphState) -> dict:
         module_name = sources[0].metadata.get("fullname", "Dieses Modul")
         logger.debug("generate_answer: EmptyModule marker detected for %r — returning fixed fallback", module_name)
         return {"answer": NO_CONTENT_IN_MODULE.format(module_name=module_name)}
+
+    # Get singleton question answerer (only when we actually need the LLM)
+    answerer = get_question_answerer()
 
     logger.debug(
         "generate_answer: query=%r, model=%s, language=%s, sources=%d, is_moodle=%s",

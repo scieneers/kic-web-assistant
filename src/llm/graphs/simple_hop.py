@@ -8,11 +8,6 @@ This is the standard RAG flow equivalent to the current system.
 from langgraph.graph import StateGraph, START, END
 
 from src.llm.state.models import GraphState
-from src.llm.tools.retrieve import retrieve_chunks
-from src.llm.tools.rerank import rerank_chunks
-from src.llm.tools.language import detect_language
-from src.llm.tools.answer import generate_answer
-from src.llm.tools.citation import parse_citations
 
 
 def build_simple_hop_graph() -> StateGraph:
@@ -29,6 +24,12 @@ def build_simple_hop_graph() -> StateGraph:
     both branches. detected_language and the retrieval keys are disjoint state
     fields, so the parallel writes never collide (no reducer needed).
     """
+    from src.llm.tools.retrieve import retrieve_chunks
+    from src.llm.tools.rerank import rerank_chunks
+    from src.llm.tools.language import detect_language
+    from src.llm.tools.answer import generate_answer
+    from src.llm.tools.citation import parse_citations
+
     graph = StateGraph(GraphState)
 
     # Add nodes

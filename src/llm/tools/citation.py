@@ -32,11 +32,13 @@ def parse_citations(state: GraphState) -> dict:
     Returns:
         Updated state with parsed citations
     """
+    # Fan-in guard: defer if answer_node hasn't produced an answer yet.
+    answer = state.get("answer")
+    if answer is None:
+        return {}
+
     # Get singleton citation parser
     parser = get_citation_parser()
-
-    # Get necessary variables from state
-    answer = state["answer"]
     sources = get_doc_as_textnodes(state, "reranked")
     
     # Parse citations in answer (convert SerializableTextNode to TextNode)
