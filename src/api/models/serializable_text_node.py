@@ -17,11 +17,10 @@ class SerializableTextNode(BaseModel):
 
     def to_text_node(self) -> TextNode:
         """Convert back to llama_index TextNode for component usage."""
-        node = TextNode(
-            text=self.text,
-            metadata=self.metadata,
-            id_=self.id_
-        )
+        kwargs = {"text": self.text, "metadata": self.metadata}
+        if self.id_ is not None:
+            kwargs["id_"] = self.id_
+        node = TextNode(**kwargs)
         # Note: score is kept in SerializableTextNode for logging/observability
         # but not transferred to TextNode (TextNode doesn't have a score field)
         return node
