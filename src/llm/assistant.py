@@ -6,7 +6,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.objects.LLMs import Models
-from src.llm.state.models import GraphState
+from src.llm.state.models import GraphState, RerankerType
 from src.llm.tools.contextualize import contextualize_and_route
 from src.llm.graphs.no_vector_db import build_no_vectordb_graph
 from src.llm.graphs.simple_hop import build_simple_hop_graph
@@ -57,7 +57,14 @@ class KICampusAssistant:
     Routes queries to appropriate subgraphs based on scenario classification.
     """
     
-    def __init__(self, rerank_top_n: int = 5, retrieve_top_n: int = 10, enable_socratic: bool = False):
+    def __init__(
+        self,
+        rerank_top_n: int = 5,
+        retrieve_top_n: int = 10,
+        enable_socratic: bool = False,
+        reranker_type: RerankerType = "llm",
+        min_reranker_score: float = 0.0,
+    ):
         """
         Initialize the assistant with system configuration.
 
@@ -65,12 +72,21 @@ class KICampusAssistant:
             rerank_top_n: Number of top chunks to keep after reranking
             retrieve_top_n: Number of chunks to retrieve from vector database
             enable_socratic: Enable/disable the socratic learning mode
+            reranker_type: Which reranker to use — "llm" (default), "azure_semantic", "bge", "cohere"
+            min_reranker_score: Minimum @search.reranker_score to keep (azure_semantic only; 0 = no filtering)
         """
+        if rerank_top_n >= retrieve_top_n:
+            raise ValueError(
+                f"rerank_top_n ({rerank_top_n}) must be less than retrieve_top_n ({retrieve_top_n})"
+            )
+
         # System configuration (hardcoded, not exposed to frontend)
         self.system_config = {
             "rerank_top_n": rerank_top_n,
             "retrieve_top_n": retrieve_top_n,
             "enable_socratic": enable_socratic,
+            "reranker_type": reranker_type,
+            "min_reranker_score": min_reranker_score,
         }
         
         # In-memory persistence for the duration of the backend runtime.
@@ -191,7 +207,15 @@ class KICampusAssistant:
                         "course_id": course_id,
                         "module_id": module_id,
                         "thread_id": thread_id,
-                    }
+                    },
+                    # Reset per-turn intermediate artifacts so stale checkpoint
+                    # values never bleed into the new graph run.
+                    "retrieved": [],
+                    "reranked": [],
+                    "answer": None,
+                    "citations_markdown": None,
+                    "detected_language": None,
+                    "contextualized_query": None,
                 }
                 return state_update, config, thread_id
 

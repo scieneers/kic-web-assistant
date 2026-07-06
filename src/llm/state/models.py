@@ -6,6 +6,7 @@ from src.api.models.serializable_text_node import SerializableTextNode
 
 Scenario = Literal["no_vectordb", "simple_hop", "socratic", "exit_complete"]
 SocraticMode = Literal["contract", "diagnose", "core"]
+RerankerType = Literal["llm", "azure_semantic", "bge", "cohere"]
 # "core" routes to "hinting", "reflection", "explain" internally
 
 class GraphState(TypedDict, total=False):

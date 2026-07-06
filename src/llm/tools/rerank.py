@@ -6,77 +6,99 @@ import logging
 
 from langfuse.decorators import observe
 
-from src.llm.state.models import GraphState, get_doc_as_textnodes
+from src.llm.objects.rerankers.base import BaseReranker
+from src.llm.state.models import GraphState, RerankerType
 
 logger = logging.getLogger(__name__)
 
-# Module-level singleton
-_reranker_instance = None
+# Singletons keyed by reranker_type so swapping at startup is zero-cost at runtime.
+_reranker_instances: dict[str, BaseReranker] = {}
 
-def get_reranker(reranker_top_n: int):
-    """Get or create singleton reranker instance."""
-    global _reranker_instance
-    if _reranker_instance is None:
-        from src.llm.objects.reranker import Reranker
-        _reranker_instance = Reranker(reranker_top_n)
-    return _reranker_instance
+
+def get_reranker(reranker_type: RerankerType, top_n: int, min_score: float = 0.0) -> BaseReranker:
+    """Return (or create) a singleton reranker for the given type."""
+    if reranker_type not in _reranker_instances:
+        if reranker_type == "llm":
+            from src.llm.objects.rerankers.llm_reranker import LLMReranker
+            _reranker_instances[reranker_type] = LLMReranker(top_n=top_n)
+        elif reranker_type == "azure_semantic":
+            from src.llm.objects.rerankers.azure_semantic_reranker import AzureSemanticReranker
+            _reranker_instances[reranker_type] = AzureSemanticReranker(top_n=top_n, min_score=min_score)
+        elif reranker_type == "bge":
+            from src.llm.objects.rerankers.bge_reranker import BGEReranker
+            _reranker_instances[reranker_type] = BGEReranker(top_n=top_n)
+        elif reranker_type == "cohere":
+            from src.llm.objects.rerankers.cohere_reranker import CohereReranker
+            _reranker_instances[reranker_type] = CohereReranker(top_n=top_n)
+        else:
+            raise ValueError(f"Unknown reranker_type: {reranker_type!r}. Choose: llm, azure_semantic, bge, cohere")
+    return _reranker_instances[reranker_type]
+
 
 @observe()
 def rerank_chunks(state: GraphState) -> dict:
     """
-    Reranks retrieved chunks using LLM for improved precision.
-    
+    Reranks retrieved chunks using the configured reranker.
+
     Changes:
-    - Sets state.reranked (list of top-N reranked TextNodes)
-    
+    - Sets state.reranked (list of top-N reranked SerializableTextNodes)
+
     Args:
         state: Current graph state with contextualized_query, retrieved, and configs
-        
+
     Returns:
         Updated state with reranked chunks
     """
-    # Get necessary variables from state
     model = state["runtime_config"]["model"]
-    # Fallback to user_query if contextualized_query is not available
     query = state["contextualized_query"] or state["user_query"]
     rerank_top_n = state["system_config"]["rerank_top_n"]
+    reranker_type = state["system_config"].get("reranker_type", "llm")
+    min_score = state["system_config"].get("min_reranker_score", 0.0)
 
     logger.debug(
-        "rerank_chunks: query=%r, model=%s, top_n=%d, input_chunks=%d",
+        "rerank_chunks: query=%r, model=%s, reranker=%s, top_n=%d, min_score=%.2f, input_chunks=%d",
         query[:80] if query else None,
         model,
+        reranker_type,
         rerank_top_n,
+        min_score,
         len(state.get("retrieved", [])),
     )
 
-    # Guard: If no query available, cannot rerank
     if not query:
-        logger.debug("rerank_chunks: no query — skipping rerank, returning retrieved as-is")
+        logger.debug("rerank_chunks: no query — skipping, returning retrieved as-is")
         return {"reranked": state.get("retrieved", [])}
 
-    # Guard: If no documents retrieved or too few for reranking, skip reranking
-    if not state["retrieved"] or len(state["retrieved"]) == 0:
+    retrieved = state.get("retrieved", [])
+    if not retrieved:
         logger.debug("rerank_chunks: no retrieved docs — returning empty list")
         return {"reranked": []}
 
-    # If only 1 node, no need to rerank
-    if len(state["retrieved"]) == 1:
+    if len(retrieved) == 1:
         logger.debug("rerank_chunks: only 1 chunk — skipping rerank")
-        return {"reranked": state["retrieved"]}
+        return {"reranked": retrieved}
 
-    # Get shared reranker singleton
-    reranker = get_reranker(rerank_top_n)
+    if rerank_top_n >= len(retrieved):
+        logger.warning(
+            "rerank_chunks: rerank_top_n (%d) >= input chunks (%d) — reranking won't reduce the result set",
+            rerank_top_n,
+            len(retrieved),
+        )
 
-    # Convert to TextNode for reranker component
-    retrieved_nodes = get_doc_as_textnodes(state, "retrieved")
+    reranker = get_reranker(reranker_type, rerank_top_n, min_score)
+    result = reranker.rerank(query=query, nodes=retrieved, model=model)
 
-    # Rerank (return SerializableTextNode)
-    reranked_nodes = reranker.rerank(
-        query=query,
-        nodes=retrieved_nodes,
-        model=model
-    )
+    reranked = result.nodes
+    if not reranked:
+        # LLMRerank returned 0 results — the model didn't follow the expected
+        # output format, or all chunks scored below threshold. Return empty so
+        # the answer node triggers the "no content found" fallback message
+        # instead of passing through unfiltered chunks (which risks prompt injection).
+        logger.warning(
+            "rerank_chunks: reranker returned 0 results for %d input chunks — "
+            "returning empty list to trigger no-content fallback",
+            len(retrieved),
+        )
 
-    logger.debug("rerank_chunks: %d → %d chunks after rerank", len(retrieved_nodes), len(reranked_nodes))
-    # Return top-N
-    return {"reranked": reranked_nodes}
+    logger.debug("rerank_chunks: %d → %d chunks after rerank", len(retrieved), len(reranked))
+    return {"reranked": reranked}

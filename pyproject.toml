@@ -33,6 +33,7 @@ dependencies = [
     "retry>=0.9.2,<1",
     "openpyxl>=3.1.5,<4",
     "certifi>=2025.11.12",
+    "sentence-transformers>=3.0.0,<4",
     "pymupdf>=1.26.7,<2",
     # Linux (Docker/prod) gets the latest; macOS caps at 0.3.44, the last
     # release that still ships a macOS (universal2) wheel — 0.3.45 is Linux-only.
@@ -72,6 +73,11 @@ dev = [
     "pre-commit~=4.3.0",
     "mypy~=1.9.0",
     "types-requests~=2.31.0.20240311",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: Tests that call real external services (LLM API, databases). Skip with: pytest -m 'not integration'",
 ]
 
 [tool.hatch.build.targets.wheel]

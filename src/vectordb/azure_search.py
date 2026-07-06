@@ -15,6 +15,10 @@ from azure.search.documents.indexes.models import (
     SearchField,
     SearchFieldDataType,
     SearchIndex,
+    SemanticConfiguration,
+    SemanticField,
+    SemanticPrioritizedFields,
+    SemanticSearch,
     SimpleField,
     VectorSearch,
     VectorSearchAlgorithmMetric,
@@ -123,7 +127,20 @@ class VectorDBAzureSearch:
             profiles=[VectorSearchProfile(name=_VECTOR_PROFILE, algorithm_configuration_name=_HNSW_CONFIG)],
         )
 
-        index = SearchIndex(name=index_name, fields=fields, vector_search=vector_search)
+        semantic_search = SemanticSearch(
+            configurations=[
+                SemanticConfiguration(
+                    name="default",
+                    prioritized_fields=SemanticPrioritizedFields(
+                        title_field=SemanticField(field_name="title"),
+                        content_fields=[SemanticField(field_name="text")],
+                        keywords_fields=[SemanticField(field_name="fullname")],
+                    ),
+                )
+            ]
+        )
+
+        index = SearchIndex(name=index_name, fields=fields, vector_search=vector_search, semantic_search=semantic_search)
         self.index_client.create_or_update_index(index)
         self.logger.info(
             "Azure AI Search index '%s' schema ensured (dense dim=%s, hybrid vector+BM25).",
@@ -273,12 +290,19 @@ class VectorDBAzureSearch:
         odata_filter: str | None = None,
         top: int = 10,
         candidate_factor: int = 3,
+        use_semantic: bool = False,
+        semantic_config_name: str = "default",
     ) -> list[dict]:
         """Hybrid search: BM25 over ``text`` + vector over ``dense``.
 
         Azure AI Search fuses the two result sets with Reciprocal Rank Fusion
         automatically when both ``search_text`` and a vector query are supplied.
-        Returns raw result dicts (each carries ``@search.score``).
+        Returns raw result dicts (each carries ``@search.score``, or
+        ``@search.reranker_score`` when use_semantic=True).
+
+        use_semantic: enable Azure AI Search semantic reranking (requires
+            Standard tier and a semantic configuration named ``semantic_config_name``
+            on the index).
         """
         client = self._client(index_name)
         vector_query = VectorizedQuery(
@@ -286,12 +310,17 @@ class VectorDBAzureSearch:
             k_nearest_neighbors=max(top * candidate_factor, top),
             fields="dense",
         )
+        extra = {}
+        if use_semantic:
+            extra["query_type"] = "semantic"
+            extra["semantic_configuration_name"] = semantic_config_name
         results = client.search(
             search_text=query_text,
             vector_queries=[vector_query],
             filter=odata_filter,
             top=top,
             select=["id", "text", "metadata_json"],
+            **extra,
         )
         return list(results)
 
