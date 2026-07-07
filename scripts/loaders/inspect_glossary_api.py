@@ -3,6 +3,9 @@ Test script to fetch glossary entries using Moodle Web Service API.
 Tests for Course 313, Module 26353 (glossary)
 """
 
+import pytest
+pytestmark = pytest.mark.integration
+
 import json
 import logging
 import os
@@ -20,6 +23,11 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture
+def moodle():
+    return setup_production_moodle()
 
 
 def setup_production_moodle():

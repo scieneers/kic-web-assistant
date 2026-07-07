@@ -4,6 +4,9 @@ Test-Skript: Testet alle möglichen Book-WS-Funktionen auf Verfügbarkeit.
 Prüft nur, ob die Funktion freigeschaltet ist (keine JSON-Analyse).
 """
 
+import pytest
+pytestmark = pytest.mark.integration
+
 import logging
 import os
 
@@ -21,6 +24,11 @@ logger = logging.getLogger(__name__)
 TEST_COURSE_ID = 41
 TEST_BOOK_ID = 83  # Aus mod_book_get_books_by_courses für Kurs 41
 TEST_COURSEMODULE_ID = 19488  # Aus core_course_get_contents
+
+
+@pytest.fixture
+def moodle():
+    return setup_production_moodle()
 
 
 def setup_production_moodle():

@@ -7,6 +7,9 @@ Dieses Skript testet:
 3. Vergleich mit core_course_get_contents für Book-Module
 """
 
+import pytest
+pytestmark = pytest.mark.integration
+
 import json
 import logging
 import os
@@ -26,6 +29,11 @@ logger = logging.getLogger(__name__)
 TEST_COURSE_ID = 41  # Beispiel-Kurs zum Testen
 OUTPUT_DIR = Path(__file__).parent / "api_outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+@pytest.fixture
+def moodle():
+    return setup_production_moodle()
 
 
 def setup_production_moodle():
