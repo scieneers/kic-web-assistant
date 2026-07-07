@@ -24,6 +24,7 @@ bad_h5p_zips/
 
 ## Evaluation datasets (generated, not to be committed)
 evaluation/dataset/*.jsonl
+evaluation/dataset/*.json
 
 ## script/audit outputs (generated, not to be committed)
 /outputs/
