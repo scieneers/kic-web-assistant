@@ -80,6 +80,16 @@ class Moodle:
         course_url = self.base_url + "course/view.php?id="
         courses = [MoodleCourse(url=course_url, **course) for course in courses if course["visible"] == 1]
 
+        offset = int(os.getenv("MOODLE_COURSE_OFFSET", "0"))
+        if offset > 0:
+            self.logger.warning(
+                "MOODLE_COURSE_OFFSET=%s set: skipping the first %s of %s visible courses",
+                offset,
+                offset,
+                len(courses),
+            )
+            courses = courses[offset:]
+
         # Testing-only knob: cap the number of courses ingested. Unset (<=0) means all.
         limit = int(os.getenv("MOODLE_COURSE_LIMIT", "0"))
         if limit > 0:

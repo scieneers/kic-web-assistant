@@ -500,13 +500,28 @@ class Fetch_Data:
                     # Drain any nodes still buffered from the last course(s).
                     _flush_node_buffer(stage="MOODLE_UPSERT")
 
-                    # Clean up modules/courses that no longer exist in Moodle
+                    # Clean up modules/courses that no longer exist in Moodle.
+                    # Skip when MOODLE_COURSE_OFFSET is set: skipped courses are absent
+                    # from moodle_seen but still valid in the index — deleting them would
+                    # wipe data we intentionally did not re-process this run.
+                    moodle_course_offset = int(os.getenv("MOODLE_COURSE_OFFSET", "0"))
                     moodle_stale = moodle_existing.keys() - moodle_seen
-                    for key in moodle_stale:
-                        self.search_store.delete_by_filter(
-                            self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
+                    if moodle_course_offset > 0:
+                        self.logger.warning(
+                            "MOODLE_STALE_SKIP %s",
+                            format_kv(
+                                RUN_ID=self.run_id,
+                                REASON="MOODLE_COURSE_OFFSET set",
+                                WOULD_DELETE=len(moodle_stale),
+                            ),
                         )
-                    moodle_stale_deleted = len(moodle_stale)
+                        moodle_stale_deleted = 0
+                    else:
+                        for key in moodle_stale:
+                            self.search_store.delete_by_filter(
+                                self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
+                            )
+                        moodle_stale_deleted = len(moodle_stale)
 
                     self.logger.info(
                         "MOODLE_DELTA %s",
