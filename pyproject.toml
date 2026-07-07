@@ -40,6 +40,7 @@ dependencies = [
     "vosk>=0.3.45,<1; sys_platform == 'linux'",
     "vosk>=0.3.38,<0.3.45; sys_platform == 'darwin'",
     "ragas==0.3.8",
+    "tqdm>=4.0.0,<5",
 ]
 
 [project.optional-dependencies]
@@ -78,6 +79,14 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "integration: Tests that call real external services (LLM API, databases). Skip with: pytest -m 'not integration'",
+]
+filterwarnings = [
+    # External libraries — not actionable from our codebase
+    "ignore::langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
+    "ignore:The `dict` method is deprecated:pydantic.warnings.PydanticDeprecatedSince20:langfuse",
+    "ignore:builtin type SwigPy:DeprecationWarning",
+    "ignore:builtin type swigvarlink:DeprecationWarning",
+    "ignore:The default value of `allowed_objects`:UserWarning",
 ]
 
 [tool.hatch.build.targets.wheel]
