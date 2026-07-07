@@ -55,6 +55,13 @@ class EnvHelper(BaseModel):
     AZURE_SEARCH_ENDPOINT: str = "UNSET"
     AZURE_SEARCH_INDEX: str = "aichat"
 
+    # Reranker backend for the RAG pipeline: "llm", "azure_semantic" or "bge".
+    # MIN_RERANKER_SCORE is a relevance cutoff on a normalized 0-1 scale;
+    # 0.0 disables filtering. If all chunks fall below the cutoff, the
+    # assistant answers with the no-answer fallback instead of a weak answer.
+    RERANKER_TYPE: str = "llm"
+    MIN_RERANKER_SCORE: float = 0.0
+
     DATA_SOURCE_MOODLE_URL: str = "UNSET"
     DATA_SOURCE_MOODLE_TOKEN: str = "UNSET"
 
@@ -67,6 +74,13 @@ class EnvHelper(BaseModel):
     def validate_ENVIRONMENT(cls, value: str) -> str:
         if value not in ["DEV", "PRODUCTION"]:
             raise ValueError("ENVIRONMENT must be DEV or PRODUCTION")
+        return value
+
+    @field_validator("RERANKER_TYPE")
+    def validate_RERANKER_TYPE(cls, value: str) -> str:
+        allowed = ("llm", "azure_semantic", "bge")
+        if value not in allowed:
+            raise ValueError(f"RERANKER_TYPE must be one of {allowed}, got {value!r}")
         return value
 
     @field_validator("REST_API_KEYS", mode="before")

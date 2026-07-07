@@ -5,31 +5,93 @@ Usage:
   python -m evaluation.benchmark
 
   Optional flags:
-    --dataset PATH    Path to queries.jsonl (default: dataset/queries.jsonl)
-    --top-n N         Number of results after reranking (default: 5)
-    --runs N          Runs per query for stable latency measurements (default: 3)
-    --output PATH     Save JSON results to file
+    --dataset PATH        Path to queries.jsonl (default: dataset/queries.jsonl)
+    --top-n N             Number of results after reranking (default: 5)
+    --runs N              Runs per query for stable latency measurements (default: 3)
+    --pool-sizes 10,30    Candidate-pool sizes to compare (default: full pool).
+                          Requires a dataset created with --n-chunks >= max pool size.
+    --no-judge-unlabeled  Skip on-the-fly judging of out-of-pool chunks
+                          (Azure Semantic re-searches the whole index; its chunks
+                          may be unlabeled — without judging they count as 0).
+    --output PATH         Save JSON results to file
 
 Creates the dataset first if it does not exist:
   python -m evaluation.dataset.create_dataset
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import statistics
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from src.api.models.serializable_text_node import SerializableTextNode
-from src.llm.objects.LLMs import Models
+from src.llm.objects.LLMs import LLM, Models
 from src.llm.objects.rerankers.base import BaseReranker, RerankResult
 from src.llm.objects.rerankers.llm_reranker import LLMReranker
 from evaluation import metrics as m
+from evaluation.dataset.create_dataset import judge_relevance
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_DATASET = Path(__file__).parent / "dataset" / "queries.jsonl"
+DEFAULT_JUDGE_CACHE = Path(__file__).parent / "dataset" / "judge_cache.jsonl"
+
+
+class UnlabeledChunkJudge:
+    """LLM-judges chunks that a reranker returned but that carry no ground-truth
+    label (Azure Semantic re-searches the whole index and can surface documents
+    outside the labeled pool — without judging they would unfairly count as 0).
+
+    Judgments are cached on disk (judge_cache.jsonl) so repeated benchmark runs
+    do not re-judge the same (query, chunk) pairs. On LLM failure the judge
+    disables itself and unlabeled chunks fall back to relevance 0 (with a warning).
+    """
+
+    def __init__(self, cache_path: Path = DEFAULT_JUDGE_CACHE, model: Models = Models.AZURE_FALLBACK, enabled: bool = True):
+        self.enabled = enabled
+        self.cache_path = cache_path
+        self.model = model
+        self.judged_count = 0
+        self.cache_hits = 0
+        self._llm: LLM | None = None
+        self._cache: dict[str, int] = {}
+        if enabled and cache_path.exists():
+            with cache_path.open(encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        entry = json.loads(line)
+                        self._cache[entry["key"]] = entry["relevance"]
+
+    @staticmethod
+    def _key(query: str, node: SerializableTextNode) -> str:
+        chunk_id = node.id_ or hashlib.sha1((node.text or "").encode()).hexdigest()[:16]
+        return hashlib.sha1(f"{query}|{chunk_id}".encode()).hexdigest()
+
+    def relevance(self, query: str, node: SerializableTextNode) -> Optional[int]:
+        """Return a cached or freshly judged relevance, or None if judging is off/failed."""
+        if not self.enabled:
+            return None
+        key = self._key(query, node)
+        if key in self._cache:
+            self.cache_hits += 1
+            return self._cache[key]
+        try:
+            if self._llm is None:
+                self._llm = LLM()
+            rel = judge_relevance(self._llm, query, node.text or "", self.model)
+        except Exception as e:
+            logger.warning("On-the-fly judging failed (%s) — unlabeled chunks count as 0 from now on", e)
+            self.enabled = False
+            return None
+        self._cache[key] = rel
+        self.judged_count += 1
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.cache_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"key": key, "query": query, "chunk_id": node.id_, "relevance": rel}, ensure_ascii=False) + "\n")
+        return rel
 
 
 def _load_dataset(path: Path) -> list[dict]:
@@ -42,7 +104,7 @@ def _load_dataset(path: Path) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def _nodes_from_record(record: dict) -> List[SerializableTextNode]:
+def _nodes_from_chunks(chunks: list[dict]) -> List[SerializableTextNode]:
     return [
         SerializableTextNode(
             text=c["text"],
@@ -50,7 +112,7 @@ def _nodes_from_record(record: dict) -> List[SerializableTextNode]:
             score=c.get("score"),
             id_=c.get("id"),
         )
-        for c in record["retrieved_chunks"]
+        for c in chunks
     ]
 
 
@@ -62,13 +124,34 @@ def _ground_truth(record: dict) -> List[int]:
 def _reranked_relevances(
     original_chunks: list[dict],
     reranked_nodes: List[SerializableTextNode],
-) -> List[int]:
-    """Map reranked node order back to relevance labels from ground truth."""
+    query: str = "",
+    judge: Optional[UnlabeledChunkJudge] = None,
+) -> tuple[List[int], List[int], int]:
+    """Map reranked node order back to relevance labels from ground truth.
+
+    Out-of-pool chunks (no ground-truth label) are judged on the fly when a
+    judge is provided; otherwise they count as 0. Returns:
+      (relevances in ranked order,
+       extra labels of judged out-of-pool chunks — extend the ideal pool with
+       these so NDCG stays <= 1 for rankers that search beyond the pool,
+       count of unlabeled chunks that fell back to 0)
+    """
     id_to_relevance = {c["id"]: c["relevance"] for c in original_chunks}
-    result = []
+    relevances: List[int] = []
+    extra_ideal: List[int] = []
+    unlabeled_as_zero = 0
     for node in reranked_nodes:
-        result.append(id_to_relevance.get(node.id_, 0))
-    return result
+        if node.id_ in id_to_relevance:
+            relevances.append(id_to_relevance[node.id_])
+            continue
+        rel = judge.relevance(query, node) if judge else None
+        if rel is None:
+            rel = 0
+            unlabeled_as_zero += 1
+        else:
+            extra_ideal.append(rel)
+        relevances.append(rel)
+    return relevances, extra_ideal, unlabeled_as_zero
 
 
 def _build_rerankers(top_n: int) -> list[BaseReranker]:
@@ -98,6 +181,8 @@ def run_benchmark(
     top_n: int = 5,
     runs: int = 3,
     model: Models = Models.AZURE_FALLBACK,
+    pool_sizes: list[int] | None = None,
+    judge_unlabeled: bool = True,
 ) -> list[dict]:
     records = _load_dataset(dataset_path)
     rerankers = _build_rerankers(top_n)
@@ -105,10 +190,21 @@ def run_benchmark(
     if not rerankers:
         raise RuntimeError("No rerankers available to benchmark.")
 
+    judge = UnlabeledChunkJudge(model=model, enabled=judge_unlabeled)
+    pools: list[int | None] = list(pool_sizes) if pool_sizes else [None]
+
     languages = sorted(set(r.get("language", "de") for r in records))
     multilingual = len(languages) > 1
+    max_pool = max(len(r["retrieved_chunks"]) for r in records)
 
     print(f"\nBenchmarking {len(rerankers)} reranker(s) on {len(records)} queries ({runs} runs each)")
+    print(f"Dataset pool: up to {max_pool} labeled chunks per query")
+    if pool_sizes:
+        oversized = [p for p in pool_sizes if p > max_pool]
+        if oversized:
+            print(f"⚠ pool sizes {oversized} exceed the dataset pool ({max_pool}) — "
+                  f"recreate the dataset with --n-chunks >= {max(oversized)} for a real comparison")
+        print("Note: Azure Semantic re-searches the whole index — the pool size does not constrain it.")
     if multilingual:
         lang_counts = {lang: sum(1 for r in records if r.get("language", "de") == lang) for lang in languages}
         print(f"Languages: {', '.join(f'{lang}={n}' for lang, n in lang_counts.items())}")
@@ -116,61 +212,83 @@ def run_benchmark(
 
     results = []
 
-    for reranker in rerankers:
-        per_query_metrics = []
-        per_lang_metrics: dict[str, list] = {lang: [] for lang in languages}
-        all_latencies = []
-        all_costs = []
-        skip = False
+    for pool_size in pools:
+        pool_label = f"pool={pool_size}" if pool_size else "pool=full"
 
-        for record in records:
-            if skip:
-                break
-            nodes = _nodes_from_record(record)
-            query = record["query"]
-            lang = record.get("language", "de")
-            query_latencies = []
+        for reranker in rerankers:
+            per_query_metrics = []
+            per_lang_metrics: dict[str, list] = {lang: [] for lang in languages}
+            all_latencies = []
+            all_costs = []
+            unlabeled_as_zero_total = 0
+            skip = False
 
-            for run in range(runs):
-                try:
-                    result: RerankResult = reranker.rerank(query=query, nodes=nodes, model=model)
-                except Exception as e:
-                    print(f"  ⚠ {reranker.name} failed on '{query[:60]}': {e}")
-                    skip = True
+            for record in records:
+                if skip:
                     break
-                query_latencies.append(result.latency_ms)
-                if run == 0:
-                    relevances = _reranked_relevances(record["retrieved_chunks"], result.nodes)
-                    query_metrics = m.compute_all(relevances, k=top_n)
-                    per_query_metrics.append(query_metrics)
-                    per_lang_metrics[lang].append(query_metrics)
-                    all_costs.append(result.estimated_cost_eur)
+                pool_chunks = record["retrieved_chunks"][:pool_size] if pool_size else record["retrieved_chunks"]
+                nodes = _nodes_from_chunks(pool_chunks)
+                query = record["query"]
+                lang = record.get("language", "de")
+                query_latencies = []
 
-            all_latencies.extend(query_latencies)
+                for run in range(runs):
+                    try:
+                        result: RerankResult = reranker.rerank(query=query, nodes=nodes, model=model)
+                    except Exception as e:
+                        print(f"  ⚠ {reranker.name} failed on '{query[:60]}': {e}")
+                        skip = True
+                        break
+                    query_latencies.append(result.latency_ms)
+                    if run == 0:
+                        relevances, extra_ideal, unlabeled = _reranked_relevances(
+                            pool_chunks, result.nodes, query=query, judge=judge
+                        )
+                        unlabeled_as_zero_total += unlabeled
+                        ideal = [c["relevance"] for c in pool_chunks] + extra_ideal
+                        query_metrics = m.compute_all(relevances, k=top_n, ideal_relevances=ideal)
+                        per_query_metrics.append(query_metrics)
+                        per_lang_metrics[lang].append(query_metrics)
+                        all_costs.append(result.estimated_cost_eur)
 
-        if skip or not per_query_metrics:
-            print(f"  → {reranker.name} skipped (not enough data)\n")
-            continue
+                all_latencies.extend(query_latencies)
 
-        aggregated = m.aggregate(per_query_metrics)
-        result_entry = {
-            "reranker": reranker.name,
-            **aggregated,
-            "latency_p50_ms": round(statistics.median(all_latencies), 1),
-            "latency_p95_ms": round(sorted(all_latencies)[int(len(all_latencies) * 0.95)], 1),
-            "cost_per_1k_queries_eur": round(sum(all_costs) / len(all_costs) * 1000, 4),
-            "by_language": {
-                lang: m.aggregate(metrics)
-                for lang, metrics in per_lang_metrics.items()
-                if metrics
-            },
-        }
-        results.append(result_entry)
+            if skip or not per_query_metrics:
+                print(f"  → {reranker.name} ({pool_label}) skipped (not enough data)\n")
+                continue
 
-    _print_table(results, top_n, label="Overall")
-    if multilingual:
-        for lang in languages:
-            _print_table(results, top_n, label=f"Language: {lang}", language=lang)
+            aggregated = m.aggregate(per_query_metrics)
+            result_entry = {
+                "reranker": reranker.name,
+                "pool_size": pool_size or max_pool,
+                **aggregated,
+                "latency_p50_ms": round(statistics.median(all_latencies), 1),
+                "latency_p95_ms": round(sorted(all_latencies)[int(len(all_latencies) * 0.95)], 1),
+                "cost_per_1k_queries_eur": round(sum(all_costs) / len(all_costs) * 1000, 4),
+                "unlabeled_as_zero": unlabeled_as_zero_total,
+                "by_language": {
+                    lang: m.aggregate(metrics)
+                    for lang, metrics in per_lang_metrics.items()
+                    if metrics
+                },
+            }
+            results.append(result_entry)
+
+    for pool_size in pools:
+        p = pool_size or max_pool
+        pool_results = [r for r in results if r["pool_size"] == p]
+        suffix = f" — Pool={p}" if len(pools) > 1 else ""
+        _print_table(pool_results, top_n, label=f"Overall{suffix}")
+        if multilingual:
+            for lang in languages:
+                _print_table(pool_results, top_n, label=f"Language: {lang}{suffix}", language=lang)
+
+    if judge.judged_count or judge.cache_hits:
+        print(f"On-the-fly judging: {judge.judged_count} new, {judge.cache_hits} from cache ({judge.cache_path})")
+    zero_fallbacks = sum(r.get("unlabeled_as_zero", 0) for r in results)
+    if zero_fallbacks:
+        print(f"⚠ {zero_fallbacks} out-of-pool chunks counted as relevance 0 (judging disabled/failed) — "
+              "affected rerankers are underrated")
     return results
 
 
@@ -225,10 +343,30 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--top-n", type=int, default=5)
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument(
+        "--pool-sizes", type=str, default=None,
+        help="Comma-separated candidate-pool sizes to compare, e.g. '10,30'. "
+             "Dataset must contain at least that many chunks per query (create with --n-chunks).",
+    )
+    parser.add_argument(
+        "--no-judge-unlabeled", action="store_true",
+        help="Do not LLM-judge out-of-pool chunks (they count as relevance 0).",
+    )
+    parser.add_argument("--model", type=str, default="Azure-Fallback", choices=[m_.value for m_ in Models],
+                        help="LLM model for the LLM reranker and on-the-fly judging")
     parser.add_argument("--output", type=Path, default=None, help="Save results as JSON")
     args = parser.parse_args()
 
-    results = run_benchmark(dataset_path=args.dataset, top_n=args.top_n, runs=args.runs)
+    pool_sizes = [int(p) for p in args.pool_sizes.split(",")] if args.pool_sizes else None
+
+    results = run_benchmark(
+        dataset_path=args.dataset,
+        top_n=args.top_n,
+        runs=args.runs,
+        model=Models(args.model),
+        pool_sizes=pool_sizes,
+        judge_unlabeled=not args.no_judge_unlabeled,
+    )
 
     if args.output:
         args.output.write_text(json.dumps(results, indent=2, ensure_ascii=False))

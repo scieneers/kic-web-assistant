@@ -73,6 +73,24 @@ class TestValidateEnvironment:
         with pytest.raises(ValueError):
             self._call("production")
 
+
+# ── validate_RERANKER_TYPE ────────────────────────────────────────────────────
+
+class TestValidateRerankerType:
+    """Only 'llm', 'azure_semantic' and 'bge' are accepted."""
+
+    def _call(self, value):
+        return EnvHelper.validate_RERANKER_TYPE(value)
+
+    @pytest.mark.parametrize("value", ["llm", "azure_semantic", "bge"])
+    def test_valid_backends_accepted(self, value):
+        assert self._call(value) == value
+
+    @pytest.mark.parametrize("value", ["cohere", "LLM", "", "passthrough"])
+    def test_invalid_backends_rejected(self, value):
+        with pytest.raises(ValueError):
+            self._call(value)
+
     def test_staging_rejected(self):
         with pytest.raises(ValueError):
             self._call("STAGING")

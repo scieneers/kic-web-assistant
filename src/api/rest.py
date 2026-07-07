@@ -51,7 +51,12 @@ def get_vector_db() -> VectorDBAzureSearch:
 def get_assistant() -> KICampusAssistant:
     global _assistant
     if _assistant is None:
-        _assistant = KICampusAssistant()
+        # Reranker backend + relevance cutoff are deployment configuration
+        # (env vars RERANKER_TYPE / MIN_RERANKER_SCORE), not per-request options.
+        _assistant = KICampusAssistant(
+            reranker_type=env.RERANKER_TYPE,
+            min_reranker_score=env.MIN_RERANKER_SCORE,
+        )
     return _assistant
 
 

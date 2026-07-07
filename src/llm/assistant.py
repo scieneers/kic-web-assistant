@@ -72,8 +72,10 @@ class KICampusAssistant:
             rerank_top_n: Number of top chunks to keep after reranking
             retrieve_top_n: Number of chunks to retrieve from vector database
             enable_socratic: Enable/disable the socratic learning mode
-            reranker_type: Which reranker to use — "llm" (default), "azure_semantic", "bge", "cohere"
-            min_reranker_score: Minimum @search.reranker_score to keep (azure_semantic only; 0 = no filtering)
+            reranker_type: Which reranker to use — "llm" (default), "azure_semantic", "bge"
+            min_reranker_score: Relevance cutoff on a normalized 0-1 scale, applied by all
+                backends (0 = no filtering). If every chunk falls below the cutoff, the
+                answer node produces the no-answer fallback instead of a weak answer.
         """
         if rerank_top_n >= retrieve_top_n:
             raise ValueError(

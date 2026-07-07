@@ -16,20 +16,27 @@ _reranker_instances: dict[str, BaseReranker] = {}
 
 
 def get_reranker(reranker_type: RerankerType, top_n: int, min_score: float = 0.0) -> BaseReranker:
-    """Return (or create) a singleton reranker for the given type."""
+    """Return (or create) a singleton reranker for the given type.
+
+    Heavy resources (BGE model, Azure clients) are created once per type;
+    cheap parameters (top_n, min_score) are re-applied on every call so a
+    cached instance never runs with stale configuration.
+    """
     if reranker_type not in _reranker_instances:
         if reranker_type == "llm":
             from src.llm.objects.rerankers.llm_reranker import LLMReranker
-            _reranker_instances[reranker_type] = LLMReranker(top_n=top_n)
+            _reranker_instances[reranker_type] = LLMReranker(top_n=top_n, min_score=min_score)
         elif reranker_type == "azure_semantic":
             from src.llm.objects.rerankers.azure_semantic_reranker import AzureSemanticReranker
             _reranker_instances[reranker_type] = AzureSemanticReranker(top_n=top_n, min_score=min_score)
         elif reranker_type == "bge":
             from src.llm.objects.rerankers.bge_reranker import BGEReranker
-            _reranker_instances[reranker_type] = BGEReranker(top_n=top_n)
+            _reranker_instances[reranker_type] = BGEReranker(top_n=top_n, min_score=min_score)
         else:
             raise ValueError(f"Unknown reranker_type: {reranker_type!r}. Choose: llm, azure_semantic, bge")
-    return _reranker_instances[reranker_type]
+    reranker = _reranker_instances[reranker_type]
+    reranker.configure(top_n=top_n, min_score=min_score)
+    return reranker
 
 
 @observe()
@@ -86,16 +93,29 @@ def rerank_chunks(state: GraphState) -> dict:
     result = reranker.rerank(query=query, nodes=retrieved, model=model)
 
     reranked = result.nodes
-    if not reranked:
-        # LLMRerank returned 0 results — the model didn't follow the expected
-        # output format, or all chunks scored below threshold. Return empty so
-        # the answer node triggers the "no content found" fallback message
-        # instead of passing through unfiltered chunks (which risks prompt injection).
-        logger.warning(
-            "rerank_chunks: reranker returned 0 results for %d input chunks — "
-            "returning empty list to trigger no-content fallback",
-            len(retrieved),
+    dropped = result.metadata.get("dropped_below_min_score", 0)
+    if dropped:
+        logger.info(
+            "rerank_chunks: dropped %d chunk(s) below min_score=%.2f (%d remaining)",
+            dropped, min_score, len(reranked),
         )
+    if not reranked:
+        # Empty result set — either every chunk scored below min_score ("all
+        # hits are weak") or the reranker returned nothing (e.g. LLMRerank
+        # format failure). Return empty so the answer node triggers the
+        # no-answer fallback instead of passing through unfiltered chunks
+        # (which risks weak answers and prompt injection).
+        if dropped:
+            logger.info(
+                "rerank_chunks: all %d chunks below min_score=%.2f — triggering no-answer fallback",
+                len(retrieved), min_score,
+            )
+        else:
+            logger.warning(
+                "rerank_chunks: reranker returned 0 results for %d input chunks — "
+                "returning empty list to trigger no-content fallback",
+                len(retrieved),
+            )
 
     logger.debug("rerank_chunks: %d → %d chunks after rerank", len(retrieved), len(reranked))
     return {"reranked": reranked}

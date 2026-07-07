@@ -25,13 +25,19 @@ _DEFAULT_MODEL = BGE_LARGE_MODEL
 
 class BGEReranker(BaseReranker):
     """Local cross-encoder reranker using sentence-transformers. Model is downloaded
-    on first use (~280MB) and cached by HuggingFace locally."""
+    on first use (~280MB) and cached by HuggingFace locally.
 
-    def __init__(self, top_n: int, model_name: str = _DEFAULT_MODEL):
-        super().__init__(top_n)
+    Scores are forced through a sigmoid so they land on a 0–1 scale regardless
+    of the model's default activation — this makes min_score directly usable
+    without per-model normalization.
+    """
+
+    def __init__(self, top_n: int, model_name: str = _DEFAULT_MODEL, min_score: float = 0.0):
+        super().__init__(top_n, min_score)
         self.model_name = model_name
+        import torch
         from sentence_transformers import CrossEncoder
-        self._model = CrossEncoder(model_name)
+        self._model = CrossEncoder(model_name, default_activation_function=torch.nn.Sigmoid())
 
     @property
     def name(self) -> str:
@@ -49,12 +55,18 @@ class BGEReranker(BaseReranker):
         scores = self._model.predict(pairs)
         latency_ms = (time.perf_counter() - t0) * 1000
 
-        ranked = sorted(zip(nodes, scores), key=lambda x: x[1], reverse=True)
-        top_nodes = [node for node, _ in ranked[: self.top_n]]
+        # Copy nodes with the cross-encoder score so downstream consumers
+        # (min_score filter, no-answer logic) see the rerank relevance instead
+        # of the retrieval RRF score. Copies keep the shared state immutable.
+        scored = [node.model_copy(update={"score": float(s)}) for node, s in zip(nodes, scores)]
+        scored.sort(key=lambda n: n.score or 0.0, reverse=True)
+        top_nodes = scored[: self.top_n]
+
+        top_nodes, dropped = self.apply_min_score(top_nodes)
 
         return RerankResult(
             nodes=top_nodes,
             latency_ms=latency_ms,
             estimated_cost_eur=0.0,
-            metadata={"model": self.model_name, "input_chunks": len(nodes)},
+            metadata={"model": self.model_name, "input_chunks": len(nodes), "dropped_below_min_score": dropped},
         )

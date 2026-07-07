@@ -22,12 +22,19 @@ def dcg_at_k(relevances: List[int], k: int) -> float:
     )
 
 
-def ndcg_at_k(relevances: List[int], k: int) -> float:
-    """Normalized DCG at k. Returns 0 if no relevant documents exist."""
-    ideal_dcg = dcg_at_k(sorted(relevances, reverse=True), k)
+def ndcg_at_k(relevances: List[int], k: int, ideal_relevances: List[int] | None = None) -> float:
+    """Normalized DCG at k. Returns 0 if no relevant documents exist.
+
+    ideal_relevances: relevance labels of the FULL candidate pool the ranker
+    could have chosen from. Without it, the ideal is computed from the ranked
+    list itself — which overrates rankers that return few (but ordered) chunks
+    while better candidates existed in the pool.
+    """
+    ideal_pool = ideal_relevances if ideal_relevances is not None else relevances
+    ideal_dcg = dcg_at_k(sorted(ideal_pool, reverse=True), k)
     if ideal_dcg == 0:
         return 0.0
-    return dcg_at_k(relevances, k) / ideal_dcg
+    return min(1.0, dcg_at_k(relevances, k) / ideal_dcg)
 
 
 def mrr(relevances: List[int]) -> float:
@@ -45,10 +52,13 @@ def precision_at_k(relevances: List[int], k: int) -> float:
     return sum(1 for r in relevances[:k] if r > 0) / k
 
 
-def compute_all(relevances: List[int], k: int = 5) -> dict:
-    """Compute all metrics for a single ranked list."""
+def compute_all(relevances: List[int], k: int = 5, ideal_relevances: List[int] | None = None) -> dict:
+    """Compute all metrics for a single ranked list.
+
+    ideal_relevances: labels of the full candidate pool (see ndcg_at_k).
+    """
     return {
-        f"ndcg@{k}": ndcg_at_k(relevances, k),
+        f"ndcg@{k}": ndcg_at_k(relevances, k, ideal_relevances=ideal_relevances),
         "mrr": mrr(relevances),
         f"precision@{k}": precision_at_k(relevances, k),
     }

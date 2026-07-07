@@ -41,14 +41,17 @@ class AzureSemanticReranker(BaseReranker):
     """
 
     def __init__(self, top_n: int, min_score: float = 0.0):
-        super().__init__(top_n)
-        self._min_score = min_score
+        super().__init__(top_n, min_score)
         self._llm = LLM()
         self._vector_db = VectorDBAzureSearch()
 
     @property
     def name(self) -> str:
         return "Azure Semantic"
+
+    def normalize_score(self, score: float) -> float:
+        # Azure @search.reranker_score is on a 0–4 scale.
+        return score / 4.0
 
     def rerank(
         self,
@@ -83,21 +86,18 @@ class AzureSemanticReranker(BaseReranker):
         # Sort defensively — Azure should already order by reranker_score, but be explicit
         reranked.sort(key=lambda n: n.score or 0, reverse=True)
 
-        if self._min_score > 0:
-            before = len(reranked)
-            reranked = [n for n in reranked if (n.score or 0) >= self._min_score]
-            dropped = before - len(reranked)
-            if dropped:
-                logger.debug(
-                    "AzureSemanticReranker: dropped %d/%d chunks below min_score=%.2f",
-                    dropped, before, self._min_score,
-                )
+        reranked, dropped = self.apply_min_score(reranked)
+        if dropped:
+            logger.debug(
+                "AzureSemanticReranker: dropped %d chunks below min_score=%.2f (normalized)",
+                dropped, self.min_score,
+            )
 
         return RerankResult(
             nodes=reranked,
             latency_ms=latency_ms,
             estimated_cost_eur=_EUR_PER_QUERY,
-            metadata={"semantic_config": _SEMANTIC_CONFIG, "input_chunks": len(nodes)},
+            metadata={"semantic_config": _SEMANTIC_CONFIG, "input_chunks": len(nodes), "dropped_below_min_score": dropped},
         )
 
     @staticmethod
