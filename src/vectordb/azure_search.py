@@ -4,7 +4,7 @@ import re
 from types import SimpleNamespace
 from typing import Any, Iterator
 
-from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+from azure.core.exceptions import HttpResponseError, ResourceNotFoundError, ServiceRequestError
 from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
@@ -179,18 +179,37 @@ class VectorDBAzureSearch:
         """
         if not documents:
             return 0
-        client = self._client(index_name)
         uploaded = 0
         for batch in self._batches(documents):
-            try:
-                results = client.merge_or_upload_documents(documents=batch)
-            except HttpResponseError as e:
-                self.logger.warning(
-                    "Azure AI Search upload failed: index=%s docs=%s exc=%s",
-                    index_name,
-                    len(batch),
-                    e,
-                )
+            results = None
+            for attempt in range(2):
+                try:
+                    results = self._client(index_name).merge_or_upload_documents(documents=batch)
+                    break
+                except ServiceRequestError as e:
+                    self._search_clients.pop(index_name, None)
+                    if attempt == 0:
+                        self.logger.warning(
+                            "Azure AI Search connection error (stale connection?), retrying with fresh client: index=%s exc=%s",
+                            index_name,
+                            e,
+                        )
+                        continue
+                    self.logger.error(
+                        "Azure AI Search connection error after retry, skipping batch: index=%s docs=%s exc=%s",
+                        index_name,
+                        len(batch),
+                        e,
+                    )
+                except HttpResponseError as e:
+                    self.logger.warning(
+                        "Azure AI Search upload failed: index=%s docs=%s exc=%s",
+                        index_name,
+                        len(batch),
+                        e,
+                    )
+                    break
+            if results is None:
                 continue
             failed = [r for r in results if not r.succeeded]
             if failed:
