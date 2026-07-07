@@ -69,6 +69,37 @@ def _as_int(value) -> int | None:
         return None
 
 
+def _stale_deletion_allowed(logger, run_id: str, source: str, seen_count: int, existing_count: int, stale_count: int) -> bool:
+    """Guardrail against mass stale-deletion after an incomplete source fetch.
+
+    A source API that fails outright aborts the stage, but one that succeeds
+    with an empty or partial result (e.g. Drupal running without credentials,
+    silently broken pagination) would mark everything missing as stale and
+    wipe the source from the index. Refuse deletion when this run saw fewer
+    than STALE_DELETE_MIN_SEEN_RATIO (default 0.5) of the documents already
+    indexed for this source.
+    """
+    if stale_count == 0:
+        return True
+    min_ratio = float(os.getenv("STALE_DELETE_MIN_SEEN_RATIO", "0.5"))
+    if seen_count >= existing_count * min_ratio:
+        return True
+    logger.error(
+        "STALE_GUARD %s",
+        format_kv(
+            RUN_ID=run_id,
+            SOURCE=source,
+            EVENT="STALE_DELETE_REFUSED",
+            REASON="seen count below threshold, source fetch likely incomplete",
+            SEEN=seen_count,
+            EXISTING=existing_count,
+            MIN_RATIO=min_ratio,
+            WOULD_DELETE=stale_count,
+        ),
+    )
+    return False
+
+
 # A full run takes about 2,5 hours (2025-02-11)
 class Fetch_Data:
     @staticmethod
@@ -400,11 +431,15 @@ class Fetch_Data:
                     _flush_node_buffer(stage="MOOCHUP_UPSERT")
 
                     stale = moochup_existing.keys() - moochup_seen
-                    for key in stale:
-                        self.search_store.delete_by_filter(
-                            self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
-                        )
-                    moochup_stale_deleted = len(stale)
+                    moochup_stale_deleted = 0
+                    if _stale_deletion_allowed(
+                        self.logger, self.run_id, "Moochup", len(moochup_seen), len(moochup_existing), len(stale)
+                    ):
+                        for key in stale:
+                            self.search_store.delete_by_filter(
+                                self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
+                            )
+                        moochup_stale_deleted = len(stale)
 
                     self.logger.info(
                         "MOOCHUP_DELTA %s",
@@ -516,12 +551,16 @@ class Fetch_Data:
                             ),
                         )
                         moodle_stale_deleted = 0
-                    else:
+                    elif _stale_deletion_allowed(
+                        self.logger, self.run_id, "Moodle", len(moodle_seen), len(moodle_existing), len(moodle_stale)
+                    ):
                         for key in moodle_stale:
                             self.search_store.delete_by_filter(
                                 self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                             )
                         moodle_stale_deleted = len(moodle_stale)
+                    else:
+                        moodle_stale_deleted = 0
 
                     self.logger.info(
                         "MOODLE_DELTA %s",
@@ -587,11 +626,15 @@ class Fetch_Data:
                     _flush_node_buffer(stage="DRUPAL_UPSERT")
 
                     stale = drupal_existing.keys() - drupal_seen
-                    for key in stale:
-                        self.search_store.delete_by_filter(
-                            self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
-                        )
-                    drupal_stale_deleted = len(stale)
+                    drupal_stale_deleted = 0
+                    if _stale_deletion_allowed(
+                        self.logger, self.run_id, "Drupal", len(drupal_seen), len(drupal_existing), len(stale)
+                    ):
+                        for key in stale:
+                            self.search_store.delete_by_filter(
+                                self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
+                            )
+                        drupal_stale_deleted = len(stale)
 
                     self.logger.info(
                         "DRUPAL_DELTA %s",

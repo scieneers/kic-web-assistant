@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from llama_index.core import Document
 
-from src.loaders.get_data import _content_hash, _odata_escape, _source_doc_key
+from src.loaders.get_data import _content_hash, _odata_escape, _source_doc_key, _stale_deletion_allowed
 from src.vectordb.azure_search import VectorDBAzureSearch
 
 
@@ -204,3 +204,55 @@ class TestLoadContentHashes:
         mock_search_store._search_clients["test-index"] = client
         result = mock_search_store.load_content_hashes("Drupal")
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _stale_deletion_allowed
+# ---------------------------------------------------------------------------
+
+
+class TestStaleDeletionAllowed:
+    def _call(self, seen: int, existing: int, stale: int, logger=None) -> bool:
+        return _stale_deletion_allowed(logger or MagicMock(), "test-run", "Drupal", seen, existing, stale)
+
+    def test_nothing_stale_is_always_allowed(self):
+        # Even a run that saw nothing may proceed if there is nothing to delete.
+        assert self._call(seen=0, existing=0, stale=0) is True
+        assert self._call(seen=0, existing=100, stale=0) is True
+
+    def test_full_fetch_allows_deletion(self):
+        assert self._call(seen=100, existing=100, stale=5) is True
+
+    def test_empty_fetch_refuses_deletion(self):
+        # The core scenario: API succeeds but returns nothing (e.g. Drupal
+        # without credentials) — everything would be stale.
+        assert self._call(seen=0, existing=100, stale=100) is False
+
+    def test_partial_fetch_below_threshold_refuses(self):
+        assert self._call(seen=40, existing=100, stale=60) is False
+
+    def test_fetch_at_threshold_allows(self):
+        assert self._call(seen=50, existing=100, stale=50) is True
+
+    def test_growth_run_allows(self):
+        # More documents seen than indexed (new content) is never suspicious.
+        assert self._call(seen=150, existing=100, stale=2) is True
+
+    def test_threshold_configurable_via_env(self, monkeypatch):
+        monkeypatch.setenv("STALE_DELETE_MIN_SEEN_RATIO", "0.9")
+        assert self._call(seen=80, existing=100, stale=20) is False
+        monkeypatch.setenv("STALE_DELETE_MIN_SEEN_RATIO", "0.3")
+        assert self._call(seen=40, existing=100, stale=60) is True
+
+    def test_refusal_logs_error_with_counts(self):
+        logger = MagicMock()
+        assert self._call(seen=0, existing=100, stale=100, logger=logger) is False
+        logger.error.assert_called_once()
+        logged = str(logger.error.call_args)
+        assert "STALE_DELETE_REFUSED" in logged
+        assert "WOULD_DELETE=100" in logged
+
+    def test_allowed_path_does_not_log_error(self):
+        logger = MagicMock()
+        assert self._call(seen=100, existing=100, stale=3, logger=logger) is True
+        logger.error.assert_not_called()
