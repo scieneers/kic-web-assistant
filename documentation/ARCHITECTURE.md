@@ -45,7 +45,7 @@ kic-web-assistant/
 ├── documentation/
 ├── rag_eval/           # RAG-Evaluierungsframework
 ├── docker-compose.yaml # Lokale Services (Langfuse + PostgreSQL)
-├── pyproject.toml      # Python-Abhängigkeiten (Poetry)
+├── pyproject.toml      # Python-Abhängigkeiten (uv)
 └── Taskfile.yml        # Build/Deploy-Automatisierung
 ```
 

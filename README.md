@@ -1,6 +1,6 @@
 # Dependencies
 - python 3.11
-- poetry 1.7.1 & `poetry install`
+- [uv](https://docs.astral.sh/uv/) & `uv sync`
 - task: `brew install go-task`
 - install pre-commit hooks: [`pre-commit`](https://github.com/pre-commit/pre-commit) `install`
 
