@@ -2,7 +2,7 @@
 
 import pytest
 
-from evaluation.metrics import compute_all, mrr, ndcg_at_k, precision_at_k
+from evaluation.metrics import aggregate, compute_all, mrr, ndcg_at_k, precision_at_k, recall_at_k
 
 
 class TestNdcgIdealPool:
@@ -40,3 +40,27 @@ class TestBasicMetrics:
         result = compute_all([1, 1], k=5, ideal_relevances=[2, 1, 1])
         assert result["ndcg@5"] < 1.0
         assert result["mrr"] == 1.0
+
+
+class TestRecall:
+    def test_counts_found_fraction_of_all_relevant(self):
+        # 2 of 3 relevant docs in the union pool made it into the top-k.
+        assert recall_at_k([2, 0, 1], k=3, total_relevant=3) == pytest.approx(2 / 3)
+
+    def test_undefined_without_relevant_docs(self):
+        # No-answer queries: nothing relevant exists — recall is undefined, not 0.
+        assert recall_at_k([0, 0], k=2, total_relevant=0) is None
+
+    def test_compute_all_includes_recall_only_when_pool_size_given(self):
+        with_recall = compute_all([1, 0], k=2, total_relevant=2)
+        without_recall = compute_all([1, 0], k=2)
+        assert with_recall["recall@2"] == pytest.approx(0.5)
+        assert "recall@2" not in without_recall
+
+    def test_aggregate_skips_undefined_recall(self):
+        # One query with defined recall, one no-answer query (None) — the
+        # average must only cover the defined one instead of crashing or
+        # counting None as 0.
+        merged = aggregate([{"recall@5": 0.8, "mrr": 1.0}, {"recall@5": None, "mrr": 0.0}])
+        assert merged["recall@5"] == pytest.approx(0.8)
+        assert merged["mrr"] == pytest.approx(0.5)

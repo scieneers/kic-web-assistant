@@ -6,7 +6,8 @@ Usage:
   uv run python scripts/vectordb/compare_indexes.py --a aichat --b kic-content
 """
 import argparse
-from collections import defaultdict
+import hashlib
+from collections import Counter, defaultdict
 
 from src.vectordb.azure_search import VectorDBAzureSearch
 
@@ -33,6 +34,18 @@ def _doc_key(doc: dict) -> str | None:
     return doc.get("source_doc_key") or doc.get("url")
 
 
+# Bucket boundaries (chars) for the chunk-size histogram.
+_SIZE_BUCKETS = [200, 500, 1000, 2000, 4000]
+
+
+def _size_bucket(n: int) -> str:
+    for b in _SIZE_BUCKETS:
+        if n < b:
+            lo = _SIZE_BUCKETS[_SIZE_BUCKETS.index(b) - 1] if _SIZE_BUCKETS.index(b) > 0 else 0
+            return f"{lo}-{b}"
+    return f"{_SIZE_BUCKETS[-1]}+"
+
+
 def _scan(db: VectorDBAzureSearch, name: str) -> dict:
     client = db._client(name)
 
@@ -52,9 +65,21 @@ def _scan(db: VectorDBAzureSearch, name: str) -> dict:
     empty: dict[str, int] = defaultdict(int)
     urls: dict[str, set] = defaultdict(set)  # source → unique doc keys
 
+    # Chunk-Ebene: pro Quelle, pro Dokument-Key
+    doc_chunk_count: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    doc_chars: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    size_hist: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+    # Exakte Text-Duplikate: pro (source, doc_key) ein Counter über Text-Hashes.
+    # Zählt Chunks mit identischem Text im selben Dokument (Hinweis auf doppeltes
+    # Ingestion, nicht auf gewachsenen Inhalt).
+    dup_hashes: dict[str, dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
+
     # Moodle-spezifisch: (course_id, module_id) → fullname
     moodle_modules: dict[tuple, str] = {}   # (course_id, module_id) → fullname
     moodle_courses: dict[int, str] = {}     # course_id → fullname
+    moodle_module_chunks: dict[tuple, int] = defaultdict(int)  # (course_id, module_id) → chunk count
+    moodle_module_chars: dict[tuple, int] = defaultdict(int)   # (course_id, module_id) → total chars
 
     for doc in client.search(
         "*",
@@ -63,12 +88,19 @@ def _scan(db: VectorDBAzureSearch, name: str) -> dict:
     ):
         src = doc.get("source") or "unknown"
         text = doc.get("text") or ""
-        chars[src] += len(text)
+        n_chars = len(text)
+        chars[src] += n_chars
         if not text.strip():
             empty[src] += 1
+        size_hist[src][_size_bucket(n_chars)] += 1
         key = _doc_key(doc)
         if key:
             urls[src].add(key)
+            doc_chunk_count[src][key] += 1
+            doc_chars[src][key] += n_chars
+            if text.strip():
+                text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+                dup_hashes[src][key][text_hash] += 1
 
         if src == "Moodle":
             cid = doc.get("course_id")
@@ -76,6 +108,8 @@ def _scan(db: VectorDBAzureSearch, name: str) -> dict:
             fname = doc.get("fullname") or ""
             if cid and mid:
                 moodle_modules[(cid, mid)] = fname
+                moodle_module_chunks[(cid, mid)] += 1
+                moodle_module_chars[(cid, mid)] += n_chars
             elif cid and not mid:
                 moodle_courses[cid] = fname
 
@@ -89,6 +123,12 @@ def _scan(db: VectorDBAzureSearch, name: str) -> dict:
         "type_facets": {f["value"]: f["count"] for f in facets.get("type", [])},
         "moodle_modules": moodle_modules,
         "moodle_courses": moodle_courses,
+        "moodle_module_chunks": dict(moodle_module_chunks),
+        "moodle_module_chars": dict(moodle_module_chars),
+        "doc_chunk_count": {s: dict(v) for s, v in doc_chunk_count.items()},
+        "doc_chars": {s: dict(v) for s, v in doc_chars.items()},
+        "size_hist": {s: dict(v) for s, v in size_hist.items()},
+        "dup_hashes": {s: {k: dict(c) for k, c in v.items()} for s, v in dup_hashes.items()},
     }
 
 
@@ -303,6 +343,204 @@ def _moodle_detail(a: dict, b: dict):
         sign = "+" if delta >= 0 else ""
         print(f"    course_id={cid:>6}  {cname[:35]:<35}  {ca_cnt:>4} → {cb_cnt:>4}  ({sign}{delta})")
 
+    # ── Module in beiden, aber unterschiedliche Chunk-Anzahl: liegt es an mehr
+    #    Inhalt oder an anderer Chunk-Größe? ─────────────────────────────────
+    mca, mcb = a["moodle_module_chunks"], b["moodle_module_chunks"]
+    cha, chb = a["moodle_module_chars"], b["moodle_module_chars"]
+    module_diffs = []
+    for key in both_m:
+        na, nb = mca.get(key, 0), mcb.get(key, 0)
+        if na == nb:
+            continue
+        ca_chars, cb_chars = cha.get(key, 0), chb.get(key, 0)
+        avg_a = ca_chars / na if na else 0
+        avg_b = cb_chars / nb if nb else 0
+        content_delta_pct = (cb_chars - ca_chars) / ca_chars if ca_chars else 0
+        avg_delta_pct = (avg_b - avg_a) / avg_a if avg_a else 0
+        if abs(content_delta_pct) < 0.10:
+            cause = "Chunking"
+        elif abs(avg_delta_pct) < 0.10:
+            cause = "Inhalt"
+        else:
+            cause = "beides"
+        module_diffs.append((abs(nb - na), key, na, nb, avg_a, avg_b, content_delta_pct, cause))
+    module_diffs.sort(key=lambda x: -x[0])
+
+    print(f"\n  Module in beiden Indizes, aber mit unterschiedlicher Chunk-Anzahl:")
+    print(f"    {len(module_diffs)} von {len(both_m)} gemeinsamen Modulen betroffen")
+    if module_diffs:
+        by_cause = defaultdict(int)
+        for *_rest, cause in module_diffs:
+            by_cause[cause] += 1
+        print(f"    Ursache (Δ Chunks): " + ", ".join(f"{c}={n}" for c, n in sorted(by_cause.items())))
+        print(
+            f"\n    {'Chunks ' + a['name']:>10}  {'Chunks ' + b['name']:>10}"
+            f"  {'ØGröße ' + a['name']:>10}  {'ØGröße ' + b['name']:>10}"
+            f"  {'ΔInhalt':>8}  {'Ursache':<10}  Modul"
+        )
+        _hr("-")
+        for _, (cid, mid), na, nb, avg_a, avg_b, content_delta_pct, cause in module_diffs[:15]:
+            fname = b["moodle_modules"].get((cid, mid)) or a["moodle_modules"].get((cid, mid)) or ""
+            print(
+                f"    {na:>10,}  {nb:>10,}  {avg_a:>10,.0f}  {avg_b:>10,.0f}"
+                f"  {content_delta_pct:>+7.0%}  {cause:<10}  course_id={cid} module_id={mid}  {fname[:30]}"
+            )
+        if len(module_diffs) > 15:
+            print(f"    … und {len(module_diffs) - 15} weitere Module")
+        print(
+            "\n    Legende: 'Chunking' = Textmenge ~gleich, andere Chunk-Größe/Splitting;"
+            " 'Inhalt' = Textmenge hat sich geändert, ØGröße ~gleich; 'beides' = beides.\n"
+            "    Achtung: exakte Text-Duplikate (dieselben Chunks 2x indiziert) erzeugen"
+            " dasselbe Bild wie 'Inhalt' (ØGröße gleich, Textmenge verdoppelt) — siehe"
+            " DUPLIKAT-CHECK weiter unten, um beides zu unterscheiden."
+        )
+
+
+def _chunk_size_histogram(a: dict, b: dict):
+    _header("CHUNK-GRÖSSEN-VERTEILUNG (Zeichen/Chunk)")
+    all_sources = sorted(set(a["size_hist"]) | set(b["size_hist"]))
+    bucket_labels = [f"0-{_SIZE_BUCKETS[0]}"] + [
+        f"{_SIZE_BUCKETS[i]}-{_SIZE_BUCKETS[i + 1]}" for i in range(len(_SIZE_BUCKETS) - 1)
+    ] + [f"{_SIZE_BUCKETS[-1]}+"]
+
+    for src in all_sources:
+        ha = a["size_hist"].get(src, {})
+        hb = b["size_hist"].get(src, {})
+        if not ha and not hb:
+            continue
+        print(f"\n  [{src}]")
+        print(f"    {'Bucket (Zeichen)':<20} {a['name']:>16}  {b['name']:>16}")
+        _hr("-")
+        for bucket in bucket_labels:
+            va, vb = ha.get(bucket, 0), hb.get(bucket, 0)
+            if va == 0 and vb == 0:
+                continue
+            delta = vb - va
+            sign = "+" if delta >= 0 else ""
+            print(f"    {bucket:<20} {va:>16,}  {vb:>16,}  ({sign}{delta:+,})")
+
+
+def _chunks_per_doc_distribution(a: dict, b: dict):
+    _header("CHUNKS-PRO-DOKUMENT-VERTEILUNG")
+    bucket_edges = [(1, 1), (2, 3), (4, 6), (7, 10), (11, 20), (21, None)]
+
+    def _bucket_label(lo, hi):
+        return f"{lo}" if lo == hi else (f"{lo}-{hi}" if hi else f"{lo}+")
+
+    def _histogram(doc_chunk_count: dict) -> dict:
+        hist = defaultdict(int)
+        for count in doc_chunk_count.values():
+            for lo, hi in bucket_edges:
+                if count >= lo and (hi is None or count <= hi):
+                    hist[_bucket_label(lo, hi)] += 1
+                    break
+        return hist
+
+    all_sources = sorted(set(a["doc_chunk_count"]) | set(b["doc_chunk_count"]))
+    for src in all_sources:
+        cca = a["doc_chunk_count"].get(src, {})
+        ccb = b["doc_chunk_count"].get(src, {})
+        if not cca and not ccb:
+            continue
+        ha = _histogram(cca)
+        hb = _histogram(ccb)
+        avg_a = sum(cca.values()) / len(cca) if cca else 0
+        avg_b = sum(ccb.values()) / len(ccb) if ccb else 0
+        print(f"\n  [{src}]  (Ø Chunks/Dok: {a['name']}={avg_a:.1f} {b['name']}={avg_b:.1f})")
+        print(f"    {'Chunks/Dok':<20} {a['name']:>16}  {b['name']:>16}")
+        _hr("-")
+        for lo, hi in bucket_edges:
+            label = _bucket_label(lo, hi)
+            va, vb = ha.get(label, 0), hb.get(label, 0)
+            if va == 0 and vb == 0:
+                continue
+            print(f"    {label:<20} {va:>16,}  {vb:>16,}")
+
+
+def _doc_level_diff(a: dict, b: dict, top_n: int = 15):
+    _header("GRÖSSTE UNTERSCHIEDE AUF DOKUMENT-EBENE (gleiches Dokument, andere Chunk-Zahl)")
+    all_sources = sorted(set(a["doc_chunk_count"]) | set(b["doc_chunk_count"]))
+    rows = []
+    for src in all_sources:
+        cca = a["doc_chunk_count"].get(src, {})
+        ccb = b["doc_chunk_count"].get(src, {})
+        cha = a["doc_chars"].get(src, {})
+        chb = b["doc_chars"].get(src, {})
+        common_keys = set(cca) & set(ccb)
+        for key in common_keys:
+            na, nb = cca[key], ccb[key]
+            if na == nb:
+                continue
+            avg_a = cha.get(key, 0) / na if na else 0
+            avg_b = chb.get(key, 0) / nb if nb else 0
+            rows.append((abs(nb - na), src, key, na, nb, avg_a, avg_b))
+
+    if not rows:
+        print("\n  Keine gemeinsamen Dokumente mit abweichender Chunk-Zahl gefunden.")
+        return
+
+    rows.sort(key=lambda r: -r[0])
+    print(f"\n  {'Quelle':<12} {'Chunks '+a['name']:>12}  {'Chunks '+b['name']:>12}"
+          f"  {'Ø Zeichen '+a['name']:>14}  {'Ø Zeichen '+b['name']:>14}  Dokument")
+    _hr("-")
+    for _, src, key, na, nb, avg_a, avg_b in rows[:top_n]:
+        short_key = key if len(key) <= 60 else key[:57] + "…"
+        print(f"  {src:<12} {na:>12,}  {nb:>12,}  {avg_a:>14,.0f}  {avg_b:>14,.0f}  {short_key}")
+
+    if len(rows) > top_n:
+        print(f"\n  … und {len(rows) - top_n} weitere Dokumente mit abweichender Chunk-Zahl.")
+
+    total_extra_chunks = sum(nb - na for _, _, _, na, nb, _, _ in rows)
+    sign = "+" if total_extra_chunks >= 0 else ""
+    print(f"\n  Netto-Effekt auf gemeinsame Dokumente: {sign}{total_extra_chunks:,} Chunks"
+          f" ({a['name']} → {b['name']})")
+
+
+def _duplicate_check(a: dict, b: dict, top_n: int = 15):
+    _header("DUPLIKAT-CHECK (exakte Text-Duplikate im selben Dokument)")
+    print(
+        "  Zählt Chunks, deren Text im selben Dokument mehrfach identisch vorkommt.\n"
+        "  Hoher Wert ⇒ vermutlich doppeltes Ingestion, nicht mehr Inhalt."
+    )
+
+    for idx in (a, b):
+        dup_hashes = idx["dup_hashes"]
+        all_sources = sorted(dup_hashes)
+        total_dupes = 0
+        total_chunks_scanned = 0
+        rows = []
+        for src in all_sources:
+            src_dupes = 0
+            src_chunks = 0
+            for key, counts in dup_hashes[src].items():
+                src_chunks += sum(counts.values())
+                extra = sum(c - 1 for c in counts.values() if c > 1)
+                if extra:
+                    src_dupes += extra
+                    rows.append((extra, src, key, counts))
+            total_dupes += src_dupes
+            total_chunks_scanned += src_chunks
+
+        print(f"\n  [{idx['name']}]")
+        pct = f"{total_dupes / total_chunks_scanned * 100:.1f}%" if total_chunks_scanned else "–"
+        print(f"    Duplikat-Chunks gesamt: {total_dupes:,} von {total_chunks_scanned:,} ({pct})")
+
+        by_source = defaultdict(int)
+        for extra, src, _key, _counts in rows:
+            by_source[src] += extra
+        if by_source:
+            print("    Nach Quelle: " + ", ".join(f"{s}={n:,}" for s, n in sorted(by_source.items(), key=lambda x: -x[1])))
+
+        rows.sort(key=lambda r: -r[0])
+        if rows:
+            print(f"\n    Top Dokumente mit den meisten Duplikat-Chunks ({idx['name']}):")
+            for extra, src, key, counts in rows[:top_n]:
+                max_repeat = max(counts.values())
+                short_key = key if len(key) <= 55 else key[:52] + "…"
+                print(f"      +{extra:<6,} Duplikate  (max {max_repeat}x derselbe Chunk)  [{src}] {short_key}")
+            if len(rows) > top_n:
+                print(f"      … und {len(rows) - top_n} weitere Dokumente mit Duplikaten")
+
 
 def _quality(a: dict, b: dict):
     _header("INHALTSQUALITÄT")
@@ -355,7 +593,11 @@ def main():
     _types(a, b)
     _overlap(a, b)
     _moodle_detail(a, b)
+    _duplicate_check(a, b)
     _quality(a, b)
+    _chunk_size_histogram(a, b)
+    _chunks_per_doc_distribution(a, b)
+    _doc_level_diff(a, b)
     print()
 
 

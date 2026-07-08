@@ -2,13 +2,20 @@
 Ground truth dataset creator for reranker evaluation.
 
 Workflow:
-  1. For each query (built-in SAMPLE_QUERIES or --queries-file), retrieve the
-     top --n-chunks candidate chunks via the real retriever.
-  2. For each (query, chunk) pair, ask an LLM to rate relevance: 0 / 1 / 2.
-  3. Save results to evaluation/dataset/queries.jsonl
+  1. Collect queries: built-in SAMPLE_QUERIES (curated core), --queries-file,
+     or --generate (curated core + index-generated level questions in one run).
+  2. For each query, retrieve the top --n-chunks candidate chunks via the real
+     retriever (with the query's course_id/module_id scope).
+  3. For each (query, chunk) pair, ask an LLM to rate relevance: 0 / 1 / 2.
+  4. Save results to evaluation/dataset/queries.jsonl (flushed per record).
 
-Usage:
-  python -m evaluation.dataset.create_dataset
+Recommended one-shot (after an ingest):
+  python -m evaluation.dataset.create_dataset --generate --regenerate
+
+Crashed / partially failed? Resume without re-judging what is already labeled
+(the generated questions are cached in generated_queries.json, so the resumed
+run labels the same question set):
+  python -m evaluation.dataset.create_dataset --generate --append
 
   Optional flags:
     --output PATH        Override output file path
@@ -18,7 +25,9 @@ Usage:
                          pool-size experiments need at least the largest pool
     --queries-file PATH  Use generated queries (see generate_questions.py)
                          instead of the built-in SAMPLE_QUERIES
-    --append             Only add queries not yet in the dataset
+    --generate           SAMPLE_QUERIES + index-generated questions in one run
+    --regenerate         With --generate: force fresh question generation
+    --append             Only add queries not yet in the dataset (resume mode)
 """
 
 import argparse
@@ -36,223 +45,81 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT = Path(__file__).parent / "queries.jsonl"
 
-# Realistic KI-Campus queries drawn from Bruno collection and actual usage patterns.
+# Kuratierter Kern (~36 Fragen): nur Frage-Typen, die sich NICHT sinnvoll aus
+# dem Index generieren lassen (Plattform/Orga, Kurzsuchen, Umgangssprache,
+# No-Answer-Kalibrierung) plus wenige klassische Konzept-/Vergleichsfragen als
+# stabile Vergleichsbasis über Dataset-Versionen hinweg.
 #
-# Each entry is a dict with:
-#   query     : the user query (required)
-#   course_id : Moodle course ID — retrieves course-specific content (optional)
-#   module_id : Moodle module ID — retrieves module-specific content (optional)
+# Kurs-/Modul-Level-Fragen mit echten IDs gehören bewusst NICHT hierher — sie
+# veralten mit jedem Re-Ingest. Sie kommen aus generate_questions.py, das sie
+# mit aktuellen course_id/module_id direkt aus dem Index erzeugt:
+#   python -m evaluation.dataset.generate_questions
+#   python -m evaluation.dataset.create_dataset
+#   python -m evaluation.dataset.create_dataset --queries-file evaluation/dataset/generated_queries.json --append
 #
-# Without course_id/module_id the retriever restricts to Drupal content only.
-# For course-specific queries, fill in the actual Moodle course_id to get
-# realistic results — otherwise the retriever returns Drupal articles about
-# the course rather than the course content itself.
-#
-# Find course IDs via the frontend course tree or the Azure Search index.
+# Each entry:
+#   query              : the user query (required)
+#   language           : question language (default de)
+#   kind               : category for the benchmark's per-kind breakdown
+#   expected_no_answer : True for no-answer / min_score calibration queries
 SAMPLE_QUERIES: list[dict] = [
-    # --- Kursentdeckung: Drupal-Content, kein course_id nötig ---
-    {"query": "Welche Kurse gibt es zum Thema maschinelles Lernen?", "language": "de"},
-    {"query": "Welche Kurse gibt es zum Thema Ethik?", "language": "de"},
-    {"query": "Welche Kurse gibt es auf KI-Campus zum Thema Datenschutz und KI?", "language": "de"},
-    {"query": "Wie unterscheiden sich die Kurse 'Die Welt der Daten' und 'KI und Arbeitswelt'?", "language": "de"},
+    # --- Kursentdeckung (Drupal, unscoped) ---
+    {"query": "Welche Kurse gibt es zum Thema maschinelles Lernen?", "language": "de", "kind": "discovery"},
+    {"query": "Welche Kurse gibt es zum Thema Ethik?", "language": "de", "kind": "discovery"},
+    {"query": "gibts hier auch was für totale anfänger ohne mathe?", "language": "de", "kind": "discovery"},
+    {"query": "What courses are available on machine learning?", "language": "en", "kind": "discovery"},
 
-    # --- Kursspezifisch: echter Moodle-Content via course_id ---
-    {"query": "Was lerne ich in diesem Kurs?", "course_id": 387, "language": "de"},           # Einführung in die Künstliche Intelligenz
-    {"query": "Was sind die Lernziele dieses Kurses?", "course_id": 435, "language": "de"},   # MPG: Die Welt der Daten
-    {"query": "Was ist der Inhalt dieses Kurses?", "course_id": 344, "language": "de"},       # KI und Arbeitswelt
-    {"query": "Wie steht es um KI in der Arbeitswelt?", "course_id": 344, "language": "de"},
-    {"query": "Was ist AI Literacy?", "course_id": 344, "language": "de"},
-    {"query": "Erkläre mir die fünf Säulen der KI-Ethik.", "course_id": 331, "language": "de"},  # Die fünf Säulen der KI-Ethik
-    {"query": "Was versteht man unter erklärbarem maschinellen Lernen?", "course_id": 342, "language": "de"},  # Erklärbares ML für Ingenieurwissenschaften
-    {"query": "Wie funktionieren autonome KI-Agenten?", "course_id": 406, "language": "de"},  # Von autonomen KI-Agenten zu Multiagentensystemen
-    {"query": "Was ist Deep Learning?", "course_id": 369, "language": "de"},                  # Foundations of Deep Learning
+    # --- Konzepterklärung (stabile Basis über Dataset-Versionen) ---
+    {"query": "Erkläre mir was ein neuronales Netz ist.", "language": "de", "kind": "concept"},
+    {"query": "Was ist ein Large Language Model?", "language": "de", "kind": "concept"},
+    {"query": "Was versteht man unter Bias in KI-Systemen?", "language": "de", "kind": "concept"},
+    {"query": "What is overfitting and how do you prevent it?", "language": "en", "kind": "concept"},
 
-    # --- Konzepterklärung (Einsteigerniveau) ---
-    {"query": "Erkläre mir was ein neuronales Netz ist.", "language": "de"},
-    {"query": "Was ist maschinelles Lernen?", "language": "de"},
-    {"query": "Was ist ein Large Language Model?", "language": "de"},
-    {"query": "Was versteht man unter Bias in KI-Systemen?", "language": "de"},
+    # --- Technische Vertiefung ---
+    {"query": "Wie funktioniert Backpropagation beim Deep Learning Training?", "language": "de", "kind": "technical"},
+    {"query": "Wie funktioniert der Attention-Mechanismus in Transformern?", "language": "de", "kind": "technical"},
+    {"query": "Was ist Retrieval-Augmented Generation?", "language": "de", "kind": "technical"},
 
-    # --- Technische Vertiefung (aus Bruno Collection) ---
-    {"query": "Wie funktioniert Backpropagation beim Deep Learning Training?", "language": "de"},
-    {"query": "Wie funktioniert das Attention-Mechanismus in Transformern?", "language": "de"},
-    {"query": "Was ist der Unterschied zwischen Supervised und Unsupervised Learning?", "language": "de"},
-    {"query": "Was ist Overfitting und wie verhindert man es?", "language": "de"},
-    {"query": "Was ist der Unterschied zwischen Precision und Recall bei Klassifikationsmodellen?", "language": "de"},
-
-    # --- Anwendung und Transfer ---
-    {"query": "Wie kann KI im Unterricht eingesetzt werden?", "language": "de"},
-    {"query": "Was sind die Auswirkungen von KI auf die Arbeitswelt?", "language": "de"},
-    {"query": "Welche Rechte haben Beschäftigte beim Einsatz von KI am Arbeitsplatz?", "language": "de"},
-    {"query": "Wie kann ich als Lehrkraft KI-Tools sinnvoll nutzen?", "language": "de"},
-
-    # --- Lernhilfe / Assignment-Kontext (aus Bruno Collection) ---
-    {"query": "Ich brauche Hilfe mit meinem Machine Learning Assignment zum Thema Overfitting.", "language": "de"},
-    {"query": "Ich verstehe den Unterschied zwischen Varianz und Bias nicht.", "language": "de"},
-
-    # --- Ethik und Gesellschaft ---
-    {"query": "Was sind die ethischen Risiken von Gesichtserkennung?", "language": "de"},
-    {"query": "Was bedeutet algorithmische Diskriminierung?", "language": "de"},
-    {"query": "Was ist Explainable AI und warum ist es wichtig?", "language": "de"},
-
-    # --- Berufsfelder und Orientierung ---
-    {"query": "Welche Berufsfelder entstehen durch KI und Data Science?", "language": "de"},
-    {"query": "Was muss ich können um Data Scientist zu werden?", "language": "de"},
-
-    # --- Kurs-Level: reale course_ids aus dem Index kic-content (Stand 2026-07) ---
-    # So fragt der eingebettete Chatbot-Nutzer: Er ist IM Kurs und sagt "dieser Kurs".
-    {"query": "Ich bin Ärztin — was bringt mir dieser Kurs?", "course_id": 78, "language": "de", "kind": "course_level"},   # Dr. med. KI - Grundlagen für Ärztinnen und Ärzte
-    {"query": "Wie kann KI beim Erreichen der Nachhaltigkeitsziele helfen?", "course_id": 63, "language": "de", "kind": "course_level"},  # KI und Ziele für nachhaltige Entwicklung
-    {"query": "Welche Methoden zur Bias-Reduktion werden hier behandelt?", "course_id": 224, "language": "de", "kind": "course_level"},   # Methoden der Bias-Reduktion
-    {"query": "Welche ethischen Anwendungsfälle bespricht dieser Kurs?", "course_id": 257, "language": "de", "kind": "course_level"},     # KI und Ethik IV: Anwendungen
-    {"query": "Worum geht es in diesem Kurs?", "course_id": 321, "language": "de", "kind": "course_level"},                               # experimenta: KI-Basics
-    {"query": "Wie funktionieren neuronale Netze laut diesem Kurs?", "course_id": 301, "language": "de", "kind": "course_level"},         # experimenta: KNN & Deep Learning
-    {"query": "Give me an overview of what this course covers.", "course_id": 50, "language": "en", "kind": "course_level"},              # Reinforcement Learning (EN)
-
-    # --- Modul-Level: reale course_id+module_id-Paare aus kic-content (Stand 2026-07) ---
-    # Der häufigste Embedded-Fall: Nutzer steht in einem konkreten Modul.
-    {"query": "Wie ist ein künstliches neuronales Netz aufgebaut?", "course_id": 56, "module_id": 1558, "language": "de", "kind": "module_level"},        # "Aufbau eines KNN"
-    {"query": "Was unterscheidet ein biologisches von einem künstlichen neuronalen Netz?", "course_id": 56, "module_id": 1559, "language": "de", "kind": "module_level"},  # "Biologisches vs. Künstliches NN"
-    {"query": "Wie hat sich die KI vom Perzeptron bis heute entwickelt?", "course_id": 56, "module_id": 1550, "language": "de", "kind": "module_level"},   # "Vom Perzeptron bis Pepper"
-    {"query": "Worum geht es in diesem Modul?", "course_id": 63, "module_id": 2511, "language": "de", "kind": "module_level"},             # generische Modul-Frage
-    {"query": "Wie könnte KI in Zukunft für die Gesundheit eingesetzt werden?", "course_id": 63, "module_id": 2513, "language": "de", "kind": "module_level"},
-    {"query": "Fasse mir den Inhalt dieses Moduls kurz zusammen.", "course_id": 56, "module_id": 1558, "language": "de", "kind": "module_level"},          # Zusammenfassungs-Anfrage
-    {"query": "Warum ist Datenqualität so wichtig?", "course_id": 60, "module_id": 4339, "language": "de", "kind": "module_level"},        # "Video: Daten – Datenqualität"
-    {"query": "Was bedeutet Datenschutz und Selbstbestimmung am Arbeitsplatz?", "course_id": 38, "module_id": 2148, "language": "de", "kind": "module_level"},
-    {"query": "What is Monte Carlo evaluation in reinforcement learning?", "course_id": 50, "module_id": 2684, "language": "en", "kind": "module_level"},
-    {"query": "Explain model-free control in simple terms.", "course_id": 50, "module_id": 2689, "language": "en", "kind": "module_level"},
-
-    # --- Modul-Level in weiteren Sprachen (ES/FR/IT/TR — wie Language Detector
-    # und Bruno-Collections). Bewusst DIESELBEN Module wie die deutschen Fragen
-    # oben: Der Sprach-Slice im Benchmark isoliert so den reinen Spracheffekt
-    # bei identischer Ground Truth (Inhalte sind DE/EN → Cross-Lingual-Retrieval). ---
-    {"query": "¿Cómo está estructurada una red neuronal artificial?", "course_id": 56, "module_id": 1558, "language": "es", "kind": "module_level"},
-    {"query": "¿De qué trata este módulo?", "course_id": 63, "module_id": 2511, "language": "es", "kind": "module_level"},
-    {"query": "¿Por qué es tan importante la calidad de los datos?", "course_id": 60, "module_id": 4339, "language": "es", "kind": "module_level"},
-    {"query": "Comment un réseau de neurones artificiel est-il structuré ?", "course_id": 56, "module_id": 1558, "language": "fr", "kind": "module_level"},
-    {"query": "Comment l'IA pourrait-elle être utilisée pour la santé à l'avenir ?", "course_id": 63, "module_id": 2513, "language": "fr", "kind": "module_level"},
-    {"query": "Résume-moi le contenu de ce module.", "course_id": 38, "module_id": 2148, "language": "fr", "kind": "module_level"},
-    {"query": "Qual è la differenza tra una rete neurale biologica e una artificiale?", "course_id": 56, "module_id": 1559, "language": "it", "kind": "module_level"},
-    {"query": "Di cosa parla questo modulo?", "course_id": 60, "module_id": 4325, "language": "it", "kind": "module_level"},
-    {"query": "Yapay sinir ağı nasıl yapılandırılmıştır?", "course_id": 56, "module_id": 1558, "language": "tr", "kind": "module_level"},
-    {"query": "Bu modül ne hakkında?", "course_id": 63, "module_id": 2511, "language": "tr", "kind": "module_level"},
-    {"query": "Veri kalitesi neden bu kadar önemli?", "course_id": 60, "module_id": 4339, "language": "tr", "kind": "module_level"},
-
-    # --- Vergleichs-/Multi-Konzept-Fragen ---
-    # Der Fragetyp, der früher über multi_hop lief und jetzt allein am
-    # Zusammenspiel Hybrid-Retrieval + Reranker hängt — gezielt messen!
+    # --- Vergleichs-/Multi-Konzept-Fragen (Ex-multi_hop-Fragetyp) ---
     {"query": "Was ist der Unterschied zwischen KI, maschinellem Lernen und Deep Learning?", "language": "de", "kind": "comparison"},
-    {"query": "Was unterscheidet starke von schwacher KI?", "language": "de", "kind": "comparison"},
-    {"query": "Worin unterscheiden sich CNNs und RNNs und wofür nutzt man sie jeweils?", "language": "de", "kind": "comparison"},
-    {"query": "Was ist der Unterschied zwischen generativer KI und klassischen Klassifikationsmodellen?", "language": "de", "kind": "comparison"},
     {"query": "Wie hängen Bias, Varianz und Overfitting zusammen?", "language": "de", "kind": "comparison"},
-    {"query": "Sollte ich für den Einstieg lieber einen Python-Kurs oder einen Kurs ohne Programmierung wählen?", "language": "de", "kind": "comparison"},
+    {"query": "How do CNNs and RNNs differ and when would I use each?", "language": "en", "kind": "comparison"},
 
     # --- Kurze/vage Suchanfragen (realistisches Nutzerverhalten) ---
     {"query": "KI Ethik", "language": "de", "kind": "short"},
-    {"query": "prompt engineering", "language": "de", "kind": "short"},
-    {"query": "neuronale netze einfach erklärt", "language": "de", "kind": "short"},
     {"query": "zertifikat", "language": "de", "kind": "short"},
-    {"query": "chatbot kurs", "language": "de", "kind": "short"},
+    {"query": "prompt engineering", "language": "de", "kind": "short"},
 
     # --- Umgangssprachlich / mit Tippfehlern ---
     {"query": "was is n transformer modell?", "language": "de", "kind": "colloquial"},
     {"query": "kannst du mir was über machine lerning erzählen", "language": "de", "kind": "colloquial"},
-    {"query": "ich check das mit dem gradient descent einfach nicht", "language": "de", "kind": "colloquial"},
-    {"query": "gibts hier auch was für totale anfänger ohne mathe?", "language": "de", "kind": "colloquial"},
+    {"query": "i dont get gradient descent at all", "language": "en", "kind": "colloquial"},
 
-    # --- Plattform-/Orga-Fragen (Drupal-Content) ---
+    # --- Plattform-/Orga-Fragen (Drupal) ---
     {"query": "Wie bekomme ich ein Zertifikat auf dem KI-Campus?", "language": "de", "kind": "platform"},
     {"query": "Ist der KI-Campus kostenlos?", "language": "de", "kind": "platform"},
     {"query": "Wer steht hinter dem KI-Campus und wer finanziert ihn?", "language": "de", "kind": "platform"},
-    {"query": "Kann ich Kurse auch ohne Anmeldung ausprobieren?", "language": "de", "kind": "platform"},
-    {"query": "Gibt es Kurse mit ECTS-Punkten oder Micro-Degrees?", "language": "de", "kind": "platform"},
-
-    # --- Domänenspezifisch (Medizin, Schule, Verwaltung) ---
-    {"query": "Wie wird KI in der Medizin eingesetzt?", "language": "de", "kind": "domain"},
-    {"query": "Was muss ich als Pflegekraft über KI wissen?", "language": "de", "kind": "domain"},
-    {"query": "Welche KI-Kompetenzen brauchen Lehrkräfte an Schulen?", "language": "de", "kind": "domain"},
-    {"query": "Gibt es Kurse zu KI in der öffentlichen Verwaltung?", "language": "de", "kind": "domain"},
-    {"query": "Wie kann KI in der Diagnostik unterstützen?", "language": "de", "kind": "domain"},
-
-    # --- Technische Vertiefung (Ergänzung) ---
-    {"query": "Was ist Reinforcement Learning und wo wird es eingesetzt?", "language": "de"},
-    {"query": "Was sind Halluzinationen bei Sprachmodellen und warum entstehen sie?", "language": "de"},
-    {"query": "Was ist Retrieval-Augmented Generation?", "language": "de"},
-    {"query": "Was bedeutet Fine-Tuning bei Sprachmodellen?", "language": "de"},
-    {"query": "Wie funktioniert ein Entscheidungsbaum?", "language": "de"},
-    {"query": "Was ist Feature Engineering und warum ist es wichtig?", "language": "de"},
-
-    # --- No-Answer-Kalibrierung: plausibel, aber (sehr wahrscheinlich) nicht
-    # durch die Wissensbasis gedeckt. Erwartung: alle Chunks niedrig bewertet →
-    # Ground Truth für MIN_RERANKER_SCORE und die No-Answer-Logik. ---
-    {"query": "Wie viel kostet ein ChatGPT-Plus-Abo?", "language": "de", "kind": "negative", "expected_no_answer": True},
-    {"query": "Wann findet die nächste KI-Campus-Präsenzveranstaltung in Berlin statt?", "language": "de", "kind": "negative", "expected_no_answer": True},
-    {"query": "Welche KI-Aktien soll ich kaufen?", "language": "de", "kind": "negative", "expected_no_answer": True},
-    {"query": "Wie installiere ich CUDA-Treiber unter Windows 11?", "language": "de", "kind": "negative", "expected_no_answer": True},
-    {"query": "Kannst du mir die Klausurlösungen für meinen Uni-Kurs geben?", "language": "de", "kind": "negative", "expected_no_answer": True},
-    {"query": "Was hat der Bundestag letzte Woche zur KI-Regulierung beschlossen?", "language": "de", "kind": "negative", "expected_no_answer": True},
-
-    # --- English queries (multilingual test) ---
-    # Course discovery
-    {"query": "What courses are available on machine learning?", "language": "en"},
-    {"query": "What courses are there about AI ethics?", "language": "en"},
-    {"query": "What courses cover data privacy and AI?", "language": "en"},
-
-    # Course-specific
-    {"query": "What will I learn in this course?", "course_id": 387, "language": "en"},
-    {"query": "What are the learning objectives of this course?", "course_id": 435, "language": "en"},
-    {"query": "What is the impact of AI on the workplace?", "course_id": 344, "language": "en"},
-    {"query": "What is deep learning?", "course_id": 369, "language": "en"},
-
-    # Concept explanations
-    {"query": "Explain what a neural network is.", "language": "en"},
-    {"query": "What is machine learning?", "language": "en"},
-    {"query": "What is a large language model?", "language": "en"},
-    {"query": "What is bias in AI systems?", "language": "en"},
-
-    # Technical depth
-    {"query": "How does backpropagation work in deep learning?", "language": "en"},
-    {"query": "How does the attention mechanism in transformers work?", "language": "en"},
-    {"query": "What is the difference between supervised and unsupervised learning?", "language": "en"},
-    {"query": "What is overfitting and how do you prevent it?", "language": "en"},
-
-    # Ethics and application
-    {"query": "What are the ethical risks of facial recognition?", "language": "en"},
-    {"query": "What is explainable AI and why does it matter?", "language": "en"},
-    {"query": "How can AI be used in education?", "language": "en"},
-    {"query": "What career fields are emerging from AI and data science?", "language": "en"},
-
-    # Comparison / multi-concept
-    {"query": "What is the difference between AI, machine learning and deep learning?", "language": "en", "kind": "comparison"},
-    {"query": "How do CNNs and RNNs differ and when would I use each?", "language": "en", "kind": "comparison"},
-    {"query": "How are bias, variance and overfitting related?", "language": "en", "kind": "comparison"},
-
-    # Short / vague
-    {"query": "prompt engineering course", "language": "en", "kind": "short"},
-    {"query": "certificate", "language": "en", "kind": "short"},
-
-    # Colloquial / with typos
-    {"query": "can u explain transformers like im five", "language": "en", "kind": "colloquial"},
-    {"query": "i dont get gradient descent at all", "language": "en", "kind": "colloquial"},
-
-    # Platform questions
-    {"query": "How do I get a certificate on KI-Campus?", "language": "en", "kind": "platform"},
     {"query": "Is KI-Campus free to use?", "language": "en", "kind": "platform"},
 
-    # Domain-specific
-    {"query": "How is AI used in medical diagnostics?", "language": "en", "kind": "domain"},
-    {"query": "What AI skills do teachers need?", "language": "en", "kind": "domain"},
+    # --- Domänenspezifisch ---
+    {"query": "Wie wird KI in der Medizin eingesetzt?", "language": "de", "kind": "domain"},
+    {"query": "Welche KI-Kompetenzen brauchen Lehrkräfte an Schulen?", "language": "de", "kind": "domain"},
 
-    # Technical depth (additions)
-    {"query": "What is reinforcement learning and where is it applied?", "language": "en"},
-    {"query": "What are hallucinations in large language models?", "language": "en"},
-    {"query": "What is retrieval-augmented generation?", "language": "en"},
+    # --- Weitere Sprachen (bewusst unscoped → unabhängig von Index-IDs;
+    #     Inhalte sind DE/EN → misst Cross-Lingual-Retrieval) ---
+    {"query": "¿Qué es el aprendizaje automático?", "language": "es", "kind": "concept"},
+    {"query": "Comment fonctionne un réseau de neurones ?", "language": "fr", "kind": "concept"},
+    {"query": "Che cos'è il deep learning?", "language": "it", "kind": "concept"},
+    {"query": "Yapay zeka etiği neden önemlidir?", "language": "tr", "kind": "concept"},
 
-    # No-answer calibration (expected to be uncovered by the knowledge base)
+    # --- No-Answer-Kalibrierung: plausibel, aber (sehr wahrscheinlich) nicht
+    # durch die Wissensbasis gedeckt → Ground Truth für MIN_RERANKER_SCORE ---
+    {"query": "Wie viel kostet ein ChatGPT-Plus-Abo?", "language": "de", "kind": "negative", "expected_no_answer": True},
+    {"query": "Welche KI-Aktien soll ich kaufen?", "language": "de", "kind": "negative", "expected_no_answer": True},
+    {"query": "Wie installiere ich CUDA-Treiber unter Windows 11?", "language": "de", "kind": "negative", "expected_no_answer": True},
+    {"query": "Was hat der Bundestag letzte Woche zur KI-Regulierung beschlossen?", "language": "de", "kind": "negative", "expected_no_answer": True},
     {"query": "How much does a ChatGPT Plus subscription cost?", "language": "en", "kind": "negative", "expected_no_answer": True},
     {"query": "Which AI stocks should I buy right now?", "language": "en", "kind": "negative", "expected_no_answer": True},
-    {"query": "What did the EU parliament decide about AI regulation last week?", "language": "en", "kind": "negative", "expected_no_answer": True},
 ]
 
 JUDGE_PROMPT = """Du bist ein Experte für Information Retrieval Evaluation.
@@ -297,6 +164,34 @@ def load_queries_file(path: Path) -> list[dict]:
     return queries
 
 
+def _normalized(query: str) -> str:
+    return query.strip().lower()
+
+
+def _label_query(retriever: KiCampusRetriever, llm: LLM, entry: dict, model: Models) -> list[dict] | None:
+    """Retrieve + judge one query. Returns chunk dicts, or None when retrieval
+    found nothing (legitimate empty result, not an error)."""
+    nodes = retriever.retrieve(
+        query=entry["query"],
+        course_id=entry.get("course_id"),
+        module_id=entry.get("module_id"),
+    )
+    if not nodes:
+        return None
+    chunks = []
+    for node in tqdm(nodes, desc="  judging chunks", leave=False, unit="chunk"):
+        relevance = judge_relevance(llm, entry["query"], node.text, model)
+        chunks.append({
+            "id": node.id_,
+            "text": node.text,
+            "metadata": node.metadata,
+            "score": node.score,
+            "relevance": relevance,
+        })
+        time.sleep(0.2)  # avoid rate limits
+    return chunks
+
+
 def create_dataset(
     output_path: Path = DEFAULT_OUTPUT,
     limit: int | None = None,
@@ -305,27 +200,49 @@ def create_dataset(
     append: bool = False,
     queries: list[dict] | None = None,
 ) -> None:
+    """Label queries into output_path (JSONL, one record per query).
+
+    Reliability contract: records are written and flushed one by one; a failing
+    query is retried once and then skipped (listed in the final summary) — a
+    single flaky LLM/API call never kills the run. Re-running with append=True
+    resumes: already-labeled queries are skipped, failed/missing ones are
+    re-attempted. Without append the file is rebuilt from scratch.
+    """
     llm = LLM()
     retriever = KiCampusRetriever(use_hybrid=True, n_chunks=retrieve_top_n)
     existing_queries: set[str] = set()
-    existing_count = 0
+    existing_records = 0
     if append and output_path.exists():
         with output_path.open(encoding="utf-8") as f:
             for line in f:
                 if line.strip():
-                    existing_queries.add(json.loads(line)["query"])
-        existing_count = len(existing_queries)
+                    existing_queries.add(_normalized(json.loads(line)["query"]))
+                    existing_records += 1
+    elif not append and output_path.exists():
+        print(f"Overwriting existing {output_path} (use --append to resume/extend instead).")
 
     source_queries = queries if queries is not None else SAMPLE_QUERIES
-    query_dicts = source_queries[:limit] if limit else source_queries
+    # In-run dedup (curated core + generated set may overlap), order-preserving.
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for q in source_queries:
+        key = _normalized(q["query"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(q)
+    query_dicts = deduped[:limit] if limit else deduped
     if append:
-        query_dicts = [q for q in query_dicts if q["query"] not in existing_queries]
+        query_dicts = [q for q in query_dicts if _normalized(q["query"]) not in existing_queries]
         if not query_dicts:
             print("No new queries to add.")
             return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    written = 0
+    empty: list[str] = []
+    failed: list[str] = []
     with output_path.open("a" if append else "w", encoding="utf-8") as f:
         query_bar = tqdm(enumerate(query_dicts), total=len(query_dicts), unit="query")
         for i, entry in query_bar:
@@ -338,42 +255,54 @@ def create_dataset(
             query_bar.set_description(f"[{language}/{scope}] {query[:50]}")
             logger.info("[%d/%d] Retrieving (%s, %s): %s", i + 1, len(query_dicts), language, scope, query)
 
-            nodes = retriever.retrieve(query=query, course_id=course_id, module_id=module_id)
-            if not nodes:
+            # One retry, then skip — a flaky call must not kill a long run.
+            chunks: list[dict] | None = None
+            query_failed = False
+            for attempt in (1, 2):
+                try:
+                    chunks = _label_query(retriever, llm, entry, model)
+                    break
+                except Exception as e:
+                    if attempt == 1:
+                        logger.warning("Query failed (%s) — retrying in 5s: %s", e, query[:60])
+                        time.sleep(5)
+                    else:
+                        logger.error("Query failed twice — skipping (rerun with --append to retry): %s", query[:60])
+                        failed.append(query)
+                        query_failed = True
+            if query_failed:
+                continue
+            if chunks is None:
                 logger.warning("No chunks retrieved for query: %s", query)
+                empty.append(query)
                 continue
 
-            chunks = []
-            for node in tqdm(nodes, desc="  judging chunks", leave=False, unit="chunk"):
-                relevance = judge_relevance(llm, query, node.text, model)
-                chunks.append({
-                    "id": node.id_,
-                    "text": node.text,
-                    "metadata": node.metadata,
-                    "score": node.score,
-                    "relevance": relevance,
-                })
-                time.sleep(0.2)  # avoid rate limits
-
             record = {
-                "query_id": f"q{existing_count + i + 1:03d}",
+                # Numbered by records actually written so --append never
+                # produces colliding ids after skipped queries.
+                "query_id": f"q{existing_records + written + 1:03d}",
                 "query": query,
                 "language": language,
                 "course_id": course_id,
                 "module_id": module_id,
-                # Provenance from generated query sets (kind: grounded/comparison/
-                # negative, expected_no_answer for min_score calibration).
+                # Provenance from generated query sets (kind, expected_no_answer
+                # for min_score calibration, source_doc_keys for grounding).
                 **{k: entry[k] for k in ("kind", "expected_no_answer", "source_doc_keys") if k in entry},
                 "retrieved_chunks": chunks,
             }
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            f.flush()  # crash-safe: every finished record is durable
+            written += 1
             logger.info("  → %d chunks, relevance distribution: %s",
                 len(chunks),
                 {r: sum(1 for c in chunks if c["relevance"] == r) for r in (0, 1, 2)},
             )
 
-    total = existing_count + len(query_dicts)
-    print(f"Dataset saved to {output_path} ({total} queries total, {len(query_dicts)} added)")
+    print(f"Dataset saved to {output_path} ({existing_records + written} queries total, {written} added)")
+    if empty:
+        print(f"⚠ {len(empty)} query/queries returned no chunks (not written): {empty}")
+    if failed:
+        print(f"⚠ {len(failed)} query/queries FAILED (rerun the same command with --append to retry): {failed}")
 
 
 if __name__ == "__main__":
@@ -394,7 +323,41 @@ if __name__ == "__main__":
         help="JSON file with queries (list of {query, language, course_id?, kind?, ...}), "
              "e.g. from evaluation/dataset/generate_questions.py. Default: built-in SAMPLE_QUERIES.",
     )
+    parser.add_argument(
+        "--generate", action="store_true",
+        help="One-shot mode: curated core (SAMPLE_QUERIES) + index-generated level "
+             "questions (drupal/course/module/comparison/negative) in a single run. "
+             "Reuses evaluation/dataset/generated_queries.json when it exists so a "
+             "resumed run labels the SAME questions; --regenerate forces fresh generation.",
+    )
+    parser.add_argument(
+        "--regenerate", action="store_true",
+        help="With --generate: regenerate the questions even if generated_queries.json "
+             "exists. Do this once after every re-ingest (ids/content changed).",
+    )
     args = parser.parse_args()
+
+    if args.generate and args.queries_file:
+        parser.error("--generate and --queries-file are mutually exclusive "
+                     "(--generate already combines SAMPLE_QUERIES with the generated set)")
+
+    if args.generate:
+        from src.env import env
+        from evaluation.dataset.generate_questions import (
+            DEFAULT_OUTPUT as GENERATED_QUERIES_PATH,
+            generate_questions,
+        )
+        if args.regenerate or not GENERATED_QUERIES_PATH.exists():
+            print("Generating level questions from the index …")
+            generated = generate_questions(index_name=env.AZURE_SEARCH_INDEX)
+        else:
+            print(f"Reusing existing {GENERATED_QUERIES_PATH} — pass --regenerate after a re-ingest.")
+            generated = load_queries_file(GENERATED_QUERIES_PATH)
+        queries = SAMPLE_QUERIES + generated
+    elif args.queries_file:
+        queries = load_queries_file(args.queries_file)
+    else:
+        queries = None
 
     create_dataset(
         output_path=args.output,
@@ -402,5 +365,5 @@ if __name__ == "__main__":
         model=Models(args.model),
         append=args.append,
         retrieve_top_n=args.n_chunks,
-        queries=load_queries_file(args.queries_file) if args.queries_file else None,
+        queries=queries,
     )

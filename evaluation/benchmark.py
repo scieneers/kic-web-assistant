@@ -1,19 +1,39 @@
 """
 Reranker benchmark — compares all available rerankers on the ground truth dataset.
 
+Fairness design:
+  - The REQUEST scope (course_id/module_id) comes from the dataset record and is
+    passed explicitly to index-querying backends (Azure Semantic). It is never
+    guessed from chunk metadata — Drupal course pages carry the course_id of the
+    course they *describe*, which is not the scope the user asked in.
+  - Per query, ALL systems run first; every returned-but-unlabeled chunk is
+    LLM-judged once (disk-cached); then metrics for ALL systems are computed
+    against the SAME union candidate pool (pool labels ∪ labels of every chunk
+    any system returned) — TREC-style pooling, so the NDCG/recall denominators
+    are identical across systems.
+  - Azure Semantic represents the INTEGRATED production setup (semantic ranking
+    inside the retrieval call). Its latency column shows the full semantic
+    search round-trip; the run additionally times a plain (non-semantic) search
+    per query so the report can show the marginal semantic overhead — in
+    production the semantic call REPLACES retrieval, it does not add to it.
+
 Usage:
   python -m evaluation.benchmark
 
   Optional flags:
-    --dataset PATH        Path to queries.jsonl (default: dataset/queries.jsonl)
-    --top-n N             Number of results after reranking (default: 5)
-    --runs N              Runs per query for stable latency measurements (default: 3)
-    --pool-sizes 10,30    Candidate-pool sizes to compare (default: full pool).
-                          Requires a dataset created with --n-chunks >= max pool size.
-    --no-judge-unlabeled  Skip on-the-fly judging of out-of-pool chunks
-                          (Azure Semantic re-searches the whole index; its chunks
-                          may be unlabeled — without judging they count as 0).
-    --output PATH         Save JSON results to file
+    --dataset PATH          Path to queries.jsonl (default: dataset/queries.jsonl)
+    --top-n N               Number of results after reranking (default: 5)
+    --runs N                Runs per query for stable latency measurements (default: 3)
+    --pool-sizes 10,30      Candidate-pool sizes to compare (default: full pool).
+                            Requires a dataset created with --n-chunks >= max pool size.
+                            Note: Azure Semantic re-searches the index — pool size
+                            does not constrain it (that is the integrated setup).
+    --no-judge-unlabeled    Skip on-the-fly judging of out-of-pool chunks
+                            (they then count as relevance 0 and are excluded
+                            from the union ideal — affected systems are underrated).
+    --no-latency-baseline   Skip the plain-search timing used to compute Azure
+                            Semantic's marginal latency.
+    --output PATH           Save JSON results to file
 
 Creates the dataset first if it does not exist:
   python -m evaluation.dataset.create_dataset
@@ -24,10 +44,15 @@ import hashlib
 import json
 import logging
 import statistics
+import time
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Optional
 
+from tqdm import tqdm
+
 from src.api.models.serializable_text_node import SerializableTextNode
+from src.env import env
 from src.llm.objects.LLMs import LLM, Models
 from src.llm.objects.rerankers.base import BaseReranker, RerankResult
 from src.llm.objects.rerankers.llm_reranker import LLMReranker
@@ -116,44 +141,6 @@ def _nodes_from_chunks(chunks: list[dict]) -> List[SerializableTextNode]:
     ]
 
 
-def _ground_truth(record: dict) -> List[int]:
-    """Relevance labels in original retrieval order."""
-    return [c["relevance"] for c in record["retrieved_chunks"]]
-
-
-def _reranked_relevances(
-    original_chunks: list[dict],
-    reranked_nodes: List[SerializableTextNode],
-    query: str = "",
-    judge: Optional[UnlabeledChunkJudge] = None,
-) -> tuple[List[int], List[int], int]:
-    """Map reranked node order back to relevance labels from ground truth.
-
-    Out-of-pool chunks (no ground-truth label) are judged on the fly when a
-    judge is provided; otherwise they count as 0. Returns:
-      (relevances in ranked order,
-       extra labels of judged out-of-pool chunks — extend the ideal pool with
-       these so NDCG stays <= 1 for rankers that search beyond the pool,
-       count of unlabeled chunks that fell back to 0)
-    """
-    id_to_relevance = {c["id"]: c["relevance"] for c in original_chunks}
-    relevances: List[int] = []
-    extra_ideal: List[int] = []
-    unlabeled_as_zero = 0
-    for node in reranked_nodes:
-        if node.id_ in id_to_relevance:
-            relevances.append(id_to_relevance[node.id_])
-            continue
-        rel = judge.relevance(query, node) if judge else None
-        if rel is None:
-            rel = 0
-            unlabeled_as_zero += 1
-        else:
-            extra_ideal.append(rel)
-        relevances.append(rel)
-    return relevances, extra_ideal, unlabeled_as_zero
-
-
 def _build_rerankers(top_n: int) -> list[BaseReranker]:
     """Instantiate all available rerankers. Stubs are skipped with a warning."""
     from src.llm.objects.rerankers.passthrough_reranker import PassthroughReranker
@@ -176,104 +163,210 @@ def _build_rerankers(top_n: int) -> list[BaseReranker]:
     return active
 
 
+def _plain_search_latency_ms(azure_reranker, query: str, course_id, module_id) -> float:
+    """Time one plain (non-semantic) hybrid search with the same scope.
+
+    Used to compute Azure Semantic's MARGINAL latency: in the integrated setup
+    the semantic call replaces this plain retrieval call, so the honest latency
+    cost of the semantic ranker is (semantic search − plain search), not the
+    full round-trip. Embedding happens outside the timer — same convention as
+    AzureSemanticReranker.
+    """
+    from src.llm.objects.retriever import _build_odata_filter
+
+    embedding = azure_reranker._llm.get_embedder().get_query_embedding(query)
+    odata_filter = _build_odata_filter(course_id, module_id)
+    t0 = time.perf_counter()
+    azure_reranker._vector_db.hybrid_search(
+        query_text=query,
+        query_vector=embedding,
+        index_name=env.AZURE_SEARCH_INDEX,
+        odata_filter=odata_filter,
+        top=azure_reranker.top_n,
+    )
+    return (time.perf_counter() - t0) * 1000
+
+
 def run_benchmark(
     dataset_path: Path = DEFAULT_DATASET,
     top_n: int = 5,
     runs: int = 3,
     model: Models = Models.AZURE_FALLBACK,
+    judge_model: Models = Models.AZURE_FALLBACK,
     pool_sizes: list[int] | None = None,
     judge_unlabeled: bool = True,
+    latency_baseline: bool = True,
 ) -> list[dict]:
+    """model drives the LLM RERANKER (set it to the production model for a
+    production-near comparison); judge_model drives the on-the-fly labeling and
+    must stay consistent with the dataset-creation judge — do not couple the
+    two, or a weaker reranker model would also degrade the ground truth."""
     records = _load_dataset(dataset_path)
     rerankers = _build_rerankers(top_n)
 
     if not rerankers:
         raise RuntimeError("No rerankers available to benchmark.")
 
-    judge = UnlabeledChunkJudge(model=model, enabled=judge_unlabeled)
+    judge = UnlabeledChunkJudge(model=judge_model, enabled=judge_unlabeled)
     pools: list[int | None] = list(pool_sizes) if pool_sizes else [None]
 
     languages = sorted(set(r.get("language", "de") for r in records))
+    kinds = sorted(set(r.get("kind", "general") for r in records))
     multilingual = len(languages) > 1
     max_pool = max(len(r["retrieved_chunks"]) for r in records)
+    azure_rerankers = [r for r in rerankers if r.name == "Azure Semantic"]
 
     print(f"\nBenchmarking {len(rerankers)} reranker(s) on {len(records)} queries ({runs} runs each)")
     print(f"Dataset pool: up to {max_pool} labeled chunks per query")
+    print("Scoring: per query all systems run first, out-of-pool chunks are judged, "
+          "then all systems are scored against the same union candidate pool.")
     if pool_sizes:
         oversized = [p for p in pool_sizes if p > max_pool]
         if oversized:
             print(f"⚠ pool sizes {oversized} exceed the dataset pool ({max_pool}) — "
                   f"recreate the dataset with --n-chunks >= {max(oversized)} for a real comparison")
-        print("Note: Azure Semantic re-searches the whole index — the pool size does not constrain it.")
+        print("Note: Azure Semantic re-searches the whole index — the pool size does not "
+              "constrain it (this measures the integrated setup).")
     if multilingual:
         lang_counts = {lang: sum(1 for r in records if r.get("language", "de") == lang) for lang in languages}
         print(f"Languages: {', '.join(f'{lang}={n}' for lang, n in lang_counts.items())}")
+    if len(kinds) > 1:
+        print(f"Query kinds: {', '.join(kinds)}")
     print()
 
-    results = []
+    # Per (pool_size, reranker name) accumulation
+    def _empty_stats():
+        return {
+            "per_query": [],
+            "by_language": defaultdict(list),
+            "by_kind": defaultdict(list),
+            "latencies": [],
+            "costs": [],
+            "unlabeled_as_zero": 0,
+            "errors": 0,
+        }
 
-    for pool_size in pools:
+    stats: dict[tuple, dict] = {}
+    plain_search_latencies: list[float] = []
+    semantic_search_latencies: list[float] = []
+
+    for pool_index, pool_size in enumerate(pools):
         pool_label = f"pool={pool_size}" if pool_size else "pool=full"
 
-        for reranker in rerankers:
-            per_query_metrics = []
-            per_lang_metrics: dict[str, list] = {lang: [] for lang in languages}
-            all_latencies = []
-            all_costs = []
-            unlabeled_as_zero_total = 0
-            skip = False
+        for record in tqdm(records, desc=f"Queries ({pool_label})", unit="query"):
+            query = record["query"]
+            language = record.get("language", "de")
+            kind = record.get("kind", "general")
+            course_id = record.get("course_id")
+            module_id = record.get("module_id")
 
-            for record in records:
-                if skip:
-                    break
-                pool_chunks = record["retrieved_chunks"][:pool_size] if pool_size else record["retrieved_chunks"]
-                nodes = _nodes_from_chunks(pool_chunks)
-                query = record["query"]
-                lang = record.get("language", "de")
-                query_latencies = []
+            pool_chunks = record["retrieved_chunks"][:pool_size] if pool_size else record["retrieved_chunks"]
+            nodes = _nodes_from_chunks(pool_chunks)
+            pool_ids = {c["id"] for c in pool_chunks}
+            pool_labels = [c["relevance"] for c in pool_chunks]
+            # Full-record labels: valid judgments even for chunks sliced out of
+            # the experiment pool (a re-searching system may still return them).
+            label_map = {c["id"]: c["relevance"] for c in record["retrieved_chunks"]}
 
+            # --- Phase 1: run all systems on this query -------------------
+            returned: dict[str, RerankResult] = {}
+            for reranker in rerankers:
+                key = (pool_size, reranker.name)
+                stats.setdefault(key, _empty_stats())
                 for run in range(runs):
                     try:
-                        result: RerankResult = reranker.rerank(query=query, nodes=nodes, model=model)
-                    except Exception as e:
-                        print(f"  ⚠ {reranker.name} failed on '{query[:60]}': {e}")
-                        skip = True
-                        break
-                    query_latencies.append(result.latency_ms)
-                    if run == 0:
-                        relevances, extra_ideal, unlabeled = _reranked_relevances(
-                            pool_chunks, result.nodes, query=query, judge=judge
+                        result = reranker.rerank(
+                            query=query,
+                            nodes=nodes,
+                            model=model,
+                            course_id=course_id,
+                            module_id=module_id,
                         )
-                        unlabeled_as_zero_total += unlabeled
-                        ideal = [c["relevance"] for c in pool_chunks] + extra_ideal
-                        query_metrics = m.compute_all(relevances, k=top_n, ideal_relevances=ideal)
-                        per_query_metrics.append(query_metrics)
-                        per_lang_metrics[lang].append(query_metrics)
-                        all_costs.append(result.estimated_cost_eur)
+                    except Exception as e:
+                        logger.warning("%s failed on %r: %s", reranker.name, query[:60], e)
+                        stats[key]["errors"] += 1
+                        break
+                    stats[key]["latencies"].append(result.latency_ms)
+                    if run == 0:
+                        returned[reranker.name] = result
+                        stats[key]["costs"].append(result.estimated_cost_eur)
 
-                all_latencies.extend(query_latencies)
+            # Marginal-latency baseline for Azure Semantic (once per query,
+            # first pool iteration only — scope-identical plain search).
+            if latency_baseline and azure_rerankers and pool_index == 0 and "Azure Semantic" in returned:
+                try:
+                    plain_search_latencies.append(
+                        _plain_search_latency_ms(azure_rerankers[0], query, course_id, module_id)
+                    )
+                    semantic_search_latencies.append(returned["Azure Semantic"].latency_ms)
+                except Exception as e:
+                    logger.warning("Plain-search latency baseline failed on %r: %s", query[:60], e)
 
-            if skip or not per_query_metrics:
-                print(f"  → {reranker.name} ({pool_label}) skipped (not enough data)\n")
+            # --- Phase 2: build the union candidate pool ------------------
+            # Union = experiment pool ∪ every chunk any system returned.
+            # Out-of-pool chunks get their record label if available (sliced
+            # pools), otherwise an on-the-fly LLM judgment. Unjudgeable chunks
+            # are excluded from the ideal and score 0 for the system that
+            # returned them (tracked in unlabeled_as_zero).
+            union_extra: dict[str, int] = {}
+            for result in returned.values():
+                for node in result.nodes:
+                    nid = node.id_
+                    if nid in pool_ids or nid in union_extra:
+                        continue
+                    if nid in label_map:
+                        union_extra[nid] = label_map[nid]
+                        continue
+                    rel = judge.relevance(query, node)
+                    if rel is not None:
+                        union_extra[nid] = rel
+            union_pool = pool_labels + list(union_extra.values())
+            total_relevant = sum(1 for r in union_pool if r > 0)
+
+            # --- Phase 3: score every system against the union pool -------
+            for name, result in returned.items():
+                key = (pool_size, name)
+                relevances: List[int] = []
+                for node in result.nodes:
+                    rel = label_map.get(node.id_)
+                    if rel is None:
+                        rel = union_extra.get(node.id_)
+                    if rel is None:
+                        rel = 0
+                        stats[key]["unlabeled_as_zero"] += 1
+                    relevances.append(rel)
+                query_metrics = m.compute_all(
+                    relevances, k=top_n, ideal_relevances=union_pool, total_relevant=total_relevant
+                )
+                stats[key]["per_query"].append(query_metrics)
+                stats[key]["by_language"][language].append(query_metrics)
+                stats[key]["by_kind"][kind].append(query_metrics)
+
+    # --- Aggregate ------------------------------------------------------
+    results = []
+    for pool_size in pools:
+        for reranker in rerankers:
+            key = (pool_size, reranker.name)
+            s = stats.get(key)
+            if not s or not s["per_query"]:
+                print(f"  → {reranker.name} (pool={pool_size or max_pool}) skipped (no data)")
                 continue
-
-            aggregated = m.aggregate(per_query_metrics)
-            result_entry = {
+            aggregated = m.aggregate(s["per_query"])
+            latencies = sorted(s["latencies"])
+            results.append({
                 "reranker": reranker.name,
                 "pool_size": pool_size or max_pool,
                 **aggregated,
-                "latency_p50_ms": round(statistics.median(all_latencies), 1),
-                "latency_p95_ms": round(sorted(all_latencies)[int(len(all_latencies) * 0.95)], 1),
-                "cost_per_1k_queries_eur": round(sum(all_costs) / len(all_costs) * 1000, 4),
-                "unlabeled_as_zero": unlabeled_as_zero_total,
-                "by_language": {
-                    lang: m.aggregate(metrics)
-                    for lang, metrics in per_lang_metrics.items()
-                    if metrics
-                },
-            }
-            results.append(result_entry)
+                "latency_p50_ms": round(statistics.median(latencies), 1),
+                "latency_p95_ms": round(latencies[int(len(latencies) * 0.95)], 1),
+                "cost_per_1k_queries_eur": round(sum(s["costs"]) / len(s["costs"]) * 1000, 4) if s["costs"] else 0.0,
+                "unlabeled_as_zero": s["unlabeled_as_zero"],
+                "errors": s["errors"],
+                "by_language": {lang: m.aggregate(v) for lang, v in s["by_language"].items() if v},
+                "by_kind": {kind: m.aggregate(v) for kind, v in s["by_kind"].items() if v},
+            })
 
+    # --- Report -----------------------------------------------------------
     for pool_size in pools:
         p = pool_size or max_pool
         pool_results = [r for r in results if r["pool_size"] == p]
@@ -282,6 +375,17 @@ def run_benchmark(
         if multilingual:
             for lang in languages:
                 _print_table(pool_results, top_n, label=f"Language: {lang}{suffix}", language=lang)
+        if len(kinds) > 1:
+            _print_kind_matrix(pool_results, top_n, kinds, label=f"NDCG@{top_n} nach Query-Kind{suffix}")
+
+    if plain_search_latencies and semantic_search_latencies:
+        plain_p50 = statistics.median(plain_search_latencies)
+        semantic_p50 = statistics.median(semantic_search_latencies)
+        print("Azure Semantic — Latenz-Einordnung (integriertes Setup):")
+        print(f"  volle semantische Suche p50: {semantic_p50:.0f} ms")
+        print(f"  plain Hybrid-Suche p50 (gleicher Scope): {plain_p50:.0f} ms")
+        print(f"  → marginale Semantic-Latenz ≈ {semantic_p50 - plain_p50:.0f} ms "
+              "(der semantische Call ERSETZT das Retrieval, er kommt nicht dazu)\n")
 
     if judge.judged_count or judge.cache_hits:
         print(f"On-the-fly judging: {judge.judged_count} new, {judge.cache_hits} from cache ({judge.cache_path})")
@@ -289,6 +393,9 @@ def run_benchmark(
     if zero_fallbacks:
         print(f"⚠ {zero_fallbacks} out-of-pool chunks counted as relevance 0 (judging disabled/failed) — "
               "affected rerankers are underrated")
+    total_errors = sum(r.get("errors", 0) for r in results)
+    if total_errors:
+        print(f"⚠ {total_errors} rerank call(s) failed — affected (reranker, query) pairs were skipped")
     return results
 
 
@@ -296,13 +403,14 @@ def _print_table(results: list[dict], k: int, label: str = "Overall", language: 
     headers = [
         "Reranker",
         f"NDCG@{k}",
+        f"Recall@{k}",
         "MRR",
         f"P@{k}",
         "Latenz p50",
         "Latenz p95",
         "Kosten/1k €",
     ]
-    col_w = [28, 10, 10, 10, 12, 12, 13]
+    col_w = [28, 9, 10, 8, 8, 12, 12, 12]
 
     print(f"--- {label} ---")
     sep = "  ".join("-" * w for w in col_w)
@@ -312,27 +420,43 @@ def _print_table(results: list[dict], k: int, label: str = "Overall", language: 
 
     for r in results:
         if language:
-            lang_metrics = r.get("by_language", {}).get(language)
-            if not lang_metrics:
+            metrics = r.get("by_language", {}).get(language)
+            if not metrics:
                 continue
-            ndcg = lang_metrics.get(f"ndcg@{k}", 0)
-            mrr = lang_metrics.get("mrr", 0)
-            prec = lang_metrics.get(f"precision@{k}", 0)
         else:
-            ndcg = r[f"ndcg@{k}"]
-            mrr = r["mrr"]
-            prec = r[f"precision@{k}"]
+            metrics = r
 
         row = [
             r["reranker"],
-            f"{ndcg:.3f}",
-            f"{mrr:.3f}",
-            f"{prec:.3f}",
+            f"{metrics.get(f'ndcg@{k}', 0):.3f}",
+            f"{metrics.get(f'recall@{k}', 0):.3f}",
+            f"{metrics.get('mrr', 0):.3f}",
+            f"{metrics.get(f'precision@{k}', 0):.3f}",
             f"{r['latency_p50_ms']}ms",
             f"{r['latency_p95_ms']}ms",
             f"{r['cost_per_1k_queries_eur']:.4f}",
         ]
         print("  ".join(v.ljust(w) for v, w in zip(row, col_w)))
+    print()
+
+
+def _print_kind_matrix(results: list[dict], k: int, kinds: list[str], label: str) -> None:
+    """Compact matrix: rows = rerankers, columns = query kinds, cells = NDCG@k.
+
+    Makes scope-sensitive regressions visible at a glance (e.g. a re-searching
+    backend degrading on course-discovery queries but not on module-level ones).
+    """
+    name_w = 28
+    col_w = max(10, max((len(kind) for kind in kinds), default=10) + 1)
+    print(f"--- {label} ---")
+    print("Reranker".ljust(name_w) + "".join(kind.ljust(col_w) for kind in kinds))
+    print("-" * (name_w + col_w * len(kinds)))
+    for r in results:
+        cells = []
+        for kind in kinds:
+            kind_metrics = r.get("by_kind", {}).get(kind)
+            cells.append(f"{kind_metrics.get(f'ndcg@{k}', 0):.3f}" if kind_metrics else "—")
+        print(r["reranker"].ljust(name_w) + "".join(c.ljust(col_w) for c in cells))
     print()
 
 
@@ -352,8 +476,16 @@ if __name__ == "__main__":
         "--no-judge-unlabeled", action="store_true",
         help="Do not LLM-judge out-of-pool chunks (they count as relevance 0).",
     )
+    parser.add_argument(
+        "--no-latency-baseline", action="store_true",
+        help="Skip the plain-search timing used for Azure Semantic's marginal latency.",
+    )
     parser.add_argument("--model", type=str, default="Azure-Fallback", choices=[m_.value for m_ in Models],
-                        help="LLM model for the LLM reranker and on-the-fly judging")
+                        help="LLM model for the LLM RERANKER — set to the production model "
+                             "(e.g. Gemma4) for a production-near comparison")
+    parser.add_argument("--judge-model", type=str, default="Azure-Fallback", choices=[m_.value for m_ in Models],
+                        help="LLM model for on-the-fly judging of unlabeled chunks. Keep "
+                             "consistent with the dataset-creation judge (default: Azure-Fallback)")
     parser.add_argument("--output", type=Path, default=None, help="Save results as JSON")
     args = parser.parse_args()
 
@@ -364,8 +496,10 @@ if __name__ == "__main__":
         top_n=args.top_n,
         runs=args.runs,
         model=Models(args.model),
+        judge_model=Models(args.judge_model),
         pool_sizes=pool_sizes,
         judge_unlabeled=not args.no_judge_unlabeled,
+        latency_baseline=not args.no_latency_baseline,
     )
 
     if args.output:
