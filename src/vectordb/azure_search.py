@@ -41,6 +41,11 @@ _KEY_INVALID = re.compile(r"[^A-Za-z0-9_\-=]")
 _VECTOR_PROFILE = "hnsw-cosine"
 _HNSW_CONFIG = "hnsw-config"
 
+# Azure's semantic ranker rescores at most the top 50 of the initial results —
+# when semantic ranking is on, the dense leg should propose at least that many.
+# https://learn.microsoft.com/azure/search/semantic-search-overview
+_SEMANTIC_RERANK_WINDOW = 50
+
 
 def sanitize_key(raw: str) -> str:
     """Coerce an arbitrary id into a valid Azure AI Search document key."""
@@ -235,11 +240,28 @@ class VectorDBAzureSearch:
         Azure AI Search has no delete-by-query, so we page the matching keys
         (the SDK follows continuation links transparently) and the caller
         deletes them by key.
+
+        No `top` is passed: it caps the *total* results returned across the
+        whole iteration (not a page size), so any filter matching more than
+        the cap would silently yield only a partial key set.
         """
         client = self._client(index_name)
-        results = client.search(search_text="*", filter=odata_filter, select=["id"], top=1000)
+        results = client.search(search_text="*", filter=odata_filter, select=["id"])
         for item in results:
             yield item["id"]
+
+    def _true_count(self, index_name: str | None, odata_filter: str) -> int | None:
+        """Exact count of documents matching a filter (top=0, no documents transferred).
+
+        Used as a cheap cross-check that a full scan actually saw everything.
+        """
+        try:
+            results = self._client(index_name).search(
+                search_text="*", filter=odata_filter, top=0, include_total_count=True
+            )
+            return results.get_count()
+        except HttpResponseError:
+            return None
 
     def delete_by_filter(self, index_name: str, odata_filter: str) -> int:
         """Delete every document matching an OData filter.
@@ -256,6 +278,16 @@ class VectorDBAzureSearch:
             # search iterator is still paging would shift skip-based pagination
             # and could let some matching documents slip through undeleted.
             keys = list(self._iter_keys(index_name, odata_filter))
+            true_count = self._true_count(index_name, odata_filter)
+            if true_count is not None and len(keys) < true_count:
+                self.logger.error(
+                    "Azure AI Search delete_by_filter: scanned %s keys but %s documents match filter"
+                    " (index=%s filter=%s) — some matches were not collected for deletion.",
+                    len(keys),
+                    true_count,
+                    index_name,
+                    odata_filter,
+                )
             for start in range(0, len(keys), _MAX_DOCS_PER_BATCH):
                 batch = [{"id": k} for k in keys[start : start + _MAX_DOCS_PER_BATCH]]
                 client.delete_documents(documents=batch)
@@ -275,18 +307,30 @@ class VectorDBAzureSearch:
         """
         client = self._client(index_name)
         existing: dict[str, str] = {}
+        odata_filter = f"source eq '{source}'"
         try:
             results = client.search(
                 search_text="*",
-                filter=f"source eq '{source}'",
+                filter=odata_filter,
                 select=["source_doc_key", "content_hash"],
-                top=1000,
             )
+            rows_seen = 0
             for item in results:
+                rows_seen += 1
                 key = item.get("source_doc_key")
                 h = item.get("content_hash")
                 if key and h and key not in existing:
                     existing[key] = h
+            true_count = self._true_count(index_name, odata_filter)
+            if true_count is not None and rows_seen < true_count:
+                self.logger.error(
+                    "load_content_hashes: scanned %s rows but %s documents match source=%s"
+                    " (index=%s) — existing-hash map is incomplete, change-detection will misfire.",
+                    rows_seen,
+                    true_count,
+                    source,
+                    index_name or self.index_name,
+                )
         except HttpResponseError as e:
             self.logger.warning("load_content_hashes failed (source=%s): %s", source, e)
         self.logger.info(
@@ -324,9 +368,16 @@ class VectorDBAzureSearch:
             on the index).
         """
         client = self._client(index_name)
+        k_nearest = max(top * candidate_factor, top)
+        if use_semantic:
+            # Azure's semantic ranker rescores the top 50 of the initial result
+            # set. With a small `top` (e.g. 5) the dense leg would only propose
+            # top*factor candidates and starve the reranker — feed it the full
+            # rerank window instead.
+            k_nearest = max(k_nearest, _SEMANTIC_RERANK_WINDOW)
         vector_query = VectorizedQuery(
             vector=query_vector,
-            k_nearest_neighbors=max(top * candidate_factor, top),
+            k_nearest_neighbors=k_nearest,
             fields="dense",
         )
         extra = {}
@@ -354,12 +405,14 @@ class VectorDBAzureSearch:
         carry a ``module_id``.
         """
         client = self._client(index_name)
-        # Only docs that participate in the tree carry a course_id.
+        # Only docs that participate in the tree carry a course_id. No `top`:
+        # every chunk of every module carries course_id/module_id, so this can
+        # easily exceed 1000 rows — see load_content_hashes for why a `top`
+        # cap here would silently truncate the result instead of paging.
         results = client.search(
             search_text="*",
             filter="course_id ne null",
             select=["course_id", "module_id", "fullname"],
-            top=1000,
         )
 
         courses: list[SimpleNamespace] = []

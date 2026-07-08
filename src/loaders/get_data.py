@@ -111,7 +111,20 @@ class Fetch_Data:
         retriever can reconstruct the node losslessly. Only declared index
         fields are included - Azure rejects unknown fields.
         """
-        raw_id = node.node_id or str(uuid.uuid4())
+        source_doc_key = md.get("source_doc_key")
+        chunk_index = md.get("chunk_index")
+        if source_doc_key and chunk_index is not None:
+            # Deterministic id so re-processing a document (e.g. a
+            # change-detection false positive) upserts over the same chunks
+            # instead of piling up duplicates under fresh random ids.
+            raw_id = f"{source_doc_key}__chunk{chunk_index}"
+        else:
+            raw_id = node.node_id or str(uuid.uuid4())
+            logging.getLogger("loader").warning(
+                "Missing source_doc_key/chunk_index metadata; using non-deterministic id"
+                " (no dedup protection): id=%s",
+                raw_id,
+            )
         return {
             "id": sanitize_key(raw_id),
             "text": text,
