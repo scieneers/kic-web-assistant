@@ -4,12 +4,17 @@ Node wrapper for contextualizing user query and routing to appropriate scenario.
 
 import logging
 
-from langfuse.decorators import observe
+from langfuse.decorators import langfuse_context, observe
 
 from src.llm.state.models import GraphState
 from src.llm.state.socratic_routing import reset_socratic_state
 
 logger = logging.getLogger(__name__)
+
+
+def _trace_routing(**metadata) -> None:
+    """Routing-Entscheidung als kompakte Metadaten an den Langfuse-Span hängen."""
+    langfuse_context.update_current_observation(metadata=metadata)
 
 # Module-level singleton
 _contextualizer_instance = None
@@ -82,6 +87,7 @@ def contextualize_and_route(state: GraphState) -> dict:
             socratic_reset = reset_socratic_state()
 
             # Return with prefabricated answer and special mode to skip to END
+            _trace_routing(mode="exit_complete", socratic_exit=True)
             return {
                 **socratic_reset,  # Reset all socratic fields
                 "mode": "exit_complete",
@@ -109,6 +115,11 @@ def contextualize_and_route(state: GraphState) -> dict:
                 contextualized_query = None
 
             # Keep socratic_mode as-is (managed by socratic nodes)
+            _trace_routing(
+                mode=mode,
+                socratic_mode=socratic_mode,
+                contextualized_query=contextualized_query,
+            )
             return {
                 "mode": mode,
                 "contextualized_query": contextualized_query,
@@ -118,6 +129,7 @@ def contextualize_and_route(state: GraphState) -> dict:
         # Check if user wants to start socratic mode (only if enabled)
         if enable_socratic and response_clean in ["start socratic", "begin socratic", "enter socratic", "unterstütze mich beim lernen"]:
             logger.debug("Socratic mode triggered by user command → mode=socratic, sub_mode=contract")
+            _trace_routing(mode="socratic", socratic_mode="contract", socratic_entry=True)
             return {
                 "mode": "socratic",
                 "socratic_mode": "contract"
@@ -139,6 +151,11 @@ def contextualize_and_route(state: GraphState) -> dict:
             )
             logger.debug("Contextualized query=%r", contextualized_query[:80] if contextualized_query else None)
 
+        _trace_routing(
+            mode=mode,
+            contextualized_query=contextualized_query,
+            history_len=len(chat_history),
+        )
         return {
             "mode": mode,
             "contextualized_query": contextualized_query,

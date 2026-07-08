@@ -1,3 +1,4 @@
+import logging
 import threading
 import uuid
 from collections import OrderedDict
@@ -7,11 +8,14 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.objects.LLMs import Models
+from src.llm.objects.question_answerer import get_fallback_type
 from src.llm.state.models import GraphState, RerankerType
 from src.llm.tools.contextualize import contextualize_and_route
 from src.llm.graphs.no_vector_db import build_no_vectordb_graph
 from src.llm.graphs.simple_hop import build_simple_hop_graph
 from src.llm.graphs.socratic import build_socratic_graph
+
+logger = logging.getLogger(__name__)
 
 
 class BoundedMemorySaver(MemorySaver):
@@ -247,6 +251,92 @@ class KICampusAssistant:
 
         return initial_state, config, thread_id
 
+    def _update_langfuse_trace(
+        self,
+        *,
+        surface: str,
+        query: str,
+        thread_id: str,
+        result: GraphState,
+        assistant_content: str,
+    ) -> None:
+        """Reichert den aktuellen Langfuse-Trace mit Analyse-Daten an.
+
+        - session_id = thread_id → Konversationen erscheinen gruppiert in der
+          Langfuse Sessions-View.
+        - Name/Tags (mode, model, reranker, surface) → filterbar in der Trace-Liste.
+        - Metadaten (Chunk-Zahlen, Sprache, contextualized_query, Fallback-Typ)
+          → Diagnose einzelner Requests ohne Span-Deep-Dive.
+        - Score "no_answer_fallback" (0/1) → Fallback-Quote als Metrik/Dashboard.
+
+        Darf niemals den Chat-Pfad brechen — Fehler werden nur geloggt.
+        """
+        try:
+            mode = result.get("mode")
+            runtime_config = result.get("runtime_config", {})
+            model = runtime_config.get("model")
+            model_name = model.value if isinstance(model, Models) else str(model)
+            reranker_type = self.system_config.get("reranker_type")
+            # Fallback-Texte kommen nie mit Citations, daher gegen das rohe
+            # "answer"-Feld klassifizieren (nicht gegen citations_markdown).
+            fallback_type = get_fallback_type(result.get("answer"))
+
+            # Anfrage-Scope: fragt das Frontend global, kursweit oder auf ein
+            # konkretes Modul eingeschränkt? Als Tag direkt filter-/zählbar.
+            course_id = runtime_config.get("course_id")
+            module_id = runtime_config.get("module_id")
+            if module_id is not None:
+                scope = "module"
+            elif course_id is not None:
+                scope = "course"
+            else:
+                scope = "global"
+
+            tags = [
+                f"surface:{surface}",
+                f"scope:{scope}",
+                f"model:{model_name}",
+                f"reranker:{reranker_type}",
+            ]
+            if mode:
+                tags.append(f"mode:{mode}")
+            if fallback_type:
+                tags.append("fallback")
+
+            langfuse_context.update_current_trace(
+                name=f"chat:{mode}" if mode else "chat",
+                session_id=thread_id,
+                input=query,
+                output=assistant_content,
+                tags=tags,
+                metadata={
+                    "thread_id": thread_id,
+                    "surface": surface,
+                    "scope": scope,
+                    "mode": mode,
+                    "socratic_mode": result.get("socratic_mode"),
+                    "model": model_name,
+                    "course_id": course_id,
+                    "module_id": module_id,
+                    "detected_language": result.get("detected_language"),
+                    "contextualized_query": result.get("contextualized_query"),
+                    "history_len": len(result.get("chat_history") or []),
+                    "n_retrieved": len(result.get("retrieved") or []),
+                    "n_reranked": len(result.get("reranked") or []),
+                    "retrieval_semantic_ranked": result.get("retrieval_semantic_ranked"),
+                    "fallback_type": fallback_type,
+                    "system_config": self.system_config,
+                },
+            )
+            langfuse_context.score_current_trace(
+                name="no_answer_fallback",
+                value=1 if fallback_type else 0,
+                data_type="BOOLEAN",
+                comment=fallback_type,
+            )
+        except Exception:
+            logger.warning("Langfuse trace enrichment failed", exc_info=True)
+
     @observe()
     def chat(self, query: str, model: Models, thread_id: str | None = None) -> tuple[SerializableChatMessage, str]:
         """
@@ -269,25 +359,31 @@ class KICampusAssistant:
             model=model,
             thread_id=thread_id
         )
-        
-        # Allow easier tracing of conversations in Langfuse
-        langfuse_context.update_current_observation(
-            metadata={
-                "thread_id": thread_id
-            }
-        )
+
+        # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)
+        # bereits der Konversation zugeordnet sind. Die vollständige
+        # Anreicherung passiert nach dem Graph-Lauf.
+        langfuse_context.update_current_trace(session_id=thread_id, input=query)
 
         # Execute graph mit State (update oder initial)
         result = self.graph.invoke(state, config=config)
-        
+
         # Generiere Assistant-Response
         assistant_content = result.get("citations_markdown") or result.get("answer") or ""
         assistant_message = SerializableChatMessage(role="assistant", content=assistant_content)
-        
+
+        self._update_langfuse_trace(
+            surface="drupal",
+            query=query,
+            thread_id=thread_id,
+            result=result,
+            assistant_content=assistant_content,
+        )
+
         # Füge User-Message und Assistant-Message zur History hinzu
         user_message = SerializableChatMessage(role="user", content=query)
         updated_history = result["chat_history"] + [user_message, assistant_message]
-        
+
         # Update State mit finaler chat_history
         self.graph.update_state(
             config=config,
@@ -330,21 +426,27 @@ class KICampusAssistant:
             course_id=course_id,
             module_id=module_id
         )
-        
-        # Allow easier tracing of conversations in Langfuse
-        langfuse_context.update_current_observation(
-            metadata={
-                "thread_id": thread_id
-            }
-        )
+
+        # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)
+        # bereits der Konversation zugeordnet sind. Die vollständige
+        # Anreicherung passiert nach dem Graph-Lauf.
+        langfuse_context.update_current_trace(session_id=thread_id, input=query)
 
         # Execute graph mit State (update oder initial)
         result = self.graph.invoke(state, config=config)
-        
+
         # Generiere Assistant-Response
         assistant_content = result.get("citations_markdown") or result.get("answer") or ""
         assistant_message = SerializableChatMessage(role="assistant", content=assistant_content)
-        
+
+        self._update_langfuse_trace(
+            surface="moodle",
+            query=query,
+            thread_id=thread_id,
+            result=result,
+            assistant_content=assistant_content,
+        )
+
         # Füge User-Message und Assistant-Message zur History hinzu
         user_message = SerializableChatMessage(role="user", content=query)
         updated_history = result["chat_history"] + [user_message, assistant_message]

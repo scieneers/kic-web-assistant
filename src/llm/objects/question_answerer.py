@@ -25,6 +25,34 @@ NO_CONTENT_IN_MODULE = "Das Modul '{module_name}' ist im Kurs vorhanden, enthäl
 ANSWER_NOT_FOUND_SECOND_TIME_MOODLE = """Es tut mir leid, aber ich konnte die benötigten Informationen im Kurs nicht finden, um deine Frage zu beantworten. Schau bitte im Kurs selbst nach, um weitere Hilfe zu erhalten. Hier ist der Kurslink: https://moodle.ki-campus.org/course/view.php?id={course_id}
 """
 
+# Statische Präfixe der Fallback-Templates mit Platzhaltern — aus den Konstanten
+# abgeleitet, damit get_fallback_type() bei Textänderungen nicht auseinanderläuft.
+_MOODLE_NOT_FOUND_PREFIX = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.split("{course_id}")[0]
+_EMPTY_MODULE_PREFIX, _EMPTY_MODULE_SUFFIX = NO_CONTENT_IN_MODULE.split("{module_name}")
+
+
+def get_fallback_type(answer: str | None) -> str | None:
+    """Klassifiziert eine finale Antwort als bekannten Fallback-Text.
+
+    Liefert einen kurzen Identifier für Tracing/Analyse (Langfuse-Metadaten
+    und -Score) oder None, wenn die Antwort eine echte LLM-Antwort ist.
+    """
+    if not answer or not answer.strip():
+        return "empty"
+    text = answer.strip()
+    if text == ANSWER_NOT_FOUND_FIRST_TIME.strip():
+        return "not_understood_first_time"
+    if text == NO_RELEVANT_CONTENT.strip():
+        return "no_relevant_content"
+    if text == ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL.strip():
+        return "not_found_second_time_drupal"
+    if text.startswith(_MOODLE_NOT_FOUND_PREFIX):
+        return "not_found_second_time_moodle"
+    if text.startswith(_EMPTY_MODULE_PREFIX) and _EMPTY_MODULE_SUFFIX.strip() in text:
+        return "empty_module"
+    return None
+
+
 SYSTEM_PROMPT = load_prompt("system_prompt")
 
 USER_QUERY_WITH_SOURCES_PROMPT = """

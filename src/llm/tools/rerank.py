@@ -4,12 +4,17 @@ Node wrapper for reranking retrieved chunks.
 
 import logging
 
-from langfuse.decorators import observe
+from langfuse.decorators import langfuse_context, observe
 
 from src.llm.objects.rerankers.base import BaseReranker
 from src.llm.state.models import GraphState, RerankerType
 
 logger = logging.getLogger(__name__)
+
+
+def _trace_span_metadata(**metadata) -> None:
+    """Kompakte Analyse-Metadaten an den aktuellen Langfuse-Span hängen."""
+    langfuse_context.update_current_observation(metadata=metadata)
 
 # Singletons keyed by reranker_type so swapping at startup is zero-cost at runtime.
 _reranker_instances: dict[str, BaseReranker] = {}
@@ -80,11 +85,13 @@ def rerank_chunks(state: GraphState) -> dict:
 
     if not query:
         logger.debug("rerank_chunks: no query — skipping, returning retrieved as-is")
+        _trace_span_metadata(skipped="no_query")
         return {"reranked": state.get("retrieved", [])}
 
     retrieved = state.get("retrieved", [])
     if not retrieved:
         logger.debug("rerank_chunks: no retrieved docs — returning empty list")
+        _trace_span_metadata(skipped="no_retrieved_docs")
         return {"reranked": []}
 
     # Single-chunk shortcut saves an LLM call / model inference — but not in
@@ -92,6 +99,7 @@ def rerank_chunks(state: GraphState) -> dict:
     # cutting/thresholding is free and min_score must still apply.
     if len(retrieved) == 1 and not preranked:
         logger.debug("rerank_chunks: only 1 chunk — skipping rerank")
+        _trace_span_metadata(skipped="single_chunk")
         return {"reranked": retrieved}
 
     if rerank_top_n >= len(retrieved):
@@ -137,4 +145,14 @@ def rerank_chunks(state: GraphState) -> dict:
             )
 
     logger.debug("rerank_chunks: %d → %d chunks after rerank", len(retrieved), len(reranked))
+    _trace_span_metadata(
+        reranker_type=reranker_type,
+        rerank_top_n=rerank_top_n,
+        min_score=min_score,
+        preranked=preranked,
+        n_input=len(retrieved),
+        n_output=len(reranked),
+        dropped_below_min_score=dropped,
+        no_answer_fallback_triggered=not reranked,
+    )
     return {"reranked": reranked}

@@ -4,7 +4,7 @@ Node wrapper for retrieving relevant chunks from vector database.
 
 import logging
 
-from langfuse.decorators import observe
+from langfuse.decorators import langfuse_context, observe
 
 from src.llm.state.models import GraphState
 
@@ -72,4 +72,16 @@ def retrieve_chunks(state: GraphState) -> dict:
     )
 
     logger.debug("retrieve_chunks: returned %d chunks", len(nodes))
+    # Kompakte Span-Metadaten: Parameter + Ergebnisgröße auf einen Blick,
+    # ohne im Trace durch den vollen State-Dump scrollen zu müssen.
+    langfuse_context.update_current_observation(
+        metadata={
+            "query": query,
+            "course_id": course_id,
+            "module_id": module_id,
+            "retrieve_top_n": retrieve_top_n,
+            "semantic_ranked": retriever.use_semantic,
+            "n_retrieved": len(nodes),
+        }
+    )
     return {"retrieved": nodes, "retrieval_semantic_ranked": retriever.use_semantic}
