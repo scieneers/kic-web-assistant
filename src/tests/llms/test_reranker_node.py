@@ -115,7 +115,7 @@ class TestRerankChunksNode:
 class _DummyReranker(BaseReranker):
     """Identity-scale reranker exercising the shared base-class logic."""
 
-    def rerank(self, query, nodes, model=None):
+    def rerank(self, query, nodes, model=None, *, course_id=None, module_id=None, preranked=False):
         kept, dropped = self.apply_min_score(nodes)
         return RerankResult(nodes=kept[: self.top_n], latency_ms=0.0, metadata={"dropped_below_min_score": dropped})
 
@@ -257,3 +257,231 @@ class TestGetRerankerConfigure:
             assert dummy.min_score == 0.4
         finally:
             _reranker_instances.pop("llm", None)
+
+
+# ---------------------------------------------------------------------------
+# AzureSemanticReranker: request scope is explicit, never guessed from chunks
+# ---------------------------------------------------------------------------
+
+def _azure_instance(top_n: int = 3, min_score: float = 0.0, search_results: list | None = None):
+    """Build an AzureSemanticReranker without hitting Azure (skips __init__)."""
+    from src.llm.objects.rerankers.azure_semantic_reranker import AzureSemanticReranker
+
+    instance = object.__new__(AzureSemanticReranker)
+    instance.top_n = top_n
+    instance.min_score = min_score
+    instance._llm = MagicMock()
+    instance._llm.get_embedder.return_value.get_query_embedding.return_value = [0.1, 0.2]
+    instance._vector_db = MagicMock()
+    instance._vector_db.hybrid_search.return_value = search_results or []
+    return instance
+
+
+def _node_with_scope_metadata(text: str, course_id: int, module_id: int | None = None) -> SerializableTextNode:
+    """Chunk whose metadata carries a course/module it BELONGS TO or DESCRIBES —
+    which must never be mistaken for the request scope."""
+    metadata = {"course_id": course_id}
+    if module_id is not None:
+        metadata["module_id"] = module_id
+    return SerializableTextNode(text=text, metadata=metadata, score=1.0)
+
+
+class TestAzureSemanticScope:
+    def test_unscoped_request_searches_drupal_despite_chunk_course_id(self):
+        """Course-discovery case: top chunk is a Drupal course page carrying the
+        course_id it describes — the re-search must still use the Drupal scope."""
+        reranker = _azure_instance()
+        nodes = [_node_with_scope_metadata("Kursseite zu ML", course_id=387)]
+        reranker.rerank("Welche Kurse gibt es zu ML?", nodes, course_id=None, module_id=None)
+
+        odata_filter = reranker._vector_db.hybrid_search.call_args.kwargs["odata_filter"]
+        assert "source eq 'Drupal'" in odata_filter
+        assert "course_id" not in odata_filter
+
+    def test_course_scoped_request_is_not_narrowed_to_chunk_module(self):
+        """Course-level case: first chunk is a module chunk — its module_id must
+        not narrow the re-search to a single module."""
+        reranker = _azure_instance()
+        nodes = [_node_with_scope_metadata("Modulinhalt", course_id=63, module_id=2511)]
+        reranker.rerank("Worum geht es in diesem Kurs?", nodes, course_id=63, module_id=None)
+
+        odata_filter = reranker._vector_db.hybrid_search.call_args.kwargs["odata_filter"]
+        assert "course_id eq 63" in odata_filter
+        assert "module_id" not in odata_filter
+
+    def test_module_scoped_request_filters_on_module(self):
+        reranker = _azure_instance()
+        nodes = [_node_with_scope_metadata("Modulinhalt", course_id=63, module_id=2511)]
+        reranker.rerank("Worum geht es in diesem Modul?", nodes, course_id=63, module_id=2511)
+
+        odata_filter = reranker._vector_db.hybrid_search.call_args.kwargs["odata_filter"]
+        assert "course_id eq 63" in odata_filter
+        assert "module_id eq 2511" in odata_filter
+
+    def test_research_uses_semantic_query(self):
+        reranker = _azure_instance()
+        reranker.rerank("query", [_node("a")], course_id=None, module_id=None)
+        assert reranker._vector_db.hybrid_search.call_args.kwargs["use_semantic"] is True
+
+
+class TestAzureSemanticPreranked:
+    """Integrated mode: retrieval already ranked semantically — no second search."""
+
+    def test_no_search_call(self):
+        reranker = _azure_instance()
+        reranker.rerank("query", [_node("a"), _node("b")], preranked=True)
+        reranker._vector_db.hybrid_search.assert_not_called()
+        reranker._llm.get_embedder.assert_not_called()
+
+    def test_sorts_and_cuts_to_top_n(self):
+        reranker = _azure_instance(top_n=2)
+        nodes = [_node("low", 1.0), _node("high", 3.5), _node("mid", 2.0)]
+        result = reranker.rerank("query", nodes, preranked=True)
+        assert [n.text for n in result.nodes] == ["high", "mid"]
+
+    def test_min_score_applies_on_0_to_4_scale(self):
+        reranker = _azure_instance(top_n=5, min_score=0.5)  # 0.5 normalized == 2.0 raw
+        nodes = [_node("strong", 3.2), _node("weak", 1.2)]
+        result = reranker.rerank("query", nodes, preranked=True)
+        assert [n.text for n in result.nodes] == ["strong"]
+        assert result.metadata["dropped_below_min_score"] == 1
+
+    def test_cost_attributes_semantic_surcharge(self):
+        reranker = _azure_instance()
+        result = reranker.rerank("query", [_node("a")], preranked=True)
+        assert result.estimated_cost_eur > 0
+        assert result.metadata["integrated"] is True
+
+
+# ---------------------------------------------------------------------------
+# rerank_chunks node forwards request scope + preranked flag
+# ---------------------------------------------------------------------------
+
+class TestRerankNodeScopeForwarding:
+    def test_scope_and_preranked_are_forwarded(self):
+        nodes = [_node(f"doc {i}") for i in range(3)]
+        state = _state(nodes)
+        state["runtime_config"] = {"model": Models.AZURE_FALLBACK, "course_id": 63, "module_id": 2511}
+        state["retrieval_semantic_ranked"] = True
+        mock = MagicMock()
+        mock.rerank.return_value = RerankResult(nodes=nodes[:2], latency_ms=1.0)
+        with patch("src.llm.tools.rerank.get_reranker", return_value=mock):
+            rerank_chunks(state)
+        kwargs = mock.rerank.call_args.kwargs
+        assert kwargs["course_id"] == 63
+        assert kwargs["module_id"] == 2511
+        assert kwargs["preranked"] is True
+
+    def test_defaults_without_scope_and_flag(self):
+        nodes = [_node("a"), _node("b")]
+        state = _state(nodes)
+        mock = MagicMock()
+        mock.rerank.return_value = RerankResult(nodes=nodes, latency_ms=1.0)
+        with patch("src.llm.tools.rerank.get_reranker", return_value=mock):
+            rerank_chunks(state)
+        kwargs = mock.rerank.call_args.kwargs
+        assert kwargs["course_id"] is None
+        assert kwargs["module_id"] is None
+        assert kwargs["preranked"] is False
+
+    def test_single_chunk_is_not_shortcut_in_integrated_mode(self):
+        """Preranked nodes already carry their score — min_score must still apply
+        even for a single chunk (weak lone hit → no-answer instead of weak answer)."""
+        node = _node("weak solo", score=1.0)
+        state = _state([node])
+        state["retrieval_semantic_ranked"] = True
+        mock = MagicMock()
+        mock.rerank.return_value = RerankResult(nodes=[], latency_ms=0.1, metadata={"dropped_below_min_score": 1})
+        with patch("src.llm.tools.rerank.get_reranker", return_value=mock):
+            result = rerank_chunks(state)
+        mock.rerank.assert_called_once()
+        assert result["reranked"] == []
+
+    def test_single_chunk_shortcut_still_active_without_preranked(self):
+        node = _node("solo")
+        with patch("src.llm.tools.rerank.get_reranker") as get_mock:
+            result = rerank_chunks(_state([node]))
+        get_mock.assert_not_called()
+        assert result["reranked"] == [node]
+
+
+# ---------------------------------------------------------------------------
+# retrieve_chunks node: integrated semantic retrieval for the azure backend
+# ---------------------------------------------------------------------------
+
+class TestRetrieveNodeSemantic:
+    def _retrieve_state(self, reranker_type: str) -> dict:
+        return {
+            "user_query": "Was ist KI?",
+            "contextualized_query": "Was ist KI?",
+            "runtime_config": {"model": Models.AZURE_FALLBACK, "course_id": None, "module_id": None},
+            "system_config": {"retrieve_top_n": 10, "reranker_type": reranker_type},
+        }
+
+    def _run(self, reranker_type: str):
+        from src.llm.tools import retrieve as retrieve_module
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = []
+        mock_retriever.use_semantic = reranker_type == "azure_semantic"
+        with patch.object(retrieve_module, "get_retriever", return_value=mock_retriever) as get_mock:
+            result = retrieve_module.retrieve_chunks(self._retrieve_state(reranker_type))
+        return result, get_mock
+
+    def test_azure_semantic_enables_integrated_semantic_retrieval(self):
+        result, get_mock = self._run("azure_semantic")
+        assert get_mock.call_args.kwargs["use_semantic"] is True
+        assert result["retrieval_semantic_ranked"] is True
+
+    def test_other_backends_keep_plain_retrieval(self):
+        result, get_mock = self._run("llm")
+        assert get_mock.call_args.kwargs["use_semantic"] is False
+        assert result["retrieval_semantic_ranked"] is False
+
+
+# ---------------------------------------------------------------------------
+# hybrid_search: semantic ranking gets a full candidate window
+# ---------------------------------------------------------------------------
+
+class TestHybridSearchSemanticWindow:
+    def _search(self, use_semantic: bool, top: int = 5):
+        from src.vectordb.azure_search import VectorDBAzureSearch
+        instance = object.__new__(VectorDBAzureSearch)
+        client = MagicMock()
+        client.search.return_value = iter([])
+        instance._client = lambda name=None: client
+        instance.hybrid_search(
+            query_text="q",
+            query_vector=[0.1],
+            index_name="idx",
+            top=top,
+            use_semantic=use_semantic,
+        )
+        return client.search.call_args.kwargs
+
+    def test_semantic_feeds_full_rerank_window(self):
+        kwargs = self._search(use_semantic=True, top=5)
+        assert kwargs["vector_queries"][0].k_nearest_neighbors == 50
+        assert kwargs["query_type"] == "semantic"
+
+    def test_plain_search_keeps_candidate_factor(self):
+        kwargs = self._search(use_semantic=False, top=5)
+        assert kwargs["vector_queries"][0].k_nearest_neighbors == 15
+        assert "query_type" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# Retriever result mapping: semantic reranker_score wins over RRF score
+# ---------------------------------------------------------------------------
+
+class TestRetrieverToNode:
+    def test_prefers_reranker_score(self):
+        from src.llm.objects.retriever import KiCampusRetriever
+        node = KiCampusRetriever._to_node(
+            {"id": "1", "text": "t", "@search.score": 0.03, "@search.reranker_score": 2.7}
+        )
+        assert node.score == 2.7
+
+    def test_falls_back_to_rrf_score(self):
+        from src.llm.objects.retriever import KiCampusRetriever
+        node = KiCampusRetriever._to_node({"id": "1", "text": "t", "@search.score": 0.03})
+        assert node.score == 0.03

@@ -58,15 +58,24 @@ def rerank_chunks(state: GraphState) -> dict:
     rerank_top_n = state["system_config"]["rerank_top_n"]
     reranker_type = state["system_config"].get("reranker_type", "llm")
     min_score = state["system_config"].get("min_reranker_score", 0.0)
+    # Request scope — index-querying backends (Azure Semantic) must search with
+    # the SAME scope as the original retrieval. Never derived from chunk
+    # metadata (Drupal course pages carry the course_id they describe).
+    course_id = state["runtime_config"].get("course_id")
+    module_id = state["runtime_config"].get("module_id")
+    # Integrated mode: retrieval already ranked with Azure's semantic ranker —
+    # the backend then only cuts to top_n and applies min_score.
+    preranked = state.get("retrieval_semantic_ranked", False)
 
     logger.debug(
-        "rerank_chunks: query=%r, model=%s, reranker=%s, top_n=%d, min_score=%.2f, input_chunks=%d",
+        "rerank_chunks: query=%r, model=%s, reranker=%s, top_n=%d, min_score=%.2f, input_chunks=%d, preranked=%s",
         query[:80] if query else None,
         model,
         reranker_type,
         rerank_top_n,
         min_score,
         len(state.get("retrieved", [])),
+        preranked,
     )
 
     if not query:
@@ -78,7 +87,10 @@ def rerank_chunks(state: GraphState) -> dict:
         logger.debug("rerank_chunks: no retrieved docs — returning empty list")
         return {"reranked": []}
 
-    if len(retrieved) == 1:
+    # Single-chunk shortcut saves an LLM call / model inference — but not in
+    # integrated mode: there the chunk already carries its semantic score, so
+    # cutting/thresholding is free and min_score must still apply.
+    if len(retrieved) == 1 and not preranked:
         logger.debug("rerank_chunks: only 1 chunk — skipping rerank")
         return {"reranked": retrieved}
 
@@ -90,7 +102,14 @@ def rerank_chunks(state: GraphState) -> dict:
         )
 
     reranker = get_reranker(reranker_type, rerank_top_n, min_score)
-    result = reranker.rerank(query=query, nodes=retrieved, model=model)
+    result = reranker.rerank(
+        query=query,
+        nodes=retrieved,
+        model=model,
+        course_id=course_id,
+        module_id=module_id,
+        preranked=preranked,
+    )
 
     reranked = result.nodes
     dropped = result.metadata.get("dropped_below_min_score", 0)

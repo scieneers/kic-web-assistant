@@ -23,6 +23,23 @@ logger = logging.getLogger(__name__)
 TIME_TO_WAIT_FOR_GWDG = 7  # in seconds
 TIME_TO_RESET_UNAVAILABLE_STATUS = 60 * 5  # in seconds
 
+
+def _log_thread_exception(args: threading.ExceptHookArgs) -> None:
+    # LlamaIndex runs streaming / write_response_to_history in background
+    # threads whose unhandled exceptions (e.g. GWDG 500 after the stream was
+    # already consumed) would otherwise be printed raw to stderr. Installed
+    # ONCE process-wide — swapping the hook per request races under
+    # concurrent requests (hooks overwrite/restore each other).
+    logger.warning(
+        "Unhandled exception in background thread %r — likely LlamaIndex "
+        "streaming / upstream API error (GWDG/Azure)",
+        args.thread.name if args.thread else "unknown",
+        exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+    )
+
+
+threading.excepthook = _log_thread_exception
+
 class Models(str, Enum):
     AZURE_FALLBACK = "Azure-Fallback"
     LLAMA3 = "Llama3"
@@ -34,6 +51,29 @@ class Models(str, Enum):
 class LLM:
     gwdg_unavailable = False
     gwdg_unavailable_since = None
+    # Guards the check-then-act accesses to the two class variables above —
+    # without it, concurrent requests can race between reading the timestamp
+    # and resetting/setting the status.
+    _gwdg_lock = threading.Lock()
+
+    @classmethod
+    def _gwdg_is_unavailable(cls) -> bool:
+        """Thread-safe read of the GWDG status; resets it once the window expired."""
+        with cls._gwdg_lock:
+            if cls.gwdg_unavailable and cls.gwdg_unavailable_since:
+                if datetime.datetime.now() - cls.gwdg_unavailable_since > datetime.timedelta(
+                    seconds=TIME_TO_RESET_UNAVAILABLE_STATUS
+                ):
+                    logger.debug("GWDG unavailability window expired — resetting to available")
+                    cls.gwdg_unavailable = False
+                    cls.gwdg_unavailable_since = None
+            return cls.gwdg_unavailable
+
+    @classmethod
+    def _mark_gwdg_unavailable(cls) -> None:
+        with cls._gwdg_lock:
+            cls.gwdg_unavailable = True
+            cls.gwdg_unavailable_since = datetime.datetime.now()
 
     def get_embedder(self) -> AzureOpenAIEmbedding:
         embedder = AzureOpenAIEmbedding(
@@ -112,16 +152,9 @@ class LLM:
 
         logger.debug("LLM.chat() requested model=%s, query_preview=%r", model, query[:80])
 
-        if LLM.gwdg_unavailable and LLM.gwdg_unavailable_since:
-            if datetime.datetime.now() - LLM.gwdg_unavailable_since > datetime.timedelta(
-                seconds=TIME_TO_RESET_UNAVAILABLE_STATUS
-            ):
-                logger.debug("GWDG unavailability window expired — resetting to available")
-                LLM.gwdg_unavailable = False
-                LLM.gwdg_unavailable_since = None
-
-        # If GWDG is unavailable, use Azure fallback model instead
-        if LLM.gwdg_unavailable:
+        # If GWDG is unavailable (thread-safe check incl. window reset),
+        # use the Azure fallback model instead.
+        if LLM._gwdg_is_unavailable():
             logger.debug(
                 "GWDG marked unavailable (since %s) — overriding model %s → %s",
                 LLM.gwdg_unavailable_since,
@@ -131,6 +164,7 @@ class LLM:
             model = Models.AZURE_FALLBACK
 
         logger.debug("Using model=%s", model)
+        is_gwdg_model = model in (Models.LLAMA3, Models.GEMMA4_31B)
         llm = self.get_model(model)
         # Convert SerializableChatMessage to ChatMessage for SimpleChatEngine
         chat_history_messages = [msg.to_chat_message() for msg in chat_history]
@@ -168,20 +202,9 @@ class LLM:
                     if tail:
                         token_callback(tail)
 
-            _orig_excepthook_stream = threading.excepthook
-
-            def _stream_thread_excepthook(args: threading.ExceptHookArgs) -> None:
-                # LlamaIndex's write_response_to_history background thread can
-                # fail (e.g. GWDG 500) after our main loop already consumed the
-                # stream.  Route through logger instead of printing raw to stderr.
-                logger.warning(
-                    "Unhandled exception in LlamaIndex streaming thread %r — "
-                    "likely upstream API error (GWDG/Azure), stream already consumed",
-                    args.thread.name if args.thread else "unknown",
-                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
-                )
-
-            threading.excepthook = _stream_thread_excepthook
+            # Background-thread exceptions (e.g. GWDG 500 in LlamaIndex's
+            # write_response_to_history) are handled by the process-wide
+            # _log_thread_exception hook installed at module import.
             try:
                 streaming_resp = chat_engine.stream_chat(message=query)
                 full_text = ""
@@ -250,23 +273,26 @@ class LLM:
                     _emit(text)
                     _emit_flush()
                 return SerializableChatMessage(role="assistant", content=text)
-            finally:
-                threading.excepthook = _orig_excepthook_stream
+
+        if not is_gwdg_model:
+            # Non-GWDG models (Azure) don't need the timeout/fallback dance below —
+            # it exists to detect a hung/unresponsive GWDG endpoint specifically.
+            # Reasoning models like gpt-5.4 can legitimately exceed
+            # TIME_TO_WAIT_FOR_GWDG, which previously caused this path to
+            # mislabel a slow Azure response as a GWDG failure and mark GWDG
+            # globally unavailable for other concurrent requests.
+            response = chat_engine.chat(message=query)
+            if type(response.response) is not str:
+                raise ValueError(f"Response is not a string. Please check the LLM implementation. Response: {response}")
+            return SerializableChatMessage(role="assistant", content=response.response)
 
         result = [None]  # Use a list to hold the result (mutable object to modify inside threads)
 
-        _orig_excepthook = threading.excepthook
-
-        def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
-            # Intercept unhandled exceptions from llama_index internal threads
-            # (e.g. write_response_to_history) so they go through our logger
-            # instead of being printed raw to stderr by Python.
-            logger.warning(
-                "Unhandled exception in llama_index internal thread %r — likely GWDG stream failure",
-                args.thread.name if args.thread else "unknown",
-                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
-            )
-
+        # Background-thread exceptions (e.g. GWDG 500 in the target thread below,
+        # surfacing after join() already timed out) are handled by the
+        # process-wide _log_thread_exception hook installed at module import —
+        # swapping threading.excepthook here would race with concurrent requests
+        # also hitting this GWDG path.
         def target():
             try:
                 result.append(chat_engine.chat(message=query))  # Execute the chat function
@@ -274,11 +300,9 @@ class LLM:
                 logger.warning("GWDG target() thread raised exception", exc_info=True)
                 result.append(e)  # If error, store the exception in the result
 
-        threading.excepthook = _thread_excepthook
         thread = threading.Thread(target=target)
         thread.start()
         thread.join(timeout=TIME_TO_WAIT_FOR_GWDG)
-        threading.excepthook = _orig_excepthook
 
         if thread.is_alive() or isinstance(result[-1], Exception) or result[-1] is None:
             # GWDG timeout or error - fallback to Azure model
@@ -291,8 +315,7 @@ class LLM:
                 f": {exc}" if exc else "",
                 exc_info=exc,
             )
-            LLM.gwdg_unavailable = True
-            LLM.gwdg_unavailable_since = datetime.datetime.now()
+            LLM._mark_gwdg_unavailable()
             llm = self.get_model(Models.AZURE_FALLBACK)
             chat_engine = SimpleChatEngine.from_defaults(
                 llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history

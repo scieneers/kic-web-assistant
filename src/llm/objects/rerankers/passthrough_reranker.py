@@ -21,6 +21,10 @@ class PassthroughReranker(BaseReranker):
         query: str,
         nodes: List[SerializableTextNode],
         model: Optional[Models] = None,
+        *,
+        course_id: Optional[int] = None,
+        module_id: Optional[int] = None,
+        preranked: bool = False,
     ) -> RerankResult:
         t0 = time.perf_counter()
         result = nodes[: self.top_n]

@@ -56,9 +56,14 @@ class EnvHelper(BaseModel):
     AZURE_SEARCH_INDEX: str = "aichat"
 
     # Reranker backend for the RAG pipeline: "llm", "azure_semantic" or "bge".
+    # "azure_semantic" runs INTEGRATED: the semantic ranker rescores inside the
+    # retrieval call itself (one search, no separate rerank round-trip); the
+    # rerank node then only cuts to top_n and applies MIN_RERANKER_SCORE.
     # MIN_RERANKER_SCORE is a relevance cutoff on a normalized 0-1 scale;
     # 0.0 disables filtering. If all chunks fall below the cutoff, the
     # assistant answers with the no-answer fallback instead of a weak answer.
+    # (Azure reranker_score is 0-4; Microsofts guidance: below ~2.0 is weak →
+    # normalized starting point ~0.5, calibrate with the negative queries.)
     RERANKER_TYPE: str = "llm"
     MIN_RERANKER_SCORE: float = 0.0
 

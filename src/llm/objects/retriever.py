@@ -57,16 +57,25 @@ def _build_odata_filter(
 
 
 class KiCampusRetriever:
-    def __init__(self, use_hybrid: bool = True, n_chunks: int = 10):
+    def __init__(self, use_hybrid: bool = True, n_chunks: int = 10, use_semantic: bool = False):
         """Initialize retriever.
 
         Args:
             use_hybrid: If True, hybrid search (vector + BM25 keyword, fused via
                        Azure's Reciprocal Rank Fusion). If False, vector-only.
             n_chunks: Number of chunks to retrieve from the search index.
+            use_semantic: If True, Azure's semantic ranker rescores the results
+                       server-side within the SAME search call (integrated
+                       reranking) — results are ordered by
+                       ``@search.reranker_score`` (0–4) instead of the RRF
+                       score. Requires hybrid mode (the semantic ranker needs
+                       the query text).
         """
+        if use_semantic and not use_hybrid:
+            raise ValueError("use_semantic requires use_hybrid=True (semantic ranking needs the query text)")
         self.use_hybrid = use_hybrid
         self.n_chunks = n_chunks
+        self.use_semantic = use_semantic
         self.embedder = LLM().get_embedder()
         self.vector_db = VectorDBAzureSearch()
         self.index_name = env.AZURE_SEARCH_INDEX
@@ -95,6 +104,7 @@ class KiCampusRetriever:
             index_name=self.index_name,
             odata_filter=odata_filter,
             top=self.n_chunks,
+            use_semantic=self.use_semantic,
         )
 
         return [self._to_node(result) for result in results]
@@ -105,6 +115,10 @@ class KiCampusRetriever:
 
         The full original node metadata is restored losslessly from the
         ``metadata_json`` blob rather than reassembled from individual fields.
+
+        With semantic ranking, ``@search.reranker_score`` (0–4 scale) is the
+        relevance signal downstream consumers (min_score filter, no-answer
+        logic) must see — the RRF ``@search.score`` is only the fallback.
         """
         raw_metadata = result.get("metadata_json")
         metadata = json.loads(raw_metadata) if raw_metadata else {}
@@ -112,5 +126,5 @@ class KiCampusRetriever:
             text=result.get("text", ""),
             id_=str(result.get("id")) if result.get("id") is not None else None,
             metadata=metadata,
-            score=result.get("@search.score"),
+            score=result.get("@search.reranker_score") or result.get("@search.score"),
         )

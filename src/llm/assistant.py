@@ -1,3 +1,4 @@
+import threading
 import uuid
 from collections import OrderedDict
 from langfuse.decorators import observe, langfuse_context
@@ -24,22 +25,27 @@ class BoundedMemorySaver(MemorySaver):
         super().__init__()
         self.max_threads = max_threads
         self._thread_order: OrderedDict[str, None] = OrderedDict()
+        # Guards _thread_order and the eviction below — put()/aput() are called
+        # from concurrent request threads (and aput from the event loop), and
+        # OrderedDict's check-then-mutate sequence here is not atomic on its own.
+        self._lock = threading.Lock()
 
     def _register_and_evict(self, thread_id: str) -> None:
-        if thread_id in self._thread_order:
-            return
-        self._thread_order[thread_id] = None
-        if len(self._thread_order) > self.max_threads:
-            oldest_id, _ = self._thread_order.popitem(last=False)
-            # MemorySaver speichert intern unter self.storage und self.writes
-            try:
-                self.storage.pop(oldest_id, None)
-            except AttributeError:
-                pass
-            try:
-                self.writes.pop(oldest_id, None)
-            except AttributeError:
-                pass
+        with self._lock:
+            if thread_id in self._thread_order:
+                return
+            self._thread_order[thread_id] = None
+            if len(self._thread_order) > self.max_threads:
+                oldest_id, _ = self._thread_order.popitem(last=False)
+                # MemorySaver speichert intern unter self.storage und self.writes
+                try:
+                    self.storage.pop(oldest_id, None)
+                except AttributeError:
+                    pass
+                try:
+                    self.writes.pop(oldest_id, None)
+                except AttributeError:
+                    pass
 
     def put(self, config, checkpoint, metadata, new_versions):
         self._register_and_evict(config["configurable"]["thread_id"])
@@ -213,6 +219,7 @@ class KICampusAssistant:
                     # Reset per-turn intermediate artifacts so stale checkpoint
                     # values never bleed into the new graph run.
                     "retrieved": [],
+                    "retrieval_semantic_ranked": False,
                     "reranked": [],
                     "answer": None,
                     "citations_markdown": None,

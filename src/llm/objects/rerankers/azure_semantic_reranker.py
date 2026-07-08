@@ -2,9 +2,18 @@
 Azure AI Search Semantic Reranker.
 
 Differs from cross-encoder rerankers (BGE, Cohere): Azure's semantic ranker is
-integrated into the search call, not a standalone scoring API. This reranker
-re-issues the hybrid search with query_type="semantic" so Azure scores and
-reorders results server-side using its own semantic model.
+integrated into the search call, not a standalone scoring API. Two modes:
+
+1. Integrated (production, preranked=True): retrieval itself runs with
+   query_type="semantic" (see KiCampusRetriever), so the nodes already carry
+   @search.reranker_score. This backend then only cuts to top_n and applies
+   min_score — no second search call, no second embedding.
+
+2. Re-search (benchmark, preranked=False): re-issues the hybrid search with
+   query_type="semantic" so Azure scores server-side. The REQUEST scope
+   (course_id/module_id) must be passed explicitly — it is never derived from
+   chunk metadata, because chunks carry the course they BELONG TO or DESCRIBE
+   (e.g. Drupal course pages have a course_id), not the scope of the request.
 
 Prerequisites (already configured):
   - Standard-tier Azure Search service
@@ -32,12 +41,10 @@ _SEMANTIC_CONFIG = "default"
 
 class AzureSemanticReranker(BaseReranker):
     """
-    Reranks by re-issuing the hybrid search with Azure's built-in semantic ranker.
+    Reranks via Azure AI Search's built-in semantic ranker.
 
-    Results are ordered by @search.reranker_score (Azure's semantic score)
-    instead of the default RRF score. The pre-retrieved nodes are used to
-    extract the OData filter (course_id/module_id) so the re-issued search
-    uses the same scope.
+    Results are ordered by @search.reranker_score (0–4 scale) instead of the
+    default RRF score. See module docstring for the two operating modes.
     """
 
     def __init__(self, top_n: int, min_score: float = 0.0):
@@ -58,15 +65,50 @@ class AzureSemanticReranker(BaseReranker):
         query: str,
         nodes: List[SerializableTextNode],
         model: Optional[Models] = None,
+        *,
+        course_id: Optional[int] = None,
+        module_id: Optional[int] = None,
+        preranked: bool = False,
     ) -> RerankResult:
+        if preranked:
+            return self._cut_preranked(nodes)
+        return self._research(query, course_id=course_id, module_id=module_id)
+
+    def _cut_preranked(self, nodes: List[SerializableTextNode]) -> RerankResult:
+        """Integrated mode: retrieval already ranked with the semantic ranker —
+        only sort defensively, cut to top_n and apply min_score."""
+        t0 = time.perf_counter()
+        ranked = sorted(nodes, key=lambda n: n.score or 0, reverse=True)[: self.top_n]
+        ranked, dropped = self.apply_min_score(ranked)
+        latency_ms = (time.perf_counter() - t0) * 1000
+        return RerankResult(
+            nodes=ranked,
+            latency_ms=latency_ms,
+            # The semantic surcharge was paid on the retrieval call — attribute
+            # it here so cost telemetry per rerank stays comparable.
+            estimated_cost_eur=_EUR_PER_QUERY,
+            metadata={
+                "semantic_config": _SEMANTIC_CONFIG,
+                "integrated": True,
+                "input_chunks": len(nodes),
+                "dropped_below_min_score": dropped,
+            },
+        )
+
+    def _research(
+        self,
+        query: str,
+        course_id: Optional[int] = None,
+        module_id: Optional[int] = None,
+    ) -> RerankResult:
+        """Benchmark mode: re-issue the hybrid search with semantic ranking.
+
+        course_id/module_id define the search scope exactly like the original
+        retrieval (None/None → Drupal-only, same as KiCampusRetriever).
+        """
         from src.llm.objects.retriever import _build_odata_filter
 
-        # Extract scope from the first node's metadata (all nodes share the same filter)
-        first_meta = nodes[0].metadata if nodes else {}
-        course_id = first_meta.get("course_id")
-        module_id = first_meta.get("module_id")
         odata_filter = _build_odata_filter(course_id, module_id)
-
         dense_embedding = self._llm.get_embedder().get_query_embedding(query)
 
         t0 = time.perf_counter()
@@ -97,7 +139,11 @@ class AzureSemanticReranker(BaseReranker):
             nodes=reranked,
             latency_ms=latency_ms,
             estimated_cost_eur=_EUR_PER_QUERY,
-            metadata={"semantic_config": _SEMANTIC_CONFIG, "input_chunks": len(nodes), "dropped_below_min_score": dropped},
+            metadata={
+                "semantic_config": _SEMANTIC_CONFIG,
+                "scope": {"course_id": course_id, "module_id": module_id},
+                "dropped_below_min_score": dropped,
+            },
         )
 
     @staticmethod

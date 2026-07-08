@@ -64,8 +64,25 @@ class BaseReranker(ABC):
         query: str,
         nodes: List[SerializableTextNode],
         model: Optional[Models] = None,
+        *,
+        course_id: Optional[int] = None,
+        module_id: Optional[int] = None,
+        preranked: bool = False,
     ) -> RerankResult:
-        """Rerank nodes by relevance to query. Returns RerankResult with timing and cost."""
+        """Rerank nodes by relevance to query. Returns RerankResult with timing and cost.
+
+        course_id/module_id carry the REQUEST scope (from runtime_config or the
+        benchmark record). Backends that re-query the index (Azure Semantic) need
+        them to search with the same scope as the original retrieval — they must
+        never be guessed from chunk metadata, because e.g. Drupal course pages
+        carry the course_id of the course they *describe*, not the scope the
+        user is asking in.
+
+        preranked=True signals that retrieval already ranked the nodes with this
+        backend (integrated mode) — the backend then only cuts to top_n and
+        applies min_score instead of scoring again. Local backends ignore all
+        three keywords.
+        """
         ...
 
     @property

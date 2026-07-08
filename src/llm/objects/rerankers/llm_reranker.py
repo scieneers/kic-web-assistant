@@ -49,7 +49,13 @@ class LLMReranker(BaseReranker):
         query: str,
         nodes: List[SerializableTextNode],
         model: Optional[Models] = None,
+        *,
+        course_id: Optional[int] = None,
+        module_id: Optional[int] = None,
+        preranked: bool = False,
     ) -> RerankResult:
+        # course_id/module_id/preranked are part of the shared interface and
+        # only used by index-querying backends (Azure Semantic).
         if model is None:
             model = Models.AZURE_FALLBACK
 

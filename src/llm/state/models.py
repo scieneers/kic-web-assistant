@@ -29,6 +29,9 @@ class GraphState(TypedDict, total=False):
 
     # retrieval artifacts
     retrieved: List[SerializableTextNode]
+    # True when retrieval already ranked the results with Azure's semantic
+    # ranker (integrated mode) — the rerank node then only cuts/thresholds.
+    retrieval_semantic_ranked: bool
     reranked: List[SerializableTextNode]
 
     # socratic specific artifacts
