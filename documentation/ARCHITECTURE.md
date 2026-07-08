@@ -113,7 +113,7 @@ kic-web-assistant/
    │                       ► Direkte LLM-Antwort          │
    │                                                      │
    ├─ simple_hop ───────► Retrieval (Hybrid, Top-10)    │
-   │                       ► Reranking (LLM, Top-5)       │
+   │                       ► Reranking (konfigurierbar, Top-5) │
    │                       ► Sprache erkennen (parallel)  │
    │                       ► Antwort generieren           │
    │                       ► Zitate parsen               │
@@ -156,7 +156,12 @@ START ─┬─► retrieve_chunks ──► rerank_chunks ─┐
 ```
 
 - **Retrieval:** Azure AI Search Hybrid (BM25 + Vektor), Top-10
-- **Reranking:** LLM-basiert, Top-5
+- **Reranking:** Backend per `RERANKER_TYPE` (Env) wählbar — `llm` (Default), `azure_semantic`, `bge`.
+  Bei `azure_semantic` läuft das Reranking **integriert**: Azures Semantic Ranker rescort
+  serverseitig innerhalb des Retrieval-Calls (Top-50-Fenster), `rerank_chunks` schneidet dann
+  nur noch auf Top-5 und wendet `MIN_RERANKER_SCORE` an — kein zweiter Search-Roundtrip.
+  Index-suchende Backends erhalten den Request-Scope (`course_id`/`module_id`) explizit
+  aus der `runtime_config`, nie aus Chunk-Metadaten.
 - **Sprache:** Parallel zum Retrieval, kein Latenz-Overhead
 - **Antwort:** Mit Quellenangaben als `[docN]`-Marker, dann in Markdown-Links umgewandelt
 

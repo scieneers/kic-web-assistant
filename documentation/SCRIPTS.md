@@ -70,20 +70,29 @@ uv run pytest src/tests/llms/test_language_detector_integration.py -v
 
 ## Reranker Evaluation
 
-### 0. (Optional) Fragen aus dem Index generieren
+### 0. Fragen aus dem Index generieren (empfohlen für alle Level-Fragen)
 
-Statt nur handkuratierter Fragen: sampelt echte Chunks aus dem Search-Index und
-lässt ein LLM realistische Lernenden-Fragen erzeugen — `grounded` (aus einem
-Dokument beantwortbar), `comparison` (braucht zwei Dokumente; der Ex-multi_hop-Fragetyp)
-und `negative` (plausibel, aber nicht abgedeckt → Ground Truth für die
-No-Answer-/min_score-Kalibrierung).
+Sampelt echte Chunks aus dem Search-Index und lässt ein LLM realistische
+Lernenden-Fragen erzeugen — **mit aktuellen course_id/module_id direkt aus dem
+Index**, damit nichts durch Re-Ingests veraltet. Kinds spiegeln die drei
+Produktions-Scopes plus zwei Sondertypen:
+
+- `drupal_level` — unscoped Besucherfrage (ki-campus.org)
+- `course_level` — Frage im Kurs (course_id), über Kurse gestreut
+- `module_level` — Frage im Modul (course_id+module_id), über Module gestreut
+- `comparison` — braucht zwei Drupal-Dokumente (Ex-multi_hop-Fragetyp)
+- `negative` — plausibel, aber nicht abgedeckt → Ground Truth für die
+  No-Answer-/min_score-Kalibrierung
 
 ```bash
-# 30 grounded + 10 comparison + 10 negative aus dem Index kic-content
-uv run python -m evaluation.dataset.generate_questions --index kic-content
+# Default: 8 drupal + 8 course + 8 module + 4 comparison + 4 negative
+uv run python -m evaluation.dataset.generate_questions
 
-# Kleiner Testlauf
-uv run python -m evaluation.dataset.generate_questions --index kic-content --n-grounded 4 --n-comparison 2 --n-negative 2
+# Anderer Index / andere Mengen
+uv run python -m evaluation.dataset.generate_questions --index kic-content --n-course 12 --n-module 12
+
+# Weitere Sprachen im Round-Robin
+uv run python -m evaluation.dataset.generate_questions --languages de,en,es,fr
 ```
 
 Ergebnis: `evaluation/dataset/generated_queries.json` → per `--queries-file` in Schritt 1 nutzen.
@@ -91,27 +100,47 @@ Ergebnis: `evaluation/dataset/generated_queries.json` → per `--queries-file` i
 ### 1. Dataset erstellen
 
 Retrievet die Top-`--n-chunks` (Default 30) aus dem echten Index und lässt ein
-LLM Relevanz-Labels vergeben (0/1/2). Das eingebaute Query-Set umfasst 106 Fragen
-(DE/EN) inkl. Vergleichs-, Kurz-, Umgangssprache-, Plattform-, Domänen- und
-No-Answer-Fragen (`kind`-Feld). Ergebnis: `evaluation/dataset/queries.jsonl`
+LLM Relevanz-Labels vergeben (0/1/2). Das eingebaute Query-Set ist ein bewusst
+kompakter kuratierter Kern (**36 Fragen**: Plattform-, Kurz-, Umgangssprache-,
+Konzept-, Vergleichs-, Mehrsprachen- und No-Answer-Fragen, `kind`-Feld) — alle
+Kurs-/Modul-Level-Fragen kommen per `--generate` aus dem Index (Schritt 0 läuft
+dann automatisch mit). Typischer Gesamtumfang: 36 kuratiert + ~32 generiert
+≈ 70 Queries. Ergebnis: `evaluation/dataset/queries.jsonl`
 
-> Aufwand: 106 Queries × 30 Chunks ≈ 3.200 Judge-Calls. Mit `--model Azure-Mini`
-> deutlich günstiger; für einen Probelauf `--limit 5`.
+**Empfohlener One-Shot** (nach jedem Re-Ingest):
 
 ```bash
-# Vollständiges Dataset neu erstellen
+uv run python -m evaluation.dataset.create_dataset --generate --regenerate
+```
+
+Zuverlässigkeit: Jeder fertige Record wird sofort geschrieben und geflusht;
+eine fehlgeschlagene Query wird einmal wiederholt und sonst übersprungen (am
+Ende aufgelistet) — ein einzelner API-Fehler killt den Lauf nicht mehr.
+**Abgebrochen/teilweise fehlgeschlagen?** Gleicher Befehl mit `--append` statt
+`--regenerate` — bereits gelabelte Queries werden übersprungen, die generierten
+Fragen kommen aus dem Cache (`generated_queries.json`), es wird also exakt
+dasselbe Fragen-Set vervollständigt:
+
+```bash
+uv run python -m evaluation.dataset.create_dataset --generate --append
+```
+
+> Aufwand: ~70 Queries × 30 Chunks ≈ 2.100 Judge-Calls. Mit `--model Azure-Mini`
+> deutlich günstiger; für einen Probelauf `--limit 5`.
+
+Weitere Varianten:
+
+```bash
+# Nur der kuratierte Kern (ohne generierte Fragen)
 uv run python -m evaluation.dataset.create_dataset
 
 # Erstmal testen mit 5 Queries
 uv run python -m evaluation.dataset.create_dataset --limit 5
 
-# Nur neue Queries hinzufügen, bestehende Labels behalten
-uv run python -m evaluation.dataset.create_dataset --append
-
 # Günstigeres Mini-Modell für die Bewertung nutzen
-uv run python -m evaluation.dataset.create_dataset --model Azure-Mini
+uv run python -m evaluation.dataset.create_dataset --generate --model Azure-Mini
 
-# Generierte Fragen statt der eingebauten nutzen (siehe Schritt 0)
+# Eigenes Fragen-File statt --generate (z. B. mit angepassten Mengen aus Schritt 0)
 uv run python -m evaluation.dataset.create_dataset --queries-file evaluation/dataset/generated_queries.json --append
 
 # Kleinerer Kandidaten-Pool (schneller/billiger, aber keine Pool-Experimente möglich)
@@ -121,23 +150,37 @@ uv run python -m evaluation.dataset.create_dataset --n-chunks 10
 ### 2. Benchmark ausführen
 
 Vergleicht alle Reranker (Baseline, LLM, Azure Semantic, BGE large, BGE small)
-auf dem Dataset. Gibt eine Tabelle mit NDCG@k, MRR, Precision@k, Latenz und Kosten aus.
+auf dem Dataset. Gibt Tabellen mit NDCG@k, Recall@k, MRR, Precision@k, Latenz
+und Kosten aus — gesamt, pro Sprache und als NDCG-Matrix pro Query-Kind.
 
-Fairness-Mechaniken: NDCG nutzt den vollen gelabelten Kandidaten-Pool als
-Ideal (nicht nur die zurückgegebene Liste), und Chunks, die Azure Semantic
-außerhalb des Pools findet, werden per LLM on-the-fly nachgelabelt
-(Cache: `evaluation/dataset/judge_cache.jsonl`).
+Fairness-Mechaniken:
+
+- **Echter Request-Scope**: `course_id`/`module_id` aus dem Dataset-Record
+  werden explizit an index-suchende Backends (Azure Semantic) übergeben — der
+  Scope wird nie aus Chunk-Metadaten geraten.
+- **Union-Pool-Scoring (TREC-Pooling)**: Pro Query laufen erst ALLE Systeme;
+  ungelabelte zurückgegebene Chunks werden per LLM nachgelabelt (Cache:
+  `evaluation/dataset/judge_cache.jsonl`); danach werden alle Systeme gegen
+  denselben Union-Kandidaten-Pool bewertet — NDCG-/Recall-Nenner sind identisch.
+- **Marginale Semantic-Latenz**: Azure Semantic repräsentiert das integrierte
+  Setup (Semantic-Ranking im Retrieval-Call selbst). Der Benchmark misst
+  zusätzlich eine plain Hybrid-Suche pro Query und weist die Differenz aus —
+  produktiv ersetzt der semantische Call das Retrieval, er kommt nicht dazu.
 
 ```bash
 # Standard-Benchmark (top-5, 3 Runs pro Query für stabile Latenz)
 uv run python -m evaluation.benchmark
 
 # Pool-Größen-Experiment: Lohnt retrieve_top_n=30 statt 10?
-# (Dataset muss mit --n-chunks >= 30 erstellt sein)
+# (Dataset muss mit --n-chunks >= 30 erstellt sein; Azure Semantic sucht
+# ohnehin im ganzen Index — Pool-Größen betreffen nur die lokalen Reranker)
 uv run python -m evaluation.benchmark --pool-sizes 10,30
 
 # Ohne On-the-fly-Judging (out-of-pool Chunks zählen dann als 0)
 uv run python -m evaluation.benchmark --no-judge-unlabeled
+
+# Ohne Plain-Search-Baseline (spart Search-Calls, keine marginale Latenz-Angabe)
+uv run python -m evaluation.benchmark --no-latency-baseline
 
 # Ergebnisse als JSON speichern
 uv run python -m evaluation.benchmark --output results.json
@@ -153,13 +196,18 @@ Benchmarking 5 reranker(s) on 51 queries (3 runs each)
 Languages: de=33, en=18
 
 --- Overall ---
-Reranker                      NDCG@5     MRR        P@5        Latenz p50  Latenz p95  Kosten/1k €
-----------------------------  ---------- ---------- ---------- ------------ ------------ -------------
-no_rerank (baseline)          0.412      0.531      0.380      0.1ms        0.2ms        0.0000
-BGE (bge-reranker-v2-m3)      0.631      0.724      0.560      68.3ms       142.1ms      0.0000
-BGE (bge-reranker-base)       0.598      0.689      0.531      31.2ms       67.4ms       0.0000
-azure_semantic                0.644      0.741      0.572      210.5ms      380.2ms      0.0120
-llm                           0.587      0.678      0.521      1840.2ms     3120.4ms     0.0480
+Reranker                      NDCG@5     Recall@5   MRR      P@5      Latenz p50  Latenz p95  Kosten/1k €
+----------------------------  ---------  ---------- -------- -------- ----------- ----------- -----------
+no_rerank (baseline)          0.412      0.365      0.531    0.380    0.1ms       0.2ms       0.0000
+BGE (bge-reranker-v2-m3)      0.631      0.512      0.724    0.560    68.3ms      142.1ms     0.0000
+BGE (bge-reranker-base)       0.598      0.488      0.689    0.531    31.2ms      67.4ms      0.0000
+Azure Semantic                0.644      0.590      0.741    0.572    210.5ms     380.2ms     0.0900
+LLM Reranker                  0.587      0.470      0.678    0.521    1840.2ms    3120.4ms    0.0480
+
+Azure Semantic — Latenz-Einordnung (integriertes Setup):
+  volle semantische Suche p50: 210 ms
+  plain Hybrid-Suche p50 (gleicher Scope): 95 ms
+  → marginale Semantic-Latenz ≈ 115 ms (der semantische Call ERSETZT das Retrieval, er kommt nicht dazu)
 ```
 
 ---
@@ -173,9 +221,9 @@ llm                           0.587      0.678      0.521      1840.2ms     3120
 uv run python scripts/vectordb/check_index.py
 
 # Eingebetteten Text pro Modul anzeigen (Extraktionsqualität prüfen)
-uv run python scripts/vectordb/inspect_index_content.py --index aitestlaurien
-uv run python scripts/vectordb/inspect_index_content.py --index aitestlaurien --course-ids 387 344
-uv run python scripts/vectordb/inspect_index_content.py --index aitestlaurien --short-only  # nur kurze/leere Chunks
+uv run python scripts/vectordb/inspect_index_content.py --index kic-content
+uv run python scripts/vectordb/inspect_index_content.py --index kic-content --course-ids 387 344
+uv run python scripts/vectordb/inspect_index_content.py --index kic-content --short-only  # nur kurze/leere Chunks
 ```
 
 ### Zwei Indizes vergleichen
@@ -187,7 +235,7 @@ Zeigt Unterschiede zwischen zwei Indizes (Dokumentanzahl, Sources, fehlende Eint
 uv run python scripts/vectordb/compare_indexes.py
 
 # Andere Indizes
-uv run python scripts/vectordb/compare_indexes.py --a aichat --b aitestlaurien
+uv run python scripts/vectordb/compare_indexes.py --a aichat --b kic-content
 ```
 
 ### Moodle-Abdeckung prüfen
@@ -196,10 +244,10 @@ Vergleicht Moodle-Module mit dem Index — zeigt welche Module fehlen oder leer 
 
 ```bash
 # Alle Kurse im Index prüfen
-uv run python scripts/loaders/audit_moodle_coverage.py --index aitestlaurien
+uv run python scripts/loaders/audit_moodle_coverage.py --index kic-content
 
 # Bestimmte Kurse prüfen
-uv run python scripts/loaders/audit_moodle_coverage.py --index aitestlaurien --course-ids 387 344 406
+uv run python scripts/loaders/audit_moodle_coverage.py --index kic-content --course-ids 387 344 406
 ```
 
 ### Index-Schema aktualisieren
@@ -228,7 +276,7 @@ uv run python scripts/vectordb/reset_index.py --all
 Kleinen Test-Index mit wenigen Kursen befüllen — ohne Produktions-Index anzufassen.
 
 ```bash
-# Standard: 3 Moodle-Kurse in 'aitestlaurien'
+# Standard: 3 Moodle-Kurse in 'kic-content'
 uv run python scripts/vectordb/ingest_test_index.py
 
 # Mehr Kurse
