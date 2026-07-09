@@ -169,6 +169,20 @@ def convert_selected_index_to_id(course_or_module_index: int) -> dict:
     return response
 
 
+def _tree_default_index() -> int:
+    """Reflects the tree's own last known selection back as its `index`.
+
+    sac.tree() treats `index` as authoritative on every rerun, not just on
+    first mount — passing a hardcoded 0 would snap the selection back to
+    "Alle Inhalte aus Drupal" on any unrelated rerun (e.g. a different
+    sidebar button), even though the user never touched the tree.
+    """
+    value = st.session_state.get("course_selection", 0)
+    if isinstance(value, list):
+        return value[0] if value else 0
+    return value
+
+
 def select_course_or_module():
     # st.session_state.course_selection is a list with a single item
     # everytime the user collapses the tree :(
@@ -196,6 +210,7 @@ def reset_history():
     st.session_state.thread_id = None
     st.session_state.last_activity = None
     st.session_state._auto_restored = False
+    st.session_state.start_socratic = False
     st.experimental_set_query_params()
 
 
@@ -238,6 +253,30 @@ def submit_feedback(feedback: dict, trace_id: str):
         raise ValueError(f"Error: {response}")
 
 
+def _frontend_password_gate() -> None:
+    """Blocks the page behind a single shared password if FRONTEND_PASSWORD is set.
+
+    Skipped entirely when unconfigured (local dev). No Azure permissions needed —
+    unlike App Service Easy Auth, this doesn't require an Azure AD app registration.
+    """
+    if not hasattr(env, "FRONTEND_PASSWORD"):
+        return
+    if st.session_state.get("_authenticated"):
+        return
+
+    st.title("🔒 KI-Campus Assistant")
+    password = st.text_input("Passwort", type="password")
+    if st.button("Anmelden"):
+        if password == env.FRONTEND_PASSWORD:
+            st.session_state._authenticated = True
+            st.rerun()
+        else:
+            st.error("Falsches Passwort.")
+    st.stop()
+
+
+_frontend_password_gate()
+
 # Starting Bot ---------
 st.title("KI-Campus Assistant")
 
@@ -261,28 +300,12 @@ if "_auto_restored" not in st.session_state:
 
 
 with st.sidebar:
-    _model_options = list(Models)
-    st.session_state["llm_select"] = st.selectbox(
-        "LLM Modelauswahl",
-        options=_model_options,
-        index=_model_options.index(Models.GEMMA4_31B),
-        on_change=reset_history,
-        format_func=lambda model: model.value,
-        placeholder=Models.GEMMA4_31B.name,
-    )
-    st.divider()
-
-    sac.tree(
-        items=create_courses_modules_tree(),
-        index=0,
-        key="course_selection",
-        size="sm",
-        show_line=False,
-        checkbox=False,
-        return_index=True,
-        on_change=select_course_or_module,
-        label="Make a selection to talk to a course - or module",
-    )
+    st.caption("🎓 Sokratischer Lernmodus")
+    if st.session_state.get("start_socratic"):
+        st.info("Aktiviert für die nächste Nachricht.")
+    if st.button("Lernmodus starten", key="start_socratic_btn"):
+        st.session_state.start_socratic = True
+        st.rerun()
 
     st.divider()
     st.caption("🧪 Moodle-Simulation")
@@ -300,7 +323,30 @@ with st.sidebar:
         st.rerun()
     if st.button("Neue Session", key="new_session_btn"):
         reset_history()
-        st.rerun()
+
+    st.divider()
+    _model_options = list(Models)
+    st.session_state["llm_select"] = st.selectbox(
+        "LLM Modelauswahl",
+        options=_model_options,
+        index=_model_options.index(Models.GEMMA4_31B),
+        on_change=reset_history,
+        format_func=lambda model: model.value,
+        placeholder=Models.GEMMA4_31B.name,
+    )
+    st.divider()
+
+    sac.tree(
+        items=create_courses_modules_tree(),
+        index=_tree_default_index(),
+        key="course_selection",
+        size="sm",
+        show_line=False,
+        checkbox=False,
+        return_index=True,
+        on_change=select_course_or_module,
+        label="Make a selection to talk to a course - or module",
+    )
 
 # Initialize assistant
 if "api_client" not in st.session_state or not st.session_state.api_client:
@@ -352,6 +398,9 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
         "course_id": st.session_state.course_id if hasattr(st.session_state, "course_id") else None,
         "module_id": st.session_state.module_id if hasattr(st.session_state, "module_id") else None,
         "thread_id": st.session_state.thread_id,
+        # pop: the trigger should only fire for this one message, the server
+        # persists socratic_mode via the checkpointer for subsequent turns.
+        "start_socratic": st.session_state.pop("start_socratic", False),
     }
 
     # Stream tokens from backend and render progressively.

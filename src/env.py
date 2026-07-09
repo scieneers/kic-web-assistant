@@ -24,6 +24,12 @@ class EnvHelper(BaseModel):
     # Base URL for the FastAPI service (used by Streamlit when calling via HTTP)
     REST_API_URL: str = "http://localhost:8000"
 
+    # Optional shared-password gate for the Streamlit frontend (see frontend.py).
+    # Left "UNSET" locally so dev doesn't need it; set it in the deployed
+    # environment to block anonymous access without needing an Azure AD app
+    # registration (Easy Auth) or any elevated Azure permissions.
+    FRONTEND_PASSWORD: str = "UNSET"
+
     AZURE_OPENAI_URL: str = "UNSET"
     AZURE_OPENAI_API_KEY: str = "UNSET"
 
@@ -56,6 +62,11 @@ class EnvHelper(BaseModel):
     # protected courses, since the run would then "successfully" see less than
     # what's actually indexed).
     DRUPAL_AUTH_REQUIRED: bool = False
+
+    # Enables the socratic learning subgraph. Off by default — the entry
+    # trigger (start_socratic request flag / trigger phrases) is a no-op
+    # until this is explicitly set.
+    ENABLE_SOCRATIC: bool = False
 
     AZURE_SEARCH_ENDPOINT: str = "UNSET"
     AZURE_SEARCH_INDEX: str = "aichat"

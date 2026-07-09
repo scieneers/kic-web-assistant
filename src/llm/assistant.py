@@ -171,23 +171,25 @@ class KICampusAssistant:
 
     @observe()
     def _get_or_create_state(
-        self, 
-        query: str, 
+        self,
+        query: str,
         model: Models,
         thread_id: str | None,
         course_id: int | None = None,
         module_id: int | None = None,
+        start_socratic: bool = False,
     ) -> tuple[GraphState, dict, str]:
         """
         Lädt bestehenden State aus Checkpoint oder erstellt neuen Initial State.
-        
+
         Args:
             query: User's question
             model: LLM model to use
             thread_id: Optional thread ID for persistent conversations
             course_id: Optional course ID filter
             module_id: Optional module ID filter
-        
+            start_socratic: Explicit request-level trigger to enter the socratic mode
+
         Returns:
             tuple: (state_update, config, thread_id)
         """
@@ -220,6 +222,7 @@ class KICampusAssistant:
                         "course_id": course_id,
                         "module_id": module_id,
                         "thread_id": thread_id,
+                        "start_socratic": start_socratic,
                     },
                     # Reset per-turn intermediate artifacts so stale checkpoint
                     # values never bleed into the new graph run.
@@ -246,6 +249,7 @@ class KICampusAssistant:
                 "course_id": course_id,
                 "module_id": module_id,
                 "thread_id": thread_id,
+                "start_socratic": start_socratic,
             },
             "system_config": self.system_config
         }
@@ -339,18 +343,25 @@ class KICampusAssistant:
             logger.warning("Langfuse trace enrichment failed", exc_info=True)
 
     @observe()
-    def chat(self, query: str, model: Models, thread_id: str | None = None) -> tuple[SerializableChatMessage, str]:
+    def chat(
+        self,
+        query: str,
+        model: Models,
+        thread_id: str | None = None,
+        start_socratic: bool = False,
+    ) -> tuple[SerializableChatMessage, str]:
         """
         Chat with general bot about drupal and functions of ki-campus.
         For frontend integrated in Drupal.
-        
+
         Args:
             query: User's question
             model: LLM model to use
             thread_id: Optional thread ID for persistent conversations
                 - If provided: Loads state from checkpoint
                 - If None: Creates new conversation with generated ID
-            
+            start_socratic: Explicit request-level trigger to enter the socratic mode
+
         Returns:
             tuple: (SerializableChatMessage with answer, thread_id)
         """
@@ -358,7 +369,8 @@ class KICampusAssistant:
         state, config, thread_id = self._get_or_create_state(
             query=query,
             model=model,
-            thread_id=thread_id
+            thread_id=thread_id,
+            start_socratic=start_socratic,
         )
 
         # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)
@@ -402,11 +414,12 @@ class KICampusAssistant:
         course_id: int | None = None,
         module_id: int | None = None,
         thread_id: str | None = None,
+        start_socratic: bool = False,
     ) -> tuple[SerializableChatMessage, str]:
         """
         Chat with the contents of a specific course and optionally submodule.
         For frontend hosted on Moodle.
-        
+
         Args:
             query: User's question
             model: LLM model to use
@@ -415,7 +428,8 @@ class KICampusAssistant:
             thread_id: Optional thread ID for persistent conversations
                 - If provided: Loads state from checkpoint
                 - If None: Creates new conversation with generated ID
-            
+            start_socratic: Explicit request-level trigger to enter the socratic mode
+
         Returns:
             tuple: (SerializableChatMessage with answer, thread_id)
         """
@@ -425,7 +439,8 @@ class KICampusAssistant:
             model=model,
             thread_id=thread_id,
             course_id=course_id,
-            module_id=module_id
+            module_id=module_id,
+            start_socratic=start_socratic,
         )
 
         # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)

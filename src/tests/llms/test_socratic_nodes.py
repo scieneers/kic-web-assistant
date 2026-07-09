@@ -169,16 +169,20 @@ class TestGenerateHintText:
 
 class TestGenerateReflectionText:
     def test_returns_non_empty_string(self):
-        result = generate_reflection_text()
+        result = generate_reflection_text(learning_objective="ML Grundlagen verstehen")
         assert isinstance(result, str)
         assert len(result) > 20
 
     def test_contains_positive_reinforcement(self):
-        result = generate_reflection_text()
+        result = generate_reflection_text(learning_objective="ML Grundlagen verstehen")
         assert "Ausgezeichnet" in result or "Lernmodus" in result
 
+    def test_mentions_learning_objective(self):
+        result = generate_reflection_text(learning_objective="ML Grundlagen verstehen")
+        assert "ML Grundlagen verstehen" in result
+
     def test_is_deterministic(self):
-        assert generate_reflection_text() == generate_reflection_text()
+        assert generate_reflection_text(learning_objective="X") == generate_reflection_text(learning_objective="X")
 
 
 class TestSocraticExplain:

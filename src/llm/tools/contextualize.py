@@ -126,8 +126,13 @@ def contextualize_and_route(state: GraphState) -> dict:
             }
     else:
         # Normal mode handling (no active socratic session)
-        # Check if user wants to start socratic mode (only if enabled)
-        if enable_socratic and response_clean in ["start socratic", "begin socratic", "enter socratic", "unterstütze mich beim lernen"]:
+        # Check if user wants to start socratic mode (only if enabled) — either via
+        # the explicit request-level flag (preferred, deterministic) or a trigger phrase.
+        start_via_param = state.get("runtime_config", {}).get("start_socratic", False)
+        if enable_socratic and (
+            start_via_param
+            or response_clean in ["start socratic", "begin socratic", "enter socratic", "unterstütze mich beim lernen"]
+        ):
             logger.debug("Socratic mode triggered by user command → mode=socratic, sub_mode=contract")
             _trace_routing(mode="socratic", socratic_mode="contract", socratic_entry=True)
             return {
