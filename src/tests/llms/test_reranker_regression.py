@@ -81,6 +81,7 @@ def _mean_ndcg(reranker, records: list[dict]) -> float:
 class TestBGERerankerAgainstRealModel:
     """No mocks: downloads/loads the real cross-encoder and scores real chunks."""
 
+    @pytest.mark.timeout(180)  # first run downloads the ~568 MB cross-encoder
     def test_ndcg_does_not_regress(self):
         records = _dataset_slice()
         from src.llm.objects.rerankers.bge_reranker import BGEReranker
@@ -100,6 +101,7 @@ class TestAzureSemanticRerankerAgainstRealIndex:
     the one path in the reranker suite that exercises a real backend end to
     end against a real index, not just mocked responses."""
 
+    @pytest.mark.timeout(90)  # 15 real round-trips to Azure AI Search
     def test_ndcg_does_not_regress(self):
         if env.AZURE_SEARCH_ENDPOINT == "UNSET":
             pytest.skip("AZURE_SEARCH_ENDPOINT not configured")

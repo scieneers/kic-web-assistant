@@ -7,6 +7,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
+from src.env import env
 from src.llm.objects.LLMs import Models
 from src.llm.objects.question_answerer import get_fallback_type
 from src.llm.state.models import GraphState, RerankerType
@@ -103,8 +104,8 @@ class KICampusAssistant:
         
         # In-memory persistence for the duration of the backend runtime.
         # No database persistence — conversations are lost on server restart.
-        # Bounded to 500 threads; oldest conversation is evicted when limit is exceeded.
-        self.checkpointer = BoundedMemorySaver(max_threads=500)
+        # Bounded via MAX_CHAT_THREADS; oldest conversation is evicted when limit is exceeded.
+        self.checkpointer = BoundedMemorySaver(max_threads=env.MAX_CHAT_THREADS)
 
         # Compile main router graph
         self.graph = self._build_main_graph()
@@ -208,8 +209,8 @@ class KICampusAssistant:
                 # Lade bestehende chat_history (OHNE neue User-Message, die kommt später)
                 existing_history = checkpoint.values.get("chat_history", [])
 
-                # Limitiere Chat-History auf letzte 6 Nachrichten
-                limited_existing_history = self.limit_chat_history(existing_history, limit=6)
+                # Limitiere Chat-History auf letzte N Nachrichten
+                limited_existing_history = self.limit_chat_history(existing_history, limit=env.CHAT_HISTORY_LIMIT)
 
                 state_update: GraphState = {
                     "user_query": query,

@@ -57,11 +57,20 @@ class Drupal:
             and hasattr(env, "DRUPAL_USERNAME")
             and hasattr(env, "DRUPAL_PASSWORD")
         )
+        authenticated = False
         if credentials_set:
             oauth_token = self.get_oauth_token("https://ki-campus.org")
             if oauth_token:
                 self.header["Authorization"] = f"Bearer {oauth_token}"
-        else:
+                authenticated = True
+
+        if not authenticated:
+            if env.DRUPAL_AUTH_REQUIRED:
+                raise RuntimeError(
+                    "Drupal: DRUPAL_AUTH_REQUIRED is set but no valid credentials/token "
+                    "are available — refusing to run unauthenticated, since that would "
+                    "only see public content and could stale-delete protected courses."
+                )
             self.logger.info("Drupal: no credentials configured, running without authentication")
 
     def _load_important_courses(self) -> set[int]:

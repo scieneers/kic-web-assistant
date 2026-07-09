@@ -51,6 +51,11 @@ class EnvHelper(BaseModel):
     DRUPAL_USERNAME: str = "UNSET"
     DRUPAL_PASSWORD: str = "UNSET"
     DRUPAL_GRANT_TYPE: str = "password"
+    # If True, missing/invalid Drupal credentials abort the ingest run instead of
+    # silently falling back to public-only content (which risks stale-deleting
+    # protected courses, since the run would then "successfully" see less than
+    # what's actually indexed).
+    DRUPAL_AUTH_REQUIRED: bool = False
 
     AZURE_SEARCH_ENDPOINT: str = "UNSET"
     AZURE_SEARCH_INDEX: str = "aichat"
@@ -74,6 +79,12 @@ class EnvHelper(BaseModel):
     DATA_SOURCE_MOOCHUP_MOODLE_URL: str = "UNSET"
 
     VIMEO_PAT: str = "UNSET"
+
+    # Chat runtime tuning — previously hardcoded constants in assistant.py / LLMs.py.
+    MAX_CHAT_THREADS: int = 500  # BoundedMemorySaver: oldest thread evicted beyond this
+    CHAT_HISTORY_LIMIT: int = 6  # messages kept per turn when rebuilding graph state
+    GWDG_TIMEOUT_SECONDS: int = 7  # fallback to Azure if GWDG hasn't responded by then
+    GWDG_UNAVAILABLE_RESET_SECONDS: int = 60 * 5  # window before retrying GWDG again
 
     @field_validator("ENVIRONMENT")
     def validate_ENVIRONMENT(cls, value: str) -> str:

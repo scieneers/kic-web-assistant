@@ -20,8 +20,8 @@ from src.llm.streaming import CitationStreamFilter, citation_resolver_var, strea
 
 logger = logging.getLogger(__name__)
 
-TIME_TO_WAIT_FOR_GWDG = 7  # in seconds
-TIME_TO_RESET_UNAVAILABLE_STATUS = 60 * 5  # in seconds
+TIME_TO_WAIT_FOR_GWDG = env.GWDG_TIMEOUT_SECONDS
+TIME_TO_RESET_UNAVAILABLE_STATUS = env.GWDG_UNAVAILABLE_RESET_SECONDS
 
 
 def _log_thread_exception(args: threading.ExceptHookArgs) -> None:
