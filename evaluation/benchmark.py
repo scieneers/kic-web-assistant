@@ -141,18 +141,30 @@ def _nodes_from_chunks(chunks: list[dict]) -> List[SerializableTextNode]:
     ]
 
 
-def _build_rerankers(top_n: int) -> list[BaseReranker]:
-    """Instantiate all available rerankers. Stubs are skipped with a warning."""
+RERANKER_KEYS = ("no_rerank", "llm", "azure_semantic", "bge_large", "bge_small")
+
+
+def _build_rerankers(top_n: int, include: list[str] | None = None) -> list[BaseReranker]:
+    """Instantiate the selected rerankers (all by default). Excluded ones are
+    never constructed (saves e.g. the BGE model load). The LLM reranker runs in
+    strict mode: an LLM failure raises and is counted as an error instead of
+    silently degrading to passthrough and polluting its metrics."""
     from src.llm.objects.rerankers.passthrough_reranker import PassthroughReranker
     candidates = [
         ("no_rerank", PassthroughReranker),
-        ("llm", LLMReranker),
+        ("llm", lambda top_n: LLMReranker(top_n=top_n, strict=True)),
     ]
     from src.llm.objects.rerankers.azure_semantic_reranker import AzureSemanticReranker
     candidates.append(("azure_semantic", AzureSemanticReranker))
     from src.llm.objects.rerankers.bge_reranker import BGEReranker, BGE_LARGE_MODEL, BGE_SMALL_MODEL
     candidates.append(("bge_large", lambda top_n: BGEReranker(top_n=top_n, model_name=BGE_LARGE_MODEL)))
     candidates.append(("bge_small", lambda top_n: BGEReranker(top_n=top_n, model_name=BGE_SMALL_MODEL)))
+
+    if include is not None:
+        unknown = set(include) - set(RERANKER_KEYS)
+        if unknown:
+            raise ValueError(f"Unknown reranker key(s): {sorted(unknown)}. Choose from: {RERANKER_KEYS}")
+        candidates = [(name, factory) for name, factory in candidates if name in include]
 
     active = []
     for name, factory in candidates:
@@ -196,13 +208,19 @@ def run_benchmark(
     pool_sizes: list[int] | None = None,
     judge_unlabeled: bool = True,
     latency_baseline: bool = True,
+    rerankers_filter: list[str] | None = None,
+    cooldown: float = 0.0,
 ) -> list[dict]:
     """model drives the LLM RERANKER (set it to the production model for a
     production-near comparison); judge_model drives the on-the-fly labeling and
     must stay consistent with the dataset-creation judge — do not couple the
-    two, or a weaker reranker model would also degrade the ground truth."""
+    two, or a weaker reranker model would also degrade the ground truth.
+
+    cooldown: seconds to sleep after each LLM-reranker call — spaces out the
+    calls so a rate-limited API (GWDG) is not hammered into 429/120s-retry
+    loops that dwarf the sleep itself."""
     records = _load_dataset(dataset_path)
-    rerankers = _build_rerankers(top_n)
+    rerankers = _build_rerankers(top_n, include=rerankers_filter)
 
     if not rerankers:
         raise RuntimeError("No rerankers available to benchmark.")
@@ -286,6 +304,9 @@ def run_benchmark(
                         logger.warning("%s failed on %r: %s", reranker.name, query[:60], e)
                         stats[key]["errors"] += 1
                         break
+                    finally:
+                        if cooldown > 0 and reranker.name == "LLM Reranker":
+                            time.sleep(cooldown)
                     stats[key]["latencies"].append(result.latency_ms)
                     if run == 0:
                         returned[reranker.name] = result
@@ -461,7 +482,15 @@ def _print_kind_matrix(results: list[dict], k: int, kinds: list[str], label: str
 
 
 if __name__ == "__main__":
+    import os
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    # Offline evaluation: disable Langfuse tracing (same mechanism as the test
+    # suite). The Langfuse LlamaIndex handler crashes noisily on retried LLM
+    # calls and the traces are of no use for a benchmark run.
+    os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+    os.environ["LANGFUSE_SECRET_KEY"] = ""
 
     parser = argparse.ArgumentParser(description="Reranker benchmark")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
@@ -486,10 +515,22 @@ if __name__ == "__main__":
     parser.add_argument("--judge-model", type=str, default="Azure-Fallback", choices=[m_.value for m_ in Models],
                         help="LLM model for on-the-fly judging of unlabeled chunks. Keep "
                              "consistent with the dataset-creation judge (default: Azure-Fallback)")
+    parser.add_argument(
+        "--rerankers", type=str, default=None,
+        help=f"Comma-separated subset to benchmark, e.g. 'no_rerank,azure_semantic,bge_large'. "
+             f"Available: {','.join(RERANKER_KEYS)}. Default: all. Note: for the FINAL decision "
+             "run all systems together — the union ideal is only comparable within one run.",
+    )
+    parser.add_argument(
+        "--cooldown", type=float, default=0.0,
+        help="Seconds to sleep after each LLM-reranker call (rate-limit friendliness "
+             "for GWDG-hosted models, e.g. 2).",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Save results as JSON")
     args = parser.parse_args()
 
     pool_sizes = [int(p) for p in args.pool_sizes.split(",")] if args.pool_sizes else None
+    rerankers_filter = [r.strip() for r in args.rerankers.split(",") if r.strip()] if args.rerankers else None
 
     results = run_benchmark(
         dataset_path=args.dataset,
@@ -500,6 +541,8 @@ if __name__ == "__main__":
         pool_sizes=pool_sizes,
         judge_unlabeled=not args.no_judge_unlabeled,
         latency_baseline=not args.no_latency_baseline,
+        rerankers_filter=rerankers_filter,
+        cooldown=args.cooldown,
     )
 
     if args.output:

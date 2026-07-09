@@ -64,6 +64,12 @@ uv run pytest -m "not integration" -v
 uv run pytest src/tests/llms/test_no_answer_logic.py -v
 uv run pytest src/tests/llms/test_router_classification_integration.py -v
 uv run pytest src/tests/llms/test_language_detector_integration.py -v
+
+# Reranker-Regressionstest gegen echtes Modell (BGE) + echten Index (Azure Semantic)
+# Ergänzt test_reranker_node.py (nur Mocks) und benchmark.py (manueller Vergleich,
+# kein Gate) um einen automatisierten NDCG@5-Mindestwert auf einem festen
+# Datensatz-Ausschnitt. Setzt evaluation/dataset/queries.jsonl voraus (s. u.).
+uv run pytest src/tests/llms/test_reranker_regression.py -v -m integration
 ```
 
 ---
@@ -167,26 +173,37 @@ Fairness-Mechaniken:
   zusätzlich eine plain Hybrid-Suche pro Query und weist die Differenz aus —
   produktiv ersetzt der semantische Call das Retrieval, er kommt nicht dazu.
 
+**Empfohlener Entscheidungs-Lauf** (produktionsnah, rate-limit-freundlich):
+
 ```bash
-# Standard-Benchmark (top-5, 3 Runs pro Query für stabile Latenz)
+uv run python -m evaluation.benchmark --pool-sizes 10,30 --runs 1 --cooldown 2 \
+  --model Gemma4 --judge-model Azure-Fallback --output results_fair.json
+```
+
+`--runs 1` reicht: Bei ~70 Queries gibt es pro Backend ohnehin 70 Latenz-Samples
+für p50/p95 — 3 Runs verdreifachen nur die GWDG-Last. `--cooldown 2` legt 2 s
+Pause hinter jeden LLM-Reranker-Call, damit das GWDG-Rate-Limit nicht in
+429/120s-Retry-Schleifen läuft. Der LLM-Reranker läuft im Benchmark **strict**:
+Ein endgültig fehlgeschlagener LLM-Call zählt als Fehler (Spalte `errors`),
+statt still als Passthrough-Ergebnis in seine Metriken einzugehen (in
+Produktion bleibt der Passthrough-Fallback aktiv). Langfuse-Tracing ist im
+Benchmark deaktiviert.
+
+Weitere Varianten:
+
+```bash
+# Standard-Benchmark (alle Reranker, voller Pool)
 uv run python -m evaluation.benchmark
 
-# Pool-Größen-Experiment: Lohnt retrieve_top_n=30 statt 10?
-# (Dataset muss mit --n-chunks >= 30 erstellt sein; Azure Semantic sucht
-# ohnehin im ganzen Index — Pool-Größen betreffen nur die lokalen Reranker)
-uv run python -m evaluation.benchmark --pool-sizes 10,30
+# Nur eine Teilmenge (schnelle Iteration — für die finale Entscheidung alle
+# Systeme in EINEM Lauf vergleichen, das Union-Ideal gilt nur innerhalb eines Laufs)
+uv run python -m evaluation.benchmark --rerankers no_rerank,azure_semantic,bge_large
 
 # Ohne On-the-fly-Judging (out-of-pool Chunks zählen dann als 0)
 uv run python -m evaluation.benchmark --no-judge-unlabeled
 
 # Ohne Plain-Search-Baseline (spart Search-Calls, keine marginale Latenz-Angabe)
 uv run python -m evaluation.benchmark --no-latency-baseline
-
-# Ergebnisse als JSON speichern
-uv run python -m evaluation.benchmark --output results.json
-
-# Schneller: nur 1 Run pro Query
-uv run python -m evaluation.benchmark --runs 1
 ```
 
 **Beispielausgabe:**
