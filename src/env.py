@@ -64,7 +64,7 @@ class EnvHelper(BaseModel):
     # assistant answers with the no-answer fallback instead of a weak answer.
     # (Azure reranker_score is 0-4; Microsofts guidance: below ~2.0 is weak →
     # normalized starting point ~0.5, calibrate with the negative queries.)
-    RERANKER_TYPE: str = "llm"
+    RERANKER_TYPE: str = "azure_semantic"
     MIN_RERANKER_SCORE: float = 0.0
 
     DATA_SOURCE_MOODLE_URL: str = "UNSET"
