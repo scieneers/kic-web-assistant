@@ -470,6 +470,42 @@ class TestHybridSearchSemanticWindow:
 
 
 # ---------------------------------------------------------------------------
+# LLM reranker failure handling: prod falls back, benchmark (strict) raises
+# ---------------------------------------------------------------------------
+
+class TestRerankerErrorHandling:
+    def _inner_reranker(self):
+        from src.llm.objects.reranker import Reranker
+        instance = object.__new__(Reranker)
+        instance.llm = MagicMock()
+        instance.top_n = 2
+        instance.max_chars_per_node = 999999
+        instance.choice_batch_size = 5
+        return instance
+
+    def _failing_llm_rerank(self):
+        mock = MagicMock()
+        mock.return_value.postprocess_nodes.side_effect = RuntimeError("429 rate limit")
+        return mock
+
+    def test_default_falls_back_to_original_order(self):
+        """Production behavior: a degraded answer beats a crashed request."""
+        reranker = self._inner_reranker()
+        nodes = [_node("a").to_text_node(), _node("b").to_text_node(), _node("c").to_text_node()]
+        with patch("src.llm.objects.reranker.LLMRerank", self._failing_llm_rerank()):
+            result = reranker.rerank("q", nodes, model=Models.GEMMA4_31B)
+        assert [n.text for n in result] == ["a", "b"]  # top_n passthrough
+
+    def test_strict_mode_raises(self):
+        """Benchmark behavior: a masked failure would score as fake passthrough."""
+        reranker = self._inner_reranker()
+        nodes = [_node("a").to_text_node(), _node("b").to_text_node()]
+        with patch("src.llm.objects.reranker.LLMRerank", self._failing_llm_rerank()):
+            with pytest.raises(RuntimeError, match="429"):
+                reranker.rerank("q", nodes, model=Models.GEMMA4_31B, raise_on_error=True)
+
+
+# ---------------------------------------------------------------------------
 # Retriever result mapping: semantic reranker_score wins over RRF score
 # ---------------------------------------------------------------------------
 

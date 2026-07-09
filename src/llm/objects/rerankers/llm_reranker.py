@@ -26,10 +26,16 @@ def _estimate_cost(query: str, nodes: List[SerializableTextNode], batch_size: in
 
 
 class LLMReranker(BaseReranker):
-    """LLM-based reranker — current production default. Wraps LlamaIndex LLMRerank."""
+    """LLM-based reranker — current production default. Wraps LlamaIndex LLMRerank.
 
-    def __init__(self, top_n: int, min_score: float = 0.0):
+    strict=True makes LLM failures raise instead of silently falling back to
+    the original order — required in the benchmark, where a masked failure
+    would score as a (fake) passthrough result. Production stays non-strict.
+    """
+
+    def __init__(self, top_n: int, min_score: float = 0.0, strict: bool = False):
         super().__init__(top_n, min_score)
+        self._strict = strict
         self._inner = Reranker(top_n=top_n)
 
     @property
@@ -63,7 +69,7 @@ class LLMReranker(BaseReranker):
         estimated_cost = _estimate_cost(query, nodes, self._inner.choice_batch_size, model)
 
         t0 = time.perf_counter()
-        reranked = self._inner.rerank(query=query, nodes=text_nodes, model=model)
+        reranked = self._inner.rerank(query=query, nodes=text_nodes, model=model, raise_on_error=self._strict)
         latency_ms = (time.perf_counter() - t0) * 1000
 
         reranked, dropped = self.apply_min_score(reranked)
