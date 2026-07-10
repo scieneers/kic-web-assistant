@@ -8,6 +8,7 @@ from langfuse.decorators import langfuse_context, observe
 
 from src.llm.state.models import GraphState
 from src.llm.state.socratic_routing import reset_socratic_state
+from src.llm.state.socratic_v2_routing import V2_EXIT_KEYWORDS, V2_EXIT_MESSAGE, reset_socratic_v2_state
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,8 @@ def contextualize_and_route(state: GraphState) -> dict:
     chat_history = state["chat_history"]
     socratic_mode = state.get("socratic_mode", None)
     enable_socratic = state.get("system_config", {}).get("enable_socratic", False)
+    socratic_v2_phase = state.get("socratic_v2_phase", None)
+    enable_socratic_v2 = state.get("system_config", {}).get("enable_socratic_v2", False)
     # Cleaned user response for entry/exit intent (socratic mode)
     response_clean = user_query.lower().strip()
 
@@ -124,8 +127,62 @@ def contextualize_and_route(state: GraphState) -> dict:
                 "mode": mode,
                 "contextualized_query": contextualized_query,
             }
+    elif socratic_v2_phase is not None and enable_socratic_v2:
+        # Socratic v2 session is active — deterministic keyword exit works as an
+        # escape hatch; softer exit intents ("sag mir einfach die Antwort") are
+        # handled by the v2 policy inside the core node itself.
+        if response_clean in V2_EXIT_KEYWORDS:
+            logger.debug("Socratic v2 exit keyword detected — resetting v2 state → mode=exit_complete")
+            _trace_routing(mode="exit_complete", socratic_v2_exit=True)
+            return {
+                **reset_socratic_v2_state(),
+                "mode": "exit_complete",
+                "answer": V2_EXIT_MESSAGE,
+            }
+
+        logger.debug("Socratic v2 continuing: phase=%s", socratic_v2_phase)
+
+        # Only the core loop retrieves course material and needs a
+        # retrieval-optimized query; opening/consolidation don't.
+        if socratic_v2_phase == "core":
+            objective = state.get("v2_session_goal") or "; ".join(state.get("v2_learning_objectives") or [])
+            contextualized_query = contextualizer.contextualize_socratic(
+                query=user_query,
+                chat_history=chat_history,
+                model=model,
+                learning_objective=objective,
+            )
+            logger.debug(
+                "Socratic v2 contextualized_query=%r", contextualized_query[:80] if contextualized_query else None
+            )
+        else:
+            contextualized_query = None
+
+        _trace_routing(
+            mode="socratic_v2",
+            socratic_v2_phase=socratic_v2_phase,
+            contextualized_query=contextualized_query,
+        )
+        return {
+            "mode": "socratic_v2",
+            "contextualized_query": contextualized_query,
+        }
     else:
         # Normal mode handling (no active socratic session)
+        # Check if user wants to start the v2 learning mode first — explicit
+        # request-level flag (Streamlit button) or trigger phrase.
+        start_v2_via_param = state.get("runtime_config", {}).get("start_socratic_v2", False)
+        if enable_socratic_v2 and (
+            start_v2_via_param
+            or response_clean in ["starte lernmodus v2", "start socratic v2"]
+        ):
+            logger.debug("Socratic v2 triggered by user command → mode=socratic_v2, phase=opening")
+            _trace_routing(mode="socratic_v2", socratic_v2_phase="opening", socratic_v2_entry=True)
+            return {
+                "mode": "socratic_v2",
+                "socratic_v2_phase": "opening",
+            }
+
         # Check if user wants to start socratic mode (only if enabled) — either via
         # the explicit request-level flag (preferred, deterministic) or a trigger phrase.
         start_via_param = state.get("runtime_config", {}).get("start_socratic", False)

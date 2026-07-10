@@ -4,8 +4,12 @@ from llama_index.core.schema import TextNode
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.api.models.serializable_text_node import SerializableTextNode
 
-Scenario = Literal["no_vectordb", "simple_hop", "socratic", "summarize", "exit_complete"]
+Scenario = Literal["no_vectordb", "simple_hop", "socratic", "socratic_v2", "summarize", "exit_complete"]
 SocraticMode = Literal["contract", "diagnose", "core"]
+# Socratic v2 ("Lernmodus v2") phases: opening (load content, extract
+# objectives, welcome) → core (move-policy loop) → consolidation (learner
+# summarizes, session closes). See src/llm/graphs/socratic_v2.py.
+SocraticV2Phase = Literal["opening", "core", "consolidation"]
 RerankerType = Literal["llm", "azure_semantic", "bge"]
 # "core" routes to "hinting", "reflection", "explain" internally
 
@@ -41,6 +45,19 @@ class GraphState(TypedDict, total=False):
     #core
     attempt_count: int  # Total number of attempts student made at current question/concept
     number_given_hints: int  # Total number of hints given so far (for hint graduation)
+
+    # socratic v2 ("Lernmodus v2") artifacts — session-scoped, live only in the
+    # in-memory checkpoint. Independent of the v1 fields above so both variants
+    # can be compared side by side without touching each other.
+    socratic_v2_phase: Optional[SocraticV2Phase]
+    v2_learning_objectives: Optional[List[str]]  # extracted from module content at opening
+    v2_key_concepts: Optional[List[str]]  # key concepts of the module, extracted at opening
+    v2_session_goal: Optional[str]  # goal negotiated with the learner during the session
+    v2_learner_model: Optional[Dict[str, Any]]  # {"konzepte": {name: status}, "missverstaendnisse": [...], "affekt": str}
+    v2_target_concept: Optional[str]  # concept the current core exchange focuses on
+    v2_hint_count: int  # hints given for the CURRENT target concept (2 → forced micro-explain)
+    v2_question_streak: int  # consecutive question moves without giving anything back (3 → forced hint)
+    v2_scope_title: Optional[str]  # module/course display name for tutor messages
 
     # output
     answer: Optional[str]

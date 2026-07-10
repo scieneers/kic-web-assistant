@@ -211,6 +211,7 @@ def reset_history():
     st.session_state.last_activity = None
     st.session_state._auto_restored = False
     st.session_state.start_socratic = False
+    st.session_state.start_socratic_v2 = False
     st.experimental_set_query_params()
 
 
@@ -302,9 +303,16 @@ if "_auto_restored" not in st.session_state:
 with st.sidebar:
     st.caption("🎓 Sokratischer Lernmodus")
     if st.session_state.get("start_socratic"):
-        st.info("Aktiviert für die nächste Nachricht.")
-    if st.button("Lernmodus starten", key="start_socratic_btn"):
+        st.info("v1 aktiviert für die nächste Nachricht.")
+    if st.session_state.get("start_socratic_v2"):
+        st.info("v2 aktiviert für die nächste Nachricht.")
+    if st.button("Lernmodus starten (v1)", key="start_socratic_btn"):
         st.session_state.start_socratic = True
+        st.session_state.start_socratic_v2 = False
+        st.rerun()
+    if st.button("✨ Lernmodus starten (v2)", key="start_socratic_v2_btn"):
+        st.session_state.start_socratic_v2 = True
+        st.session_state.start_socratic = False
         st.rerun()
 
     st.divider()
@@ -399,8 +407,10 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
         "module_id": st.session_state.module_id if hasattr(st.session_state, "module_id") else None,
         "thread_id": st.session_state.thread_id,
         # pop: the trigger should only fire for this one message, the server
-        # persists socratic_mode via the checkpointer for subsequent turns.
+        # persists socratic_mode / socratic_v2_phase via the checkpointer for
+        # subsequent turns.
         "start_socratic": st.session_state.pop("start_socratic", False),
+        "start_socratic_v2": st.session_state.pop("start_socratic_v2", False),
     }
 
     # Stream tokens from backend and render progressively.

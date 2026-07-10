@@ -16,6 +16,7 @@ from src.llm.graphs.no_vector_db import build_no_vectordb_graph
 from src.llm.graphs.simple_hop import build_simple_hop_graph
 from src.llm.graphs.summarize import build_summarize_graph
 from src.llm.graphs.socratic import build_socratic_graph
+from src.llm.graphs.socratic_v2 import build_socratic_v2_graph
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ class KICampusAssistant:
         rerank_top_n: int = 5,
         retrieve_top_n: int = 10,
         enable_socratic: bool = False,
+        enable_socratic_v2: bool = False,
         reranker_type: RerankerType = "llm",
         min_reranker_score: float = 0.0,
     ):
@@ -83,7 +85,10 @@ class KICampusAssistant:
         Args:
             rerank_top_n: Number of top chunks to keep after reranking
             retrieve_top_n: Number of chunks to retrieve from vector database
-            enable_socratic: Enable/disable the socratic learning mode
+            enable_socratic: Enable/disable the socratic learning mode (v1)
+            enable_socratic_v2: Enable/disable the redesigned socratic learning
+                mode ("Lernmodus v2") — independent of v1 so both can be
+                compared side by side
             reranker_type: Which reranker to use — "llm" (default), "azure_semantic", "bge"
             min_reranker_score: Relevance cutoff on a normalized 0-1 scale, applied by all
                 backends (0 = no filtering). If every chunk falls below the cutoff, the
@@ -99,6 +104,7 @@ class KICampusAssistant:
             "rerank_top_n": rerank_top_n,
             "retrieve_top_n": retrieve_top_n,
             "enable_socratic": enable_socratic,
+            "enable_socratic_v2": enable_socratic_v2,
             "reranker_type": reranker_type,
             "min_reranker_score": min_reranker_score,
         }
@@ -122,13 +128,15 @@ class KICampusAssistant:
         - no_vectordb: Conversational queries
         - simple_hop: Single-hop RAG retrieval
         - summarize: Full-scope content summary (course/module), no reranking
-        - socratic: Guided learning
+        - socratic: Guided learning (v1)
+        - socratic_v2: Guided learning ("Lernmodus v2", redesigned tutor)
         """
         # Compile subgraphs
         no_vectordb_graph = build_no_vectordb_graph()
         simple_hop_graph = build_simple_hop_graph()
         summarize_graph = build_summarize_graph()
         socratic_graph = build_socratic_graph()
+        socratic_v2_graph = build_socratic_v2_graph()
 
         # Main router graph
         graph = StateGraph(GraphState)
@@ -141,6 +149,7 @@ class KICampusAssistant:
         graph.add_node("simple_hop", simple_hop_graph)
         graph.add_node("summarize", summarize_graph)
         graph.add_node("socratic", socratic_graph)
+        graph.add_node("socratic_v2", socratic_v2_graph)
 
         # Start with contextualization and routing
         graph.add_edge(START, "contextualize_and_route")
@@ -164,6 +173,7 @@ class KICampusAssistant:
         graph.add_edge("simple_hop", END)
         graph.add_edge("summarize", END)
         graph.add_edge("socratic", END)
+        graph.add_edge("socratic_v2", END)
 
         return graph.compile(checkpointer=self.checkpointer)
 
@@ -183,6 +193,7 @@ class KICampusAssistant:
         course_id: int | None = None,
         module_id: int | list[int] | None = None,
         start_socratic: bool = False,
+        start_socratic_v2: bool = False,
     ) -> tuple[GraphState, dict, str]:
         """
         Lädt bestehenden State aus Checkpoint oder erstellt neuen Initial State.
@@ -194,6 +205,7 @@ class KICampusAssistant:
             course_id: Optional course ID filter
             module_id: Optional module ID filter — a single ID or a list of IDs
             start_socratic: Explicit request-level trigger to enter the socratic mode
+            start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
 
         Returns:
             tuple: (state_update, config, thread_id)
@@ -216,8 +228,16 @@ class KICampusAssistant:
                 # Lade bestehende chat_history (OHNE neue User-Message, die kommt später)
                 existing_history = checkpoint.values.get("chat_history", [])
 
-                # Limitiere Chat-History auf letzte N Nachrichten
-                limited_existing_history = self.limit_chat_history(existing_history, limit=env.CHAT_HISTORY_LIMIT)
+                # Limitiere Chat-History auf letzte N Nachrichten. Aktive
+                # v2-Lernsessions brauchen den ganzen Sessionverlauf (Learner
+                # Model, keine Fragenwiederholung) — 6 Nachrichten reichen
+                # dort nicht.
+                history_limit = (
+                    env.CHAT_HISTORY_LIMIT_SOCRATIC_V2
+                    if checkpoint.values.get("socratic_v2_phase")
+                    else env.CHAT_HISTORY_LIMIT
+                )
+                limited_existing_history = self.limit_chat_history(existing_history, limit=history_limit)
 
                 state_update: GraphState = {
                     "user_query": query,
@@ -228,6 +248,7 @@ class KICampusAssistant:
                         "module_id": module_id,
                         "thread_id": thread_id,
                         "start_socratic": start_socratic,
+                        "start_socratic_v2": start_socratic_v2,
                     },
                     # Reset per-turn intermediate artifacts so stale checkpoint
                     # values never bleed into the new graph run.
@@ -255,6 +276,7 @@ class KICampusAssistant:
                 "module_id": module_id,
                 "thread_id": thread_id,
                 "start_socratic": start_socratic,
+                "start_socratic_v2": start_socratic_v2,
             },
             "system_config": self.system_config
         }
@@ -327,6 +349,7 @@ class KICampusAssistant:
                     "scope": scope,
                     "mode": mode,
                     "socratic_mode": result.get("socratic_mode"),
+                    "socratic_v2_phase": result.get("socratic_v2_phase"),
                     "model": model_name,
                     "course_id": course_id,
                     "module_id": module_id,
@@ -356,6 +379,7 @@ class KICampusAssistant:
         model: Models,
         thread_id: str | None = None,
         start_socratic: bool = False,
+        start_socratic_v2: bool = False,
     ) -> tuple[SerializableChatMessage, str]:
         """
         Chat with general bot about drupal and functions of ki-campus.
@@ -368,6 +392,7 @@ class KICampusAssistant:
                 - If provided: Loads state from checkpoint
                 - If None: Creates new conversation with generated ID
             start_socratic: Explicit request-level trigger to enter the socratic mode
+            start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
 
         Returns:
             tuple: (SerializableChatMessage with answer, thread_id)
@@ -378,6 +403,7 @@ class KICampusAssistant:
             model=model,
             thread_id=thread_id,
             start_socratic=start_socratic,
+            start_socratic_v2=start_socratic_v2,
         )
 
         # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)
@@ -422,6 +448,7 @@ class KICampusAssistant:
         module_id: int | list[int] | None = None,
         thread_id: str | None = None,
         start_socratic: bool = False,
+        start_socratic_v2: bool = False,
     ) -> tuple[SerializableChatMessage, str]:
         """
         Chat with the contents of a specific course and optionally submodule(s).
@@ -437,6 +464,7 @@ class KICampusAssistant:
                 - If provided: Loads state from checkpoint
                 - If None: Creates new conversation with generated ID
             start_socratic: Explicit request-level trigger to enter the socratic mode
+            start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
 
         Returns:
             tuple: (SerializableChatMessage with answer, thread_id)
@@ -449,6 +477,7 @@ class KICampusAssistant:
             course_id=course_id,
             module_id=module_id,
             start_socratic=start_socratic,
+            start_socratic_v2=start_socratic_v2,
         )
 
         # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)

@@ -16,6 +16,14 @@ Swagger-Doku: `http://localhost:8000/docs`
 
 ---
 
+## Frontend starten (Streamlit)
+
+```bash
+uv run streamlit run src/frontend/frontend.py
+```
+
+---
+
 ## Interaktiver CLI-Chat
 
 Direkt im Terminal mit dem Assistenten chatten — ohne Frontend, ohne HTTP.

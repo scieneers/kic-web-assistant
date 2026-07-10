@@ -68,6 +68,11 @@ class EnvHelper(BaseModel):
     # until this is explicitly set.
     ENABLE_SOCRATIC: bool = False
 
+    # Enables the redesigned socratic subgraph "Lernmodus v2" (see
+    # documentation/KONZEPT_SOKRATISCHER_LERNASSISTENT.md). Independent of
+    # ENABLE_SOCRATIC so both variants can be tested side by side.
+    ENABLE_SOCRATIC_V2: bool = False
+
     AZURE_SEARCH_ENDPOINT: str = "UNSET"
     AZURE_SEARCH_INDEX: str = "aichat"
 
@@ -94,6 +99,9 @@ class EnvHelper(BaseModel):
     # Chat runtime tuning — previously hardcoded constants in assistant.py / LLMs.py.
     MAX_CHAT_THREADS: int = 500  # BoundedMemorySaver: oldest thread evicted beyond this
     CHAT_HISTORY_LIMIT: int = 6  # messages kept per turn when rebuilding graph state
+    # Active "Lernmodus v2" sessions keep the whole session in context — the
+    # tutor needs it for the learner model and to avoid repeating questions.
+    CHAT_HISTORY_LIMIT_SOCRATIC_V2: int = 40
     GWDG_TIMEOUT_SECONDS: int = 7  # fallback to Azure if GWDG hasn't responded by then
     GWDG_UNAVAILABLE_RESET_SECONDS: int = 60 * 5  # window before retrying GWDG again
 

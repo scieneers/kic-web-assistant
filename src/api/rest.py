@@ -57,6 +57,7 @@ def get_assistant() -> KICampusAssistant:
             reranker_type=env.RERANKER_TYPE,
             min_reranker_score=env.MIN_RERANKER_SCORE,
             enable_socratic=env.ENABLE_SOCRATIC,
+            enable_socratic_v2=env.ENABLE_SOCRATIC_V2,
         )
     return _assistant
 
@@ -155,6 +156,12 @@ class ChatRequest(BaseModel):
         description="Explicitly enter the socratic learning mode with this message. "
         "Only takes effect if no socratic session is active and ENABLE_SOCRATIC is set.",
     )
+    start_socratic_v2: bool = Field(
+        default=False,
+        description="Explicitly enter the redesigned socratic learning mode (Lernmodus v2) "
+        "with this message. Only takes effect if no socratic session is active and "
+        "ENABLE_SOCRATIC_V2 is set. Requires a course/module scope to start.",
+    )
 
     def get_user_query(self) -> str:
         """Extract the query string from user_query SerializableChatMessage."""
@@ -224,6 +231,7 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             module_id=chat_request.module_id,  # Can be None
             thread_id=chat_request.thread_id,
             start_socratic=chat_request.start_socratic,
+            start_socratic_v2=chat_request.start_socratic_v2,
         )
     else:
         # General chat (Drupal content)
@@ -232,6 +240,7 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             model=chat_request.model,
             thread_id=chat_request.thread_id,
             start_socratic=chat_request.start_socratic,
+            start_socratic_v2=chat_request.start_socratic_v2,
         )
 
     trace_id = langfuse_context.get_current_trace_id()
@@ -286,6 +295,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                         module_id=chat_request.module_id,
                         thread_id=thread_id,
                         start_socratic=chat_request.start_socratic,
+                        start_socratic_v2=chat_request.start_socratic_v2,
                     )
                 else:
                     llm_response, _thread_id = get_assistant().chat(
@@ -293,6 +303,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                         model=chat_request.model,
                         thread_id=thread_id,
                         start_socratic=chat_request.start_socratic,
+                        start_socratic_v2=chat_request.start_socratic_v2,
                     )
 
             q.put(
