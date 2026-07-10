@@ -141,8 +141,18 @@ def contextualize_and_route(state: GraphState) -> dict:
             }
 
         # Classify scenario based on original query
-        mode = contextualizer.classify_scenario(query=user_query, model=model)
+        mode = contextualizer.classify_scenario(
+            query=user_query, model=model, has_prior_history=bool(chat_history)
+        )
         logger.debug("Scenario classified → mode=%s", mode)
+
+        # "summarize" targets the material of the course/module currently in
+        # scope. Without a course_id/module_id there is nothing to fetch, so
+        # fall back to the conversational path instead of retrieving nothing.
+        runtime_config = state.get("runtime_config", {})
+        if mode == "summarize" and not runtime_config.get("course_id") and not runtime_config.get("module_id"):
+            logger.debug("mode=summarize has no course/module scope — downgrading to no_vectordb")
+            mode = "no_vectordb"
 
         # Contextualize query if needed
         if mode == "no_vectordb":

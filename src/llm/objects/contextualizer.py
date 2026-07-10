@@ -68,23 +68,34 @@ class Contextualizer:
         return contextualized_question.content
 
     @observe()
-    def classify_scenario(self, query: str, model: Models) -> Scenario:
+    def classify_scenario(self, query: str, model: Models, has_prior_history: bool = False) -> Scenario:
         """
         LLM-based classification of user query into scenario.
-        
-        Chat history is optional - classification is typically based only on the current query.
-        
+
+        Chat history itself is not passed to the classifier (classification is based
+        on the current query) — but whether a prior conversation exists at all is
+        needed to disambiguate bare "fasse zusammen" style requests between
+        "summarize" (the material) and "no_vectordb" (the conversation), see
+        router_prompt.txt's "DISAMBIGUATING BARE SUMMARIZE REQUESTS" section.
+
         Args:
             query: User's current query
             model: LLM model to use for classification
-            
+            has_prior_history: Whether this thread already has prior chat history
+
         Returns:
             Scenario classification
         """
+        history_context = (
+            "Session context: a prior conversation already exists in this session."
+            if has_prior_history
+            else "Session context: this is the first message in this session (no prior conversation)."
+        )
+        router_prompt = self.ROUTER_PROMPT.format(history_context=history_context)
 
         # Call LLM to classify scenario (no chat_history needed)
         mode = self.llm.chat(
-            query=query, chat_history= [], model=model, system_prompt=self.ROUTER_PROMPT
+            query=query, chat_history=[], model=model, system_prompt=router_prompt
         )
 
         if mode.content is None:

@@ -4,7 +4,7 @@ from llama_index.core.schema import TextNode
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.api.models.serializable_text_node import SerializableTextNode
 
-Scenario = Literal["no_vectordb", "simple_hop", "socratic", "exit_complete"]
+Scenario = Literal["no_vectordb", "simple_hop", "socratic", "summarize", "exit_complete"]
 SocraticMode = Literal["contract", "diagnose", "core"]
 RerankerType = Literal["llm", "azure_semantic", "bge"]
 # "core" routes to "hinting", "reflection", "explain" internally

@@ -123,6 +123,37 @@ class KiCampusRetriever:
 
         return [self._to_node(result) for result in results]
 
+    @observe()
+    def retrieve_all(
+        self, course_id: int | None = None, module_id: int | list[int] | None = None
+    ) -> list[SerializableTextNode]:
+        """Fetch every chunk in scope, ordered for a coherent read-through.
+
+        Used for content-summary requests: there is no topical query to rank
+        against, so this bypasses embedding + hybrid search/reranking entirely
+        and returns the complete scope instead of a "most relevant" subset.
+
+        Args:
+            course_id: Optional filter by course ID
+            module_id: Optional filter by a single module ID or a list of module IDs
+
+        Returns:
+            All matching SerializableTextNodes, ordered by (source_doc_key, chunk_index)
+            — the same order chunks were produced in during ingestion (see
+            get_data.py's chunk_index), so a module's content reads coherently
+            instead of in relevance order.
+        """
+        odata_filter = _build_odata_filter(course_id, module_id)
+        results = self.vector_db.fetch_all(odata_filter, index_name=self.index_name)
+        nodes = [self._to_node(result) for result in results]
+        nodes.sort(
+            key=lambda n: (
+                n.metadata.get("source_doc_key") or "",
+                n.metadata.get("chunk_index") if isinstance(n.metadata.get("chunk_index"), int) else 0,
+            )
+        )
+        return nodes
+
     @staticmethod
     def _to_node(result: dict) -> SerializableTextNode:
         """Rebuild a SerializableTextNode from an Azure AI Search result.

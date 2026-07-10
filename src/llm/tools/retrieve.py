@@ -85,3 +85,44 @@ def retrieve_chunks(state: GraphState) -> dict:
         }
     )
     return {"retrieved": nodes, "retrieval_semantic_ranked": retriever.use_semantic}
+
+
+@observe()
+def retrieve_full_scope(state: GraphState) -> dict:
+    """
+    Retrieves every chunk in the current course/module scope — no query ranking.
+
+    Used by the "summarize" scenario: there is no topical query to match
+    against, so this bypasses hybrid search AND the reranker entirely (see
+    rerank.py's min_reranker_score filtering, which would be meaningless here
+    — nothing is being scored against anything). `reranked` is set directly
+    from the full, ordered scope so the summarize subgraph can reuse the
+    existing citation node without a rerank step in between.
+
+    Changes:
+    - Sets state.retrieved, state.reranked (identical) and
+      state.retrieval_semantic_ranked (always False — no ranking happened)
+
+    Args:
+        state: Current graph state with course_id/module_id in runtime_config
+
+    Returns:
+        Updated state with the full retrieved/reranked scope
+    """
+    course_id = state["runtime_config"]["course_id"]
+    module_id = state["runtime_config"]["module_id"]
+
+    logger.debug("retrieve_full_scope: course_id=%s, module_id=%s", course_id, module_id)
+
+    retriever = get_retriever()
+    nodes = retriever.retrieve_all(course_id=course_id, module_id=module_id)
+
+    logger.debug("retrieve_full_scope: returned %d chunks", len(nodes))
+    langfuse_context.update_current_observation(
+        metadata={
+            "course_id": course_id,
+            "module_id": module_id,
+            "n_retrieved": len(nodes),
+        }
+    )
+    return {"retrieved": nodes, "reranked": nodes, "retrieval_semantic_ranked": False}

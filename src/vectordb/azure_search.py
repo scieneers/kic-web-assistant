@@ -394,6 +394,33 @@ class VectorDBAzureSearch:
         )
         return list(results)
 
+    def fetch_all(self, odata_filter: str, *, index_name: str | None = None) -> list[dict]:
+        """Fetch every document matching an OData filter, unranked.
+
+        Used for "summarize this module/course" retrieval: there is no query to
+        rank chunks against, so this pulls the complete scope directly instead
+        of a top-k search. No `top`: see delete_by_filter/load_content_hashes
+        for why a cap here would silently truncate large modules/courses.
+        """
+        client = self._client(index_name)
+        results = client.search(
+            search_text="*",
+            filter=odata_filter,
+            select=["id", "text", "metadata_json"],
+        )
+        rows = list(results)
+        true_count = self._true_count(index_name, odata_filter)
+        if true_count is not None and len(rows) < true_count:
+            self.logger.error(
+                "fetch_all: scanned %s rows but %s documents match filter=%r (index=%s) —"
+                " result is incomplete.",
+                len(rows),
+                true_count,
+                odata_filter,
+                index_name or self.index_name,
+            )
+        return rows
+
     # ------------------------------------------------------------------
     # Read-back helpers
     # ------------------------------------------------------------------

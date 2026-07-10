@@ -14,6 +14,7 @@ from src.llm.state.models import GraphState, RerankerType
 from src.llm.tools.contextualize import contextualize_and_route
 from src.llm.graphs.no_vector_db import build_no_vectordb_graph
 from src.llm.graphs.simple_hop import build_simple_hop_graph
+from src.llm.graphs.summarize import build_summarize_graph
 from src.llm.graphs.socratic import build_socratic_graph
 
 logger = logging.getLogger(__name__)
@@ -120,11 +121,13 @@ class KICampusAssistant:
         Scenarios:
         - no_vectordb: Conversational queries
         - simple_hop: Single-hop RAG retrieval
+        - summarize: Full-scope content summary (course/module), no reranking
         - socratic: Guided learning
         """
         # Compile subgraphs
         no_vectordb_graph = build_no_vectordb_graph()
         simple_hop_graph = build_simple_hop_graph()
+        summarize_graph = build_summarize_graph()
         socratic_graph = build_socratic_graph()
 
         # Main router graph
@@ -136,11 +139,12 @@ class KICampusAssistant:
         # Add subgraph nodes
         graph.add_node("no_vectordb", no_vectordb_graph)
         graph.add_node("simple_hop", simple_hop_graph)
+        graph.add_node("summarize", summarize_graph)
         graph.add_node("socratic", socratic_graph)
-        
+
         # Start with contextualization and routing
         graph.add_edge(START, "contextualize_and_route")
-        
+
         # Conditional routing based on mode
         def route_by_mode(state: GraphState) -> str:
             """Route to appropriate subgraph based on classified scenario."""
@@ -148,18 +152,19 @@ class KICampusAssistant:
             # Special case: exit_complete skips directly to END --> used when exiting socratic mode
             if mode == "exit_complete":
                 return END
-            return mode  # Returns "no_vectordb", "simple_hop" or "socratic"
-        
+            return mode  # Returns "no_vectordb", "simple_hop", "summarize" or "socratic"
+
         graph.add_conditional_edges(
             "contextualize_and_route",
             route_by_mode
         )
-        
+
         # All subgraphs end at END
         graph.add_edge("no_vectordb", END)
         graph.add_edge("simple_hop", END)
+        graph.add_edge("summarize", END)
         graph.add_edge("socratic", END)
-        
+
         return graph.compile(checkpointer=self.checkpointer)
 
     @observe()
