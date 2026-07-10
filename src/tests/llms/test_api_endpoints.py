@@ -176,6 +176,70 @@ class TestChatEndpoint:
         assert call_kwargs.kwargs.get("thread_id") == "my-thread"
 
 
+class TestChatEndpointModuleIdList:
+    def test_module_id_list_is_passed_through(self, client):
+        c, mock_assistant = client
+        response = c.post(
+            "/api/chat",
+            json={
+                "user_query": {"role": "user", "content": "Frage"},
+                "course_id": 79,
+                "module_id": [1, 33, 102],
+            },
+            headers={"Api-Key": VALID_API_KEY},
+        )
+        assert response.status_code == 200
+        call_kwargs = mock_assistant.chat_with_course.call_args
+        assert call_kwargs.kwargs.get("module_id") == [1, 33, 102]
+
+    def test_empty_module_id_list_means_no_module_filter(self, client):
+        c, mock_assistant = client
+        response = c.post(
+            "/api/chat",
+            json={
+                "user_query": {"role": "user", "content": "Frage"},
+                "course_id": 79,
+                "module_id": [],
+            },
+            headers={"Api-Key": VALID_API_KEY},
+        )
+        assert response.status_code == 200
+        call_kwargs = mock_assistant.chat_with_course.call_args
+        assert call_kwargs.kwargs.get("module_id") is None
+
+    def test_module_id_list_without_course_id_returns_400(self, client):
+        c, _ = client
+        response = c.post(
+            "/api/chat",
+            json={
+                "user_query": {"role": "user", "content": "Frage"},
+                "module_id": [1, 33],
+            },
+            headers={"Api-Key": VALID_API_KEY},
+        )
+        assert response.status_code == 400
+
+    def test_module_id_list_with_unknown_id_returns_400(self, client):
+        c, _ = client
+        with patch("src.api.rest.get_vector_db") as mock_get_vector_db:
+            mock_db = MagicMock()
+            mock_db.check_if_course_exists.return_value = True
+            mock_db.check_if_module_exists.side_effect = lambda m: m != 999
+            mock_get_vector_db.return_value = mock_db
+
+            response = c.post(
+                "/api/chat",
+                json={
+                    "user_query": {"role": "user", "content": "Frage"},
+                    "course_id": 79,
+                    "module_id": [1, 999],
+                },
+                headers={"Api-Key": VALID_API_KEY},
+            )
+        assert response.status_code == 400
+        assert "999" in response.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # POST /api/chat/stream  (NDJSON)
 # ---------------------------------------------------------------------------

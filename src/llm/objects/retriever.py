@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def _build_odata_filter(
     course_id: int | list[int] | tuple[int, ...] | None,
-    module_id: int | None,
+    module_id: int | list[int] | tuple[int, ...] | None,
 ) -> str:
     """Translate the retrieval filter into an Azure AI Search OData expression.
 
@@ -21,8 +21,14 @@ def _build_odata_filter(
       - always exclude internal ModuleFingerprint bookkeeping docs
       - with no course/module given, restrict to Drupal content
       - course_id may be a single value or a list (OData ``search.in``)
-      - module_id is an exact match
+      - module_id may be a single value or a list (OData ``search.in``);
+        an empty list is treated the same as ``None`` (no module filter)
     """
+    # Normalize an empty module_id list to "no filter" so downstream checks
+    # only need to distinguish "given" (int / non-empty list) from "absent".
+    if isinstance(module_id, (list, tuple)) and len(module_id) == 0:
+        module_id = None
+
     clauses: list[str] = ["type ne 'ModuleFingerprint'"]
     reasons: list[str] = ["always: exclude bookkeeping docs"]
 
@@ -44,8 +50,13 @@ def _build_odata_filter(
             reasons.append(f"course_id provided: filter to course {course_id}")
 
     if module_id is not None:
-        clauses.append(f"module_id eq {int(module_id)}")
-        reasons.append(f"module_id provided: filter to module {module_id}")
+        if isinstance(module_id, (list, tuple)):
+            ids = ",".join(str(int(m)) for m in module_id)
+            clauses.append(f"search.in(module_id, '{ids}', ',')")
+            reasons.append(f"module_id list provided: filter to modules {list(module_id)}")
+        else:
+            clauses.append(f"module_id eq {int(module_id)}")
+            reasons.append(f"module_id provided: filter to module {module_id}")
 
     odata_filter = " and ".join(clauses)
     logger.debug(
@@ -82,14 +93,17 @@ class KiCampusRetriever:
 
     @observe()
     def retrieve(
-        self, query: str, course_id: int | None = None, module_id: int | None = None
+        self,
+        query: str,
+        course_id: int | None = None,
+        module_id: int | list[int] | None = None,
     ) -> list[SerializableTextNode]:
         """Retrieve relevant documents from Azure AI Search.
 
         Args:
             query: Search query
             course_id: Optional filter by course ID
-            module_id: Optional filter by module ID
+            module_id: Optional filter by a single module ID or a list of module IDs
 
         Returns:
             List of relevant SerializableTextNodes

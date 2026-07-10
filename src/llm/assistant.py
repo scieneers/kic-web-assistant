@@ -176,7 +176,7 @@ class KICampusAssistant:
         model: Models,
         thread_id: str | None,
         course_id: int | None = None,
-        module_id: int | None = None,
+        module_id: int | list[int] | None = None,
         start_socratic: bool = False,
     ) -> tuple[GraphState, dict, str]:
         """
@@ -187,7 +187,7 @@ class KICampusAssistant:
             model: LLM model to use
             thread_id: Optional thread ID for persistent conversations
             course_id: Optional course ID filter
-            module_id: Optional module ID filter
+            module_id: Optional module ID filter — a single ID or a list of IDs
             start_socratic: Explicit request-level trigger to enter the socratic mode
 
         Returns:
@@ -290,7 +290,9 @@ class KICampusAssistant:
             # konkretes Modul eingeschränkt? Als Tag direkt filter-/zählbar.
             course_id = runtime_config.get("course_id")
             module_id = runtime_config.get("module_id")
-            if module_id is not None:
+            # Truthy check, not `is not None`: an empty module_id list means
+            # "no module filter", same as None.
+            if module_id:
                 scope = "module"
             elif course_id is not None:
                 scope = "course"
@@ -412,19 +414,20 @@ class KICampusAssistant:
         query: str,
         model: Models,
         course_id: int | None = None,
-        module_id: int | None = None,
+        module_id: int | list[int] | None = None,
         thread_id: str | None = None,
         start_socratic: bool = False,
     ) -> tuple[SerializableChatMessage, str]:
         """
-        Chat with the contents of a specific course and optionally submodule.
+        Chat with the contents of a specific course and optionally submodule(s).
         For frontend hosted on Moodle.
 
         Args:
             query: User's question
             model: LLM model to use
             course_id: Moodle course ID to filter by
-            module_id: Optional module/topic ID within course
+            module_id: Optional module/topic ID (or list of IDs) within the course.
+                All given module IDs are assumed to belong to course_id.
             thread_id: Optional thread ID for persistent conversations
                 - If provided: Loads state from checkpoint
                 - If None: Creates new conversation with generated ID

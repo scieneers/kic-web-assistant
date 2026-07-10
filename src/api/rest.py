@@ -137,10 +137,13 @@ class ChatRequest(BaseModel):
         description="The course identifier to restrict the search on.",
         examples=[79, 102, 91],
     )
-    module_id: int | None = Field(
+    module_id: int | list[int] | None = Field(
         default=None,
-        description="The course module / topic / unit to restrict the search on. course_id is required when module_id is set.",
-        examples=[1, 102, 33],
+        description="The course module / topic / unit(s) to restrict the search on: "
+        "omit or pass an empty list for no module filter, a single ID, or a list of "
+        "IDs. All given module IDs are assumed to belong to course_id. course_id is "
+        "required whenever module_id is set.",
+        examples=[1, [1, 33, 102]],
     )
     model: Models = Field(
         default=Models.GEMMA4_31B,
@@ -157,6 +160,15 @@ class ChatRequest(BaseModel):
         """Extract the query string from user_query SerializableChatMessage."""
         return self.user_query.content
 
+    @field_validator("module_id", mode="after")
+    @classmethod
+    def normalize_module_id(cls, module_id: int | list[int] | None) -> int | list[int] | None:
+        """An empty list means the same as "not set" — normalize so the rest
+        of the code only has to distinguish "given" from "absent"."""
+        if isinstance(module_id, list) and len(module_id) == 0:
+            return None
+        return module_id
+
     @model_validator(mode="after")
     def validate_module_id(self):
         if self.module_id and not self.course_id:
@@ -165,10 +177,12 @@ class ChatRequest(BaseModel):
                 detail="module_id is required when course_id is set.",
             )
         if self.module_id is not None:
-            if not get_vector_db().check_if_module_exists(self.module_id):
+            ids = self.module_id if isinstance(self.module_id, list) else [self.module_id]
+            missing = [m for m in ids if not get_vector_db().check_if_module_exists(m)]
+            if missing:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"no module found with the given id: {self.module_id}.",
+                    detail=f"no module found with the given id(s): {missing}.",
                 )
         return self
 
