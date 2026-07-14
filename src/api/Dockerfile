@@ -1,7 +1,7 @@
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                        Base - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -25,7 +25,7 @@ RUN apt-get install -y \
 
 WORKDIR $PYSETUP_PATH
 COPY uv.lock pyproject.toml ./
-RUN uv sync --extra api --no-dev --no-install-project
+RUN uv sync --extra api --extra reranker --no-dev --no-install-project
 
 USER appuser
 WORKDIR /home/appuser
