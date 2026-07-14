@@ -7,7 +7,7 @@ from llama_index.core.schema import TextNode
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.objects.LLMs import LLM, Models
-from src.llm.objects.citation_parser import CITATION_TEXT, _get_display_title
+from src.llm.objects.citation_parser import CITATION_TEXT, _get_display_title, citation_suffix
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.streaming import CitationStreamResolver, SmartStreamCallback, StreamPhaseContext, citation_resolver_var, token_callback_var
 
@@ -22,6 +22,15 @@ NO_RELEVANT_CONTENT = """Zu deiner Frage habe ich leider keine passenden Inhalte
 
 NO_CONTENT_IN_MODULE = "Das Modul '{module_name}' ist im Kurs vorhanden, enthält aber keinen weiteren Inhalt zu dem ich eine Antwort geben kann."
 
+# Distinct from NO_CONTENT_IN_MODULE: the module DOES have content — we
+# deliberately don't extract this content type (see
+# Module.UNSUPPORTED_MODNAME_LABELS). Naming the reason instead of implying
+# emptiness avoids the misleading impression that the module has nothing in it.
+NO_CONTENT_UNSUPPORTED_TYPE = (
+    "Das Modul '{module_name}' ist im Kurs vorhanden, aber sein Inhaltstyp ({label}) wird von mir "
+    "aktuell nicht durchsucht. Schau bitte direkt im Kurs nach: {url}"
+)
+
 ANSWER_NOT_FOUND_SECOND_TIME_MOODLE = """Es tut mir leid, aber ich konnte die benötigten Informationen im Kurs nicht finden, um deine Frage zu beantworten. Schau bitte im Kurs selbst nach, um weitere Hilfe zu erhalten. Hier ist der Kurslink: https://moodle.ki-campus.org/course/view.php?id={course_id}
 """
 
@@ -29,6 +38,10 @@ ANSWER_NOT_FOUND_SECOND_TIME_MOODLE = """Es tut mir leid, aber ich konnte die be
 # abgeleitet, damit get_fallback_type() bei Textänderungen nicht auseinanderläuft.
 _MOODLE_NOT_FOUND_PREFIX = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.split("{course_id}")[0]
 _EMPTY_MODULE_PREFIX, _EMPTY_MODULE_SUFFIX = NO_CONTENT_IN_MODULE.split("{module_name}")
+# Distinguishing fragment between the module_name and label placeholders —
+# unique to NO_CONTENT_UNSUPPORTED_TYPE despite sharing the same "Das Modul
+# '...'" opening as NO_CONTENT_IN_MODULE.
+_UNSUPPORTED_TYPE_MARKER = NO_CONTENT_UNSUPPORTED_TYPE.split("{label}")[0].split("{module_name}")[1]
 
 
 def get_fallback_type(answer: str | None) -> str | None:
@@ -48,6 +61,8 @@ def get_fallback_type(answer: str | None) -> str | None:
         return "not_found_second_time_drupal"
     if text.startswith(_MOODLE_NOT_FOUND_PREFIX):
         return "not_found_second_time_moodle"
+    if text.startswith(_EMPTY_MODULE_PREFIX) and _UNSUPPORTED_TYPE_MARKER in text:
+        return "unsupported_content_type"
     if text.startswith(_EMPTY_MODULE_PREFIX) and _EMPTY_MODULE_SUFFIX.strip() in text:
         return "empty_module"
     return None
@@ -147,7 +162,7 @@ class QuestionAnswerer:
                 if url in seen_urls:
                     return ""
                 seen_urls.add(url)
-                return CITATION_TEXT.format(url=url, title=_get_display_title(doc))
+                return CITATION_TEXT.format(url=url, title=_get_display_title(doc), suffix=citation_suffix(doc))
 
             resolver = CitationStreamResolver(resolve=_resolve, callback=outer_callback)
             smart_cb = SmartStreamCallback(resolver=resolver, outer_callback=outer_callback)

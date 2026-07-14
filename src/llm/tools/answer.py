@@ -7,7 +7,7 @@ import logging
 from langfuse.decorators import observe
 
 from src.llm.state.models import GraphState, get_doc_as_textnodes
-from src.llm.objects.question_answerer import NO_CONTENT_IN_MODULE
+from src.llm.objects.question_answerer import NO_CONTENT_IN_MODULE, NO_CONTENT_UNSUPPORTED_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,24 @@ def generate_answer(state: GraphState) -> dict:
 
     # EmptyModule-Marker: Modul existiert, hat aber keinen extrahierbaren Inhalt.
     # Kein LLM-Aufruf — direkt den fest definierten Fallback-Text zurückgeben.
+    # Zwei Fälle: ein bekannter, bewusst nicht unterstützter Inhaltstyp (z. B.
+    # natives Moodle-Quiz — siehe Module.UNSUPPORTED_MODNAME_LABELS) benennt
+    # den Grund konkret, statt fälschlich "kein Inhalt" zu suggerieren.
     if sources and all(s.metadata.get("type") == "EmptyModule" for s in sources):
-        module_name = sources[0].metadata.get("fullname", "Dieses Modul")
+        first = sources[0].metadata
+        module_name = first.get("fullname", "Dieses Modul")
+        unsupported_label = first.get("unsupported_label")
+        if unsupported_label:
+            logger.debug(
+                "generate_answer: unsupported content type (%s) for %r — returning specific fallback",
+                unsupported_label,
+                module_name,
+            )
+            return {
+                "answer": NO_CONTENT_UNSUPPORTED_TYPE.format(
+                    module_name=module_name, label=unsupported_label, url=first.get("url", "")
+                )
+            }
         logger.debug("generate_answer: EmptyModule marker detected for %r — returning fixed fallback", module_name)
         return {"answer": NO_CONTENT_IN_MODULE.format(module_name=module_name)}
 

@@ -44,3 +44,40 @@ class TestCombinedFilter:
         odata_filter = _build_odata_filter(course_id=[79, 102], module_id=[1, 33])
         assert "search.in(course_id, '79,102', ',')" in odata_filter
         assert "search.in(module_id, '1,33', ',')" in odata_filter
+
+
+class TestTypeExclusion:
+    """QuizItem docs carry correct answers in metadata — the exclusion must be
+    UNCONDITIONAL (also with module scope), or the answers leak into the prompt."""
+
+    def test_exclusion_without_scope(self):
+        odata_filter = _build_odata_filter(course_id=None, module_id=None)
+        assert "not search.in(type, 'ModuleFingerprint,QuizItem', ',')" in odata_filter
+
+    def test_exclusion_with_module_scope(self):
+        odata_filter = _build_odata_filter(course_id=79, module_id=42)
+        assert "not search.in(type, 'ModuleFingerprint,QuizItem', ',')" in odata_filter
+
+    def test_exclusion_with_module_list_scope(self):
+        odata_filter = _build_odata_filter(course_id=79, module_id=[1, 33])
+        assert "not search.in(type, 'ModuleFingerprint,QuizItem', ',')" in odata_filter
+
+
+class TestDocTypeFilter:
+    """Typed access path: only the requested document class, scope still applies."""
+
+    def test_doc_type_filters_to_exact_type(self):
+        odata_filter = _build_odata_filter(course_id=79, module_id=42, doc_type="QuizItem")
+        assert "type eq 'QuizItem'" in odata_filter
+        assert "course_id eq 79" in odata_filter
+        assert "module_id eq 42" in odata_filter
+
+    def test_doc_type_skips_exclusion_and_empty_module_clause(self):
+        odata_filter = _build_odata_filter(course_id=79, module_id=None, doc_type="GlossaryEntry")
+        assert "not search.in" not in odata_filter
+        assert "type ne 'EmptyModule'" not in odata_filter
+
+    def test_doc_type_without_scope_does_not_restrict_to_drupal(self):
+        odata_filter = _build_odata_filter(course_id=None, module_id=None, doc_type="GlossaryEntry")
+        assert "source eq 'Drupal'" not in odata_filter
+        assert "type eq 'GlossaryEntry'" in odata_filter

@@ -1,7 +1,12 @@
+import re
 from dataclasses import dataclass
 from typing import Optional
 from src.loaders.models.hp5activities import strip_html, extract_library_from_h5p
 from src.loaders.models.h5pactivities.h5p_base import H5PLeaf
+
+# H5P.Blanks encodes solutions inline as *lösung* (alternatives with "/",
+# tips after ":"). Matched to render neutral placeholders in module text.
+_BLANK_SOLUTION = re.compile(r"\*[^*]+\*")
 
 
 @dataclass
@@ -55,6 +60,8 @@ class FillInBlanksQuestion(H5PLeaf):
         return None
     
     def to_text(self) -> str:
+        # Answer-free rendering: inline *solutions* become ___ placeholders —
+        # the solution-bearing text lives only in the structured QuizItem payload.
         question_clean = strip_html(self.question)
-        text_clean = strip_html(self.text_with_blanks)
+        text_clean = _BLANK_SOLUTION.sub("___", strip_html(self.text_with_blanks))
         return f"[Lückentext] {question_clean}\n{text_clean}"

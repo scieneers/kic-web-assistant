@@ -82,17 +82,16 @@ class Summary(H5PLeaf):
         return "Summary konnte nicht extrahiert werden"
 
     def to_text(self) -> str:
+        # Answer-free rendering: statements listed without Korrekt/Falsch
+        # marking (and sorted, so position carries no signal) — the
+        # correct-first grouping lives only in the structured QuizItem payload.
         intro_clean = strip_html(self.intro)
         result = f"[Abschluss] {intro_clean}\n"
-        
+
         for i, statements in enumerate(self.statement_groups, 1):
             result += f"Aussagengruppe {i}:\n"
-            if statements:
-                correct = strip_html(statements[0])
-                result += f" Korrekt: {correct}\n"
-                if len(statements) > 1:
-                    incorrect = [strip_html(s) for s in statements[1:]]
-                    result += f" Falsch: {', '.join(incorrect)}\n"
+            for statement in sorted(strip_html(s) for s in statements):
+                result += f" - {statement}\n"
             result += "\n"
-        
+
         return result.strip()

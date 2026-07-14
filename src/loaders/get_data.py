@@ -18,8 +18,16 @@ from src.loaders.run_logger import Heartbeat, RunContext, RunLogger, StageTimer,
 
 
 def _source_doc_key(doc) -> str:
-    """Stable identifier for a source document (pre-chunking)."""
+    """Stable identifier for a source document (pre-chunking).
+
+    A key precomputed by the producer wins: structured item documents
+    (Module.to_item_documents — QuizItem/GlossaryEntry/...) set their own
+    per-item key. Without this override, every item of a module would collapse
+    onto the module key and be dropped by the in-run dedup.
+    """
     md = getattr(doc, "metadata", None) or {}
+    if md.get("source_doc_key"):
+        return md["source_doc_key"]
     source = md.get("source", "unknown")
     if source == "Drupal":
         return md.get("url") or f"drupal:{getattr(doc, 'doc_id', '')}"
@@ -44,6 +52,14 @@ def _content_hash(doc, chunk_size: int, chunk_overlap: int) -> str:
         (getattr(doc, "text", None) or "")
         + (md.get("title") or "")
         + (md.get("url") or "")
+        # Structured payload (item documents): a changed quiz solution must
+        # re-ingest even when the answer-free text is unchanged.
+        + (f"|pf={md['payload_fingerprint']}" if md.get("payload_fingerprint") else "")
+        # EmptyModule marker: a module ↔ EmptyModule flip changes only the doc
+        # type, not text/title/url — without this the flip would never be
+        # written. Deliberately NOT the full type (that would invalidate every
+        # existing hash and force a fleet-wide re-embed).
+        + ("|type=EmptyModule" if md.get("type") == "EmptyModule" else "")
         + f"|cs={chunk_size}|co={chunk_overlap}"
     )
     return hashlib.sha256(stable.encode()).hexdigest()[:16]
@@ -137,6 +153,8 @@ class Fetch_Data:
             "title": md.get("title"),
             "is_important": md.get("is_important"),
             "date_created": md.get("date_created"),
+            "modname": md.get("modname"),
+            "h5p_content_type": md.get("h5p_content_type"),
             "metadata_json": json.dumps(md, default=str, ensure_ascii=False),
             "dense": dense_vec,
             "source_doc_key": md.get("source_doc_key"),
@@ -548,6 +566,29 @@ class Fetch_Data:
                     # Drain any nodes still buffered from the last course(s).
                     _flush_node_buffer(stage="MOODLE_UPSERT")
 
+                    # Module mit (teilweise) fehlgeschlagener Extraktion: deren
+                    # bestehende Keys (Modul-Dokument UND Item-Dokumente) als
+                    # "gesehen" markieren — sonst löscht ein transienter H5P-/
+                    # Transkript-Fehler die zugehörigen Dokumente als stale.
+                    # Extraktionsfehler heißt "behalten", nicht "löschen".
+                    protected_keys = 0
+                    for failed_course_id, failed_module_id in moodle.failed_module_keys:
+                        prefix = f"moodle:{failed_course_id}:{failed_module_id}"
+                        for existing_key in moodle_existing:
+                            if existing_key == prefix or existing_key.startswith(prefix + ":"):
+                                if existing_key not in moodle_seen:
+                                    moodle_seen.add(existing_key)
+                                    protected_keys += 1
+                    if protected_keys:
+                        self.logger.warning(
+                            "MOODLE_STALE_PROTECT %s",
+                            format_kv(
+                                RUN_ID=self.run_id,
+                                FAILED_MODULES=len(moodle.failed_module_keys),
+                                KEYS_PROTECTED=protected_keys,
+                            ),
+                        )
+
                     # Clean up modules/courses that no longer exist in Moodle.
                     # Skip when MOODLE_COURSE_OFFSET is set: skipped courses are absent
                     # from moodle_seen but still valid in the index — deleting them would
@@ -575,6 +616,16 @@ class Fetch_Data:
                     else:
                         moodle_stale_deleted = 0
 
+                    # Stale-Breakdown pro Dokumentklasse (module vs. quiz/
+                    # glossary/card/...): macht sichtbar, WAS gelöscht wurde —
+                    # ein klassen-spezifischer Ausreißer deutet auf einen
+                    # Extraktionsfehler statt auf echte Inhalts-Löschungen hin.
+                    stale_by_class: dict[str, int] = {}
+                    for stale_key in moodle_stale:
+                        parts = stale_key.split(":")
+                        key_class = parts[3] if len(parts) >= 5 else "module"
+                        stale_by_class[key_class] = stale_by_class.get(key_class, 0) + 1
+
                     self.logger.info(
                         "MOODLE_DELTA %s",
                         format_kv(
@@ -582,6 +633,7 @@ class Fetch_Data:
                             TOTAL_SEEN=len(moodle_seen),
                             SKIPPED=moodle_skipped,
                             STALE_DELETED=moodle_stale_deleted,
+                            STALE_BY_CLASS=stale_by_class or "-",
                         ),
                     )
 

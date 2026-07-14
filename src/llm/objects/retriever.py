@@ -6,6 +6,7 @@ from langfuse.decorators import observe
 from src.env import env
 from src.llm.objects.LLMs import LLM
 from src.vectordb.azure_search import VectorDBAzureSearch
+from src.vectordb.doc_types import RETRIEVAL_EXCLUDED_TYPES
 from src.api.models.serializable_text_node import SerializableTextNode
 
 logger = logging.getLogger(__name__)
@@ -14,29 +15,41 @@ logger = logging.getLogger(__name__)
 def _build_odata_filter(
     course_id: int | list[int] | tuple[int, ...] | None,
     module_id: int | list[int] | tuple[int, ...] | None,
+    *,
+    doc_type: str | None = None,
 ) -> str:
     """Translate the retrieval filter into an Azure AI Search OData expression.
 
     Filter logic:
-      - always exclude internal ModuleFingerprint bookkeeping docs
+      - UNCONDITIONALLY exclude the retrieval-banned types (QuizItem carries
+        the correct answers in its metadata payload — retrieving it would put
+        assessment solutions into the LLM prompt, regardless of scope)
       - with no course/module given, restrict to Drupal content
       - course_id may be a single value or a list (OData ``search.in``)
       - module_id may be a single value or a list (OData ``search.in``);
         an empty list is treated the same as ``None`` (no module filter)
+      - doc_type: typed access path — restrict to exactly this document class
+        (e.g. "QuizItem" for the tutor's quiz fetch). Replaces the exclusion
+        and skips the EmptyModule/Drupal clauses; scope filters still apply.
     """
     # Normalize an empty module_id list to "no filter" so downstream checks
     # only need to distinguish "given" (int / non-empty list) from "absent".
     if isinstance(module_id, (list, tuple)) and len(module_id) == 0:
         module_id = None
 
-    clauses: list[str] = ["type ne 'ModuleFingerprint'"]
-    reasons: list[str] = ["always: exclude bookkeeping docs"]
+    if doc_type is not None:
+        clauses: list[str] = [f"type eq '{doc_type}'"]
+        reasons: list[str] = [f"typed access: only {doc_type} documents"]
+    else:
+        excluded = ",".join(RETRIEVAL_EXCLUDED_TYPES)
+        clauses = [f"not search.in(type, '{excluded}', ',')"]
+        reasons = ["always: exclude bookkeeping docs and answer-bearing quiz items"]
 
-    if module_id is None:
-        clauses.append("type ne 'EmptyModule'")
-        reasons.append("no module_id: exclude empty-module markers")
+        if module_id is None:
+            clauses.append("type ne 'EmptyModule'")
+            reasons.append("no module_id: exclude empty-module markers")
 
-    if course_id is None and module_id is None:
+    if doc_type is None and course_id is None and module_id is None:
         clauses.append("source eq 'Drupal'")
         reasons.append("no course/module given: restrict to Drupal content")
 
@@ -65,6 +78,28 @@ def _build_odata_filter(
         "\n".join(f"    - {r}" for r in reasons),
     )
     return odata_filter
+
+
+def _scope_sort_key(node: SerializableTextNode) -> tuple:
+    """Coherent read order for a full-scope fetch (summaries, item listings).
+
+    Module document first, then its item documents grouped by class and sorted
+    by the numeric ``item_order`` metadata — NOT by the key string, where
+    "chapter:10" would sort before "chapter:2".
+    """
+    md = node.metadata or {}
+    key = md.get("source_doc_key") or ""
+    parts = key.split(":")
+    if key.startswith("moodle:") and len(parts) >= 5:
+        module_prefix = ":".join(parts[:3])
+        item_class = parts[3]
+    else:
+        module_prefix, item_class = key, ""  # module/course docs sort before items
+    item_order = md.get("item_order")
+    item_order = item_order if isinstance(item_order, int) else -1
+    chunk_index = md.get("chunk_index")
+    chunk_index = chunk_index if isinstance(chunk_index, int) else 0
+    return (module_prefix, item_class, item_order, chunk_index)
 
 
 class KiCampusRetriever:
@@ -146,13 +181,71 @@ class KiCampusRetriever:
         odata_filter = _build_odata_filter(course_id, module_id)
         results = self.vector_db.fetch_all(odata_filter, index_name=self.index_name)
         nodes = [self._to_node(result) for result in results]
-        nodes.sort(
-            key=lambda n: (
-                n.metadata.get("source_doc_key") or "",
-                n.metadata.get("chunk_index") if isinstance(n.metadata.get("chunk_index"), int) else 0,
-            )
-        )
+        nodes.sort(key=_scope_sort_key)
         return nodes
+
+    @observe()
+    def retrieve_items(
+        self,
+        doc_type: str,
+        course_id: int | None = None,
+        module_id: int | list[int] | None = None,
+        query: str | None = None,
+        top: int = 20,
+    ) -> list[SerializableTextNode]:
+        """Typed access to structured item documents (QuizItem, GlossaryEntry, ...).
+
+        With a query: hybrid search restricted to the document class — e.g.
+        "the quiz question best matching concept X". Without: the complete
+        class scope, ordered by item_order (fetch_all path, no ranking);
+        top=0 means "no cap".
+
+        This is the ONLY retrieval path that can reach answer-bearing QuizItem
+        documents — normal retrieval excludes them unconditionally.
+        """
+        odata_filter = _build_odata_filter(course_id, module_id, doc_type=doc_type)
+        if query:
+            dense_embedding = self.embedder.get_query_embedding(query)
+            results = self.vector_db.hybrid_search(
+                query_text=query,
+                query_vector=dense_embedding,
+                index_name=self.index_name,
+                odata_filter=odata_filter,
+                top=top,
+            )
+            return [self._to_node(result) for result in results]
+        results = self.vector_db.fetch_all(odata_filter, index_name=self.index_name)
+        nodes = [self._to_node(result) for result in results]
+        nodes.sort(key=_scope_sort_key)
+        return nodes[:top] if top else nodes
+
+    @observe()
+    def lookup_glossary(
+        self,
+        term: str,
+        course_id: int | None = None,
+        module_id: int | list[int] | None = None,
+        top: int = 3,
+    ) -> list[SerializableTextNode]:
+        """Glossary lookup: exact concept matches first, semantic hits after.
+
+        Glossary entries are indexed as one document per entry with
+        title = concept, so BM25/semantic search lands precisely; an exact
+        (normalized) match on the structured concept payload is preferred.
+        """
+        from src.vectordb.doc_types import GLOSSARY_ENTRY
+
+        candidates = self.retrieve_items(
+            GLOSSARY_ENTRY, course_id=course_id, module_id=module_id, query=term, top=max(top, 10)
+        )
+        normalized_term = term.strip().lower()
+        exact = [
+            node
+            for node in candidates
+            if ((node.metadata.get("payload") or {}).get("concept") or "").strip().lower() == normalized_term
+        ]
+        remainder = [node for node in candidates if node not in exact]
+        return (exact + remainder)[:top]
 
     @staticmethod
     def _to_node(result: dict) -> SerializableTextNode:

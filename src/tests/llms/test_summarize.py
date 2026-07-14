@@ -137,6 +137,38 @@ class TestSummaryAnswerer:
         mock_chat.assert_not_called()
         assert result.content == NO_CONTENT_IN_MODULE.format(module_name="KI-Grundlagen")
 
+    def test_unsupported_content_type_names_the_reason(self):
+        from src.llm.objects.question_answerer import NO_CONTENT_UNSUPPORTED_TYPE
+
+        answerer = self._answerer()
+        sources = [
+            TextNode(
+                text="",
+                metadata={
+                    "type": "EmptyModule",
+                    "fullname": "Lernziel-Check II",
+                    "unsupported_label": "natives Moodle-Quiz",
+                    "url": "https://moodle.ki-campus.org/mod/quiz/view.php?id=1406",
+                },
+            )
+        ]
+
+        with patch.object(answerer.llm, "chat") as mock_chat:
+            result = answerer.summarize(
+                chat_history=[],
+                sources=sources,
+                model=Models.AZURE_FALLBACK,
+                language="German",
+                scope_name="diesem Modul",
+            )
+
+        mock_chat.assert_not_called()
+        assert result.content == NO_CONTENT_UNSUPPORTED_TYPE.format(
+            module_name="Lernziel-Check II",
+            label="natives Moodle-Quiz",
+            url="https://moodle.ki-campus.org/mod/quiz/view.php?id=1406",
+        )
+
     def test_normal_path_calls_llm_and_returns_content(self):
         answerer = self._answerer()
         sources = [TextNode(text="Modulinhalt zu neuronalen Netzen", metadata={"type": "module"})]

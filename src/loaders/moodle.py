@@ -26,13 +26,14 @@ from src.loaders.failed_transcripts import (
     FailedTranscripts,
     save_failed_transcripts_to_excel,
 )
-from src.loaders.models.book import Book, BookChapter
+from src.loaders.models.book import Book, BookChapter, chapter_order_from_structure
 from src.loaders.models.coursetopic import CourseTopic
 from src.loaders.models.folder import Folder
 from src.loaders.models.glossary import Glossary, GlossaryEntry
 from src.loaders.models.hp5activities import H5PActivities
 from src.loaders.models.module import ModuleTypes
 from src.loaders.models.h5pactivities.h5p_base import get_handler_for_library, initialize_registry
+from src.loaders.models.h5pactivities.h5p_payloads import collect_item_payloads
 from src.loaders.models.moodlecourse import MoodleCourse
 from src.loaders.models.resource import Resource
 from src.loaders.models.url import UrlModule
@@ -68,6 +69,10 @@ class Moodle:
         # Cache für Module-Intros: {coursemodule_id: intro_html}
         # Verschiedene Modultypen können intro haben, wird pro Kurs geladen
         self.module_intros_cache = {}
+        # Module, deren Extraktion (teilweise) fehlschlug: {(course_id, module_id)}.
+        # Der Loader nimmt deren bestehende Index-Keys vom Stale-Sweep aus —
+        # "Extraktion fehlgeschlagen" heißt "behalten", nicht "löschen".
+        self.failed_module_keys: set[tuple[int, int]] = set()
 
     def get_courses(self) -> list[MoodleCourse]:
         """get all courses that are set to visible on moodle"""
@@ -246,6 +251,9 @@ class Moodle:
                 failed_modules = self.get_module_contents(topic, h5p_activity_ids)
                 if failed_modules:
                     failedTranscripts.courses.append(FailedCourse(course=course, modules=failed_modules))
+                    self.failed_module_keys.update(
+                        (course.id, fm.modul.id) for fm in failed_modules if getattr(fm, "modul", None)
+                    )
 
                 # Periodic progress log
                 if self.run_ctx:
@@ -314,6 +322,22 @@ class Moodle:
                             )
 
                         yield course, doc
+
+                        # Strukturierte Item-Dokumente (QuizItem/GlossaryEntry/
+                        # Flashcard) nach dem Modul-Dokument yielden — sie tragen
+                        # eigene source_doc_keys und laufen durch dieselbe
+                        # Delta-Logik wie alle anderen Dokumente.
+                        try:
+                            for item_doc in module.to_item_documents(course.id):
+                                yield course, item_doc
+                        except Exception as e:
+                            self.logger.warning(
+                                "Failed to build item Documents (course_id=%s module_id=%s): %s",
+                                course.id,
+                                getattr(module, "id", None),
+                                e,
+                            )
+                            self.failed_module_keys.add((course.id, module.id))
 
             # Release memory held by this course (modules can contain huge extracted texts)
             try:
@@ -398,6 +422,9 @@ class Moodle:
                 failed_modules = self.get_module_contents(topic, h5p_activity_ids)
                 if failed_modules:
                     failedTranscripts.courses.append(FailedCourse(course=course, modules=failed_modules))
+                    self.failed_module_keys.update(
+                        (course.id, fm.modul.id) for fm in failed_modules if getattr(fm, "modul", None)
+                    )
 
                 # Periodic progress log
                 if self.run_ctx:
@@ -686,6 +713,14 @@ class Moodle:
                 vimeo_service=Vimeo(),
                 video_service=Video
             )
+
+            # Strukturierte Quiz-/Karteikarten-Payloads zusätzlich einsammeln —
+            # unabhängig von der Text-Pipeline (der Modultext ist antwortfrei,
+            # die Lösungen leben nur in diesen Payloads → QuizItem-Dokumente).
+            # extend statt Zuweisung: eine Seite kann mehrere H5P-Pakete einbetten.
+            quiz_items, flashcards = collect_item_payloads(library, content)
+            module.quiz_items.extend(quiz_items)
+            module.flashcards.extend(flashcards)
             
             if err:
                 self.logger.error(f"Fehler beim Verarbeiten von Modul {module.id}: {err}")
@@ -1074,9 +1109,22 @@ class Moodle:
             
             self.logger.info(f"Book {module.id}: {len(chapters_data)} Kapitel gefunden")
             
-            # Verarbeite jedes Kapitel
+            # Verarbeite jedes Kapitel in der AUTORITATIVEN Reihenfolge aus dem
+            # structure-JSON; Fallback numerische chapter_id-Sortierung (der
+            # frühere String-Sort ließ "10" vor "2" einsortieren).
+            structure_order = chapter_order_from_structure(structure_json)
+
+            def _chapter_sort_key(item):
+                chapter_id = item[0]
+                if chapter_id in structure_order:
+                    return (0, structure_order[chapter_id])
+                try:
+                    return (1, int(chapter_id))
+                except ValueError:
+                    return (2, 0)
+
             book_chapters = []
-            for chapter_id, data in sorted(chapters_data.items()):
+            for chapter_id, data in sorted(chapters_data.items(), key=_chapter_sort_key):
                 chapter_title = data['title'] or f"Kapitel {chapter_id}"
                 self.logger.info(f"Verarbeite Kapitel '{chapter_title}' (ID: {chapter_id})")
                 

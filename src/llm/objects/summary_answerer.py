@@ -7,8 +7,8 @@ from llama_index.core.schema import TextNode
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.objects.LLMs import LLM, Models
-from src.llm.objects.citation_parser import CITATION_TEXT, _get_display_title
-from src.llm.objects.question_answerer import NO_CONTENT_IN_MODULE, format_sources
+from src.llm.objects.citation_parser import CITATION_TEXT, _get_display_title, citation_suffix
+from src.llm.objects.question_answerer import NO_CONTENT_IN_MODULE, NO_CONTENT_UNSUPPORTED_TYPE, format_sources
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.streaming import CitationStreamResolver, SmartStreamCallback, StreamPhaseContext, citation_resolver_var, token_callback_var
 
@@ -65,8 +65,19 @@ class SummaryAnswerer:
 
         # EmptyModule-Marker: gesamter Scope besteht nur aus Modulen ohne Inhalt.
         # Kein LLM-Aufruf — direkt den fest definierten Fallback-Text zurückgeben.
+        # Gleiche Unterscheidung wie in answer.py: bekannter, bewusst nicht
+        # unterstützter Inhaltstyp benennt den Grund konkret.
         if all(s.metadata.get("type") == "EmptyModule" for s in sources):
-            module_name = sources[0].metadata.get("fullname", scope_name)
+            first = sources[0].metadata
+            module_name = first.get("fullname", scope_name)
+            unsupported_label = first.get("unsupported_label")
+            if unsupported_label:
+                return SerializableChatMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=NO_CONTENT_UNSUPPORTED_TYPE.format(
+                        module_name=module_name, label=unsupported_label, url=first.get("url", "")
+                    ),
+                )
             return SerializableChatMessage(
                 role=MessageRole.ASSISTANT,
                 content=NO_CONTENT_IN_MODULE.format(module_name=module_name),
@@ -102,7 +113,7 @@ class SummaryAnswerer:
                 if url in seen_urls:
                     return ""
                 seen_urls.add(url)
-                return CITATION_TEXT.format(url=url, title=_get_display_title(doc))
+                return CITATION_TEXT.format(url=url, title=_get_display_title(doc), suffix=citation_suffix(doc))
 
             resolver = CitationStreamResolver(resolve=_resolve, callback=outer_callback)
             smart_cb = SmartStreamCallback(resolver=resolver, outer_callback=outer_callback)

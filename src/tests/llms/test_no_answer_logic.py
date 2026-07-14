@@ -22,6 +22,8 @@ from src.llm.objects.question_answerer import (
     ANSWER_NOT_FOUND_FIRST_TIME,
     ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL,
     NO_CONTENT_IN_MODULE,
+    NO_CONTENT_UNSUPPORTED_TYPE,
+    get_fallback_type,
     QuestionAnswerer,
 )
 from src.llm.tools.answer import generate_answer
@@ -227,6 +229,29 @@ class TestEmptyModule:
         assert result["answer"] == "Eine echte Antwort."
         mock_answerer.answer_question.assert_called_once()
 
+    def test_unsupported_content_type_names_the_reason(self):
+        """A known-unsupported modname (e.g. native Moodle quiz) gets a specific
+        message naming why, instead of the generic 'kein Inhalt' fallback."""
+        node = SerializableTextNode(
+            text="",
+            metadata={
+                "type": "EmptyModule",
+                "fullname": "Lernziel-Check II",
+                "unsupported_label": "natives Moodle-Quiz",
+                "url": "https://moodle.ki-campus.org/mod/quiz/view.php?id=1406",
+            },
+        )
+        state = make_state([node], course_id=36)
+        with patch("src.llm.tools.answer.get_question_answerer"):
+            result = generate_answer(state)
+        assert result["answer"] == NO_CONTENT_UNSUPPORTED_TYPE.format(
+            module_name="Lernziel-Check II",
+            label="natives Moodle-Quiz",
+            url="https://moodle.ki-campus.org/mod/quiz/view.php?id=1406",
+        )
+        assert "natives Moodle-Quiz" in result["answer"]
+        assert "kein Inhalt" not in result["answer"] and "keinen weiteren Inhalt" not in result["answer"]
+
     def test_empty_reranked_list_does_not_trigger_empty_module_path(self):
         """Empty list has no sources at all — EmptyModule check requires sources to be non-empty."""
         state = make_state([], course_id=3)
@@ -237,3 +262,18 @@ class TestEmptyModule:
         with patch("src.llm.tools.answer.get_question_answerer", return_value=mock_answerer):
             result = generate_answer(state)
         assert NO_CONTENT_IN_MODULE.format(module_name="") not in result["answer"]
+
+
+class TestGetFallbackType:
+    def test_classifies_empty_module(self):
+        text = NO_CONTENT_IN_MODULE.format(module_name="KI-Grundlagen")
+        assert get_fallback_type(text) == "empty_module"
+
+    def test_classifies_unsupported_content_type(self):
+        text = NO_CONTENT_UNSUPPORTED_TYPE.format(
+            module_name="Lernziel-Check II", label="natives Moodle-Quiz", url="https://x/1406"
+        )
+        assert get_fallback_type(text) == "unsupported_content_type"
+
+    def test_real_answer_is_not_a_fallback(self):
+        assert get_fallback_type("Overfitting bedeutet, dass ein Modell auswendig lernt.") is None

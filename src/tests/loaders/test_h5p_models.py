@@ -53,16 +53,21 @@ class TestQuizQuestionMultiChoice:
         text = q.to_text()
         assert "Was ist ML?" in text
 
-    def test_to_text_contains_correct_answer(self):
+    def test_to_text_is_answer_free(self):
+        # Answer-free module text: options listed without Korrekt/Inkorrekt
+        # marking — the solution lives only in the structured QuizItem payload.
         q = QuizQuestion.from_h5p_params(self.LIBRARY, self._params())
         text = q.to_text()
         assert "Ein KI-Teilgebiet" in text
-        assert "Korrekte Antwort" in text
+        assert "Antwortoptionen" in text
+        assert "Korrekte Antwort" not in text
+        assert "Inkorrekte Antwort" not in text
 
-    def test_to_text_contains_incorrect_answers(self):
+    def test_to_text_lists_all_options(self):
         q = QuizQuestion.from_h5p_params(self.LIBRARY, self._params())
         text = q.to_text()
-        assert "Inkorrekte Antwort" in text
+        for option in q.correct_answers + q.incorrect_answers:
+            assert option in text
 
     def test_to_text_has_quiz_prefix(self):
         q = QuizQuestion.from_h5p_params(self.LIBRARY, self._params())
@@ -228,16 +233,21 @@ class TestSummary:
         text = s.to_text()
         assert "Wähle die richtige Aussage:" in text
 
-    def test_to_text_marks_correct_statement(self):
+    def test_to_text_is_answer_free(self):
+        # Statements listed without Korrekt/Falsch marking — the correct-first
+        # grouping lives only in the structured QuizItem payload.
         s = Summary.from_h5p_params(self.LIBRARY, self._params())
         text = s.to_text()
-        assert "Korrekt:" in text
         assert "Machine Learning ist ein Teilgebiet der KI." in text
+        assert "Korrekt:" not in text
+        assert "Falsch:" not in text
 
-    def test_to_text_marks_incorrect_statements(self):
+    def test_to_text_lists_all_statements(self):
         s = Summary.from_h5p_params(self.LIBRARY, self._params())
         text = s.to_text()
-        assert "Falsch:" in text
+        for group in s.statement_groups:
+            for statement in group:
+                assert statement in text
 
     def test_returns_none_on_empty_summaries(self):
         params = {"intro": "Test", "summaries": []}

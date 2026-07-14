@@ -3,10 +3,10 @@
 import pytest
 from llama_index.core.schema import TextNode
 
-from src.llm.objects.citation_parser import CitationParser, _get_display_title
+from src.llm.objects.citation_parser import CitationParser, _format_video_timestamp, _get_display_title, citation_suffix
 
 
-def _node(title=None, fullname=None, url=None) -> TextNode:
+def _node(title=None, fullname=None, url=None, start_seconds=None) -> TextNode:
     meta = {}
     if title is not None:
         meta["title"] = title
@@ -14,6 +14,8 @@ def _node(title=None, fullname=None, url=None) -> TextNode:
         meta["fullname"] = fullname
     if url is not None:
         meta["url"] = url
+    if start_seconds is not None:
+        meta["start_seconds"] = start_seconds
     return TextNode(text="content", metadata=meta)
 
 
@@ -138,3 +140,47 @@ class TestCitationParserParse:
         docs = [_node(title="Kurs A", url="https://ki-campus.org/a")]
         result = self.parser.parse("Text, [doc1]", docs)
         assert ", [doc1]" not in result
+
+    def test_video_source_gets_deterministic_timestamp_suffix(self):
+        """The timestamp is attached at render time — never relies on the LLM
+        mentioning it in prose (small models don't follow that reliably)."""
+        docs = [_node(title="Video: KI", url="https://moodle.ki-campus.org/mod/videotime/view.php?id=1", start_seconds=235.0)]
+        result = self.parser.parse("Siehe [doc1].", docs)
+        assert "(ab Minute 3:55)" in result
+        assert "moodle.ki-campus.org" in result
+        assert "vimeo.com" not in result and "youtube.com" not in result
+
+    def test_non_video_source_gets_no_suffix(self):
+        docs = [_node(title="Kurs A", url="https://ki-campus.org/a")]
+        result = self.parser.parse("[doc1]", docs)
+        assert "(ab Minute" not in result
+
+
+# ---------------------------------------------------------------------------
+# citation_suffix / _format_video_timestamp
+# ---------------------------------------------------------------------------
+
+
+class TestFormatVideoTimestamp:
+    def test_seconds_under_a_minute(self):
+        assert _format_video_timestamp(5) == "0:05"
+
+    def test_minutes_and_seconds(self):
+        assert _format_video_timestamp(235) == "3:55"
+
+    def test_over_an_hour_includes_hours(self):
+        assert _format_video_timestamp(3725) == "1:02:05"
+
+    def test_truncates_fractional_seconds(self):
+        assert _format_video_timestamp(90.9) == "1:30"
+
+
+class TestCitationSuffix:
+    def test_positive_start_seconds_produces_suffix(self):
+        assert citation_suffix(_node(start_seconds=235.0)) == " (ab Minute 3:55)"
+
+    def test_zero_start_seconds_produces_no_suffix(self):
+        assert citation_suffix(_node(start_seconds=0)) == ""
+
+    def test_missing_start_seconds_produces_no_suffix(self):
+        assert citation_suffix(_node()) == ""

@@ -106,6 +106,12 @@ class VectorDBAzureSearch:
             SimpleField(name="url", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="is_important", type=SearchFieldDataType.Boolean, filterable=True),
             SimpleField(name="date_created", type=SearchFieldDataType.String, filterable=True),
+            # Content-type discriminators, promoted out of metadata_json so
+            # typed retrieval can filter/facet on them (e.g. all glossaries of
+            # a course). Null on documents ingested before this field existed —
+            # backfilled via scripts/vectordb/backfill_type_fields.py.
+            SimpleField(name="modname", type=SearchFieldDataType.String, filterable=True, facetable=True),
+            SimpleField(name="h5p_content_type", type=SearchFieldDataType.String, filterable=True),
             # Lossless metadata round-trip; retrieval-only, never searched/filtered.
             SimpleField(name="metadata_json", type=SearchFieldDataType.String),
             # Change-detection fields: one stable key per source document, one hash
@@ -230,6 +236,49 @@ class VectorDBAzureSearch:
             uploaded += len(batch) - len(failed)
         self.logger.debug("Uploaded %s documents into '%s'.", uploaded, index_name)
         return uploaded
+
+    def merge_documents(self, index_name: str, documents: list[dict]) -> int:
+        """Merge fields into EXISTING documents; missing keys fail per-doc (404).
+
+        Deliberately merge-only (not merge_or_upload): a backfill racing a
+        concurrent deletion must not resurrect a "zombie" skeleton doc that
+        carries only the merged fields — such a doc would have a null `source`
+        and be invisible to every source-scoped cleanup path. Callers should
+        treat per-doc 404s as expected (the doc was deleted since the id list
+        was materialized).
+        """
+        if not documents:
+            return 0
+        merged = 0
+        for batch in self._batches(documents):
+            try:
+                results = self._client(index_name).merge_documents(documents=batch)
+            except HttpResponseError as e:
+                self.logger.warning(
+                    "Azure AI Search merge failed: index=%s docs=%s exc=%s", index_name, len(batch), e
+                )
+                continue
+            failed = [r for r in results if not r.succeeded]
+            not_found = [r for r in failed if r.status_code == 404]
+            other = [r for r in failed if r.status_code != 404]
+            if not_found:
+                self.logger.info(
+                    "Azure AI Search merge: %s docs no longer exist (deleted since scan), skipped.",
+                    len(not_found),
+                )
+            if other:
+                self.logger.warning(
+                    "Azure AI Search merge: %s/%s docs failed (index=%s). First error: key=%s status=%s msg=%s",
+                    len(other),
+                    len(batch),
+                    index_name,
+                    other[0].key,
+                    other[0].status_code,
+                    other[0].error_message,
+                )
+            merged += len(batch) - len(failed)
+        self.logger.debug("Merged fields into %s documents in '%s'.", merged, index_name)
+        return merged
 
     # ------------------------------------------------------------------
     # Deletion (delete-by-filter emulation)
@@ -431,14 +480,19 @@ class VectorDBAzureSearch:
         Course records have a ``course_id`` but no ``module_id``; module records
         carry a ``module_id``.
         """
+        from src.vectordb.doc_types import ITEM_DOC_TYPES
+
         client = self._client(index_name)
         # Only docs that participate in the tree carry a course_id. No `top`:
         # every chunk of every module carries course_id/module_id, so this can
         # easily exceed 1000 rows — see load_content_hashes for why a `top`
         # cap here would silently truncate the result instead of paging.
+        # Structured item documents are skipped — they would only multiply the
+        # scan volume (their fullname is the module name anyway).
+        item_types = ",".join(ITEM_DOC_TYPES)
         results = client.search(
             search_text="*",
-            filter="course_id ne null",
+            filter=f"course_id ne null and not search.in(type, '{item_types}', ',')",
             select=["course_id", "module_id", "fullname"],
         )
 

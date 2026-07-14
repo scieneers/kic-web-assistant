@@ -14,7 +14,7 @@ from youtube_transcript_api import (
 from youtube_transcript_api._errors import YouTubeRequestFailed
 from youtube_transcript_api.formatters import WebVTTFormatter
 
-from src.loaders.helper import convert_vtt_to_text
+from src.loaders.helper import convert_vtt_to_segments, convert_vtt_to_text
 from src.loaders.models.texttrack import TextTrack
 
 
@@ -38,12 +38,19 @@ class Youtube:
             err_message = "Transcript liegt nicht (in Deutsch oder Englisch) oder in gültiger Form vor"
             return None, err_message
         formatter = WebVTTFormatter()
-        transcript = convert_vtt_to_text(StringIO(formatter.format_transcript(transcript_json)))
+        vtt_text = formatter.format_transcript(transcript_json)
+        transcript = convert_vtt_to_text(StringIO(vtt_text))
+        try:
+            segments = convert_vtt_to_segments(StringIO(vtt_text))
+        except Exception:
+            segments = None
         texttrack = TextTrack(
             id=0,
             display_language="de",
             language="de",
             link=None,
             transcript=transcript,
+            segments=segments,
+            video_url=f"https://www.youtube.com/watch?v={video_id}",
         )
         return texttrack, err_message
