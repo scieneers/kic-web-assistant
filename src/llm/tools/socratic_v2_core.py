@@ -8,7 +8,9 @@ Heart of the v2 workflow. Each turn:
    policy says: 3 questions in a row → forced HINT, 2 hints on the same
    concept → forced MICRO_EXPLAIN (which always ends in a transfer check).
 3. A generation LLM call produces the actual tutor message for that move,
-   grounded in the retrieved course material, streamed to the user.
+   grounded in the retrieved course material, streamed to the user through a
+   peek-buffered guard (see _PeekLeakGuard) that screens the opening of the
+   response for a leaked-prompt signature before committing to live streaming.
 
 Unlike v1's EXPLAIN branch, an explanation never resets the session — the
 micro-explain includes a transfer question and the dialogue continues.
@@ -18,7 +20,7 @@ import logging
 
 from langfuse.decorators import langfuse_context, observe
 
-from src.llm.objects.LLMs import LLM
+from src.llm.objects.LLMs import LLM, Models
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.state.models import GraphState
 from src.llm.state.socratic_v2_routing import (
@@ -34,7 +36,7 @@ from src.llm.state.socratic_v2_routing import (
     run_policy,
     select_quiz_item,
 )
-from src.llm.streaming import StreamPhaseContext
+from src.llm.streaming import StreamPhaseContext, TokenCallbackContext, token_callback_var
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,120 @@ MAX_QUESTION_STREAK = 3  # question moves in a row before a HINT is forced
 MAX_HINTS_PER_CONCEPT = 2  # hints on one concept before a MICRO_EXPLAIN is forced
 
 GENERATION_FALLBACK = "Kannst du deine Überlegung genauer erklären?"
+
+# Tell-tale field labels from the engineered generation query / system prompt.
+# Smaller models occasionally echo their instructions or the query template
+# instead of answering (observed with Gemma4) — any of these appearing is a
+# strong signal that happened, since a genuine short German tutor reply about
+# an AI concept would never contain these exact label strings.
+_LEAK_MARKERS = (
+    "ZIELKONZEPT:",
+    "SITZUNGS-LERNZIEL:",
+    "LERNSTAND:",
+    "KURSMATERIAL:",
+    "ZUG:",
+    "STRIKTE REGELN",
+    "SO FÜHRST DU DEN ZUG AUS",
+    "# ROLLE #",
+    "# EINGABE #",
+)
+
+# Chars buffered before a stream commits to live token-by-token output. Large
+# enough to contain the observed leak's opening ("# ROLLE #\nDu bist ein
+# herausragender sokratischer Tutor...") but small enough that a clean
+# response still starts streaming almost immediately.
+_LEAK_PEEK_THRESHOLD = 120
+
+
+def _looks_like_leaked_prompt(text: str) -> bool:
+    """True if a generation response echoes the prompt/query instead of answering."""
+    return any(marker in text for marker in _LEAK_MARKERS)
+
+
+class _PeekLeakGuard:
+    """Buffers the start of a token stream to screen for a leaked-prompt
+    signature before forwarding anything to the real callback.
+
+    Mirrors question_answerer.py's SmartStreamCallback peek-then-commit
+    pattern (used there for the "NO ANSWER FOUND" sentinel), applied to a
+    different failure mode. Once the buffer clears the check, every
+    subsequent token is forwarded immediately — the common case streams live
+    with only a small initial delay, and a leak starting anywhere in the
+    checked prefix never reaches the learner's screen at all.
+    """
+
+    def __init__(self, outer_callback) -> None:
+        self._outer_callback = outer_callback
+        self._buffer = ""
+        self._peeking = True
+        self.leaked = False
+
+    def feed(self, delta: str) -> None:
+        if self.leaked:
+            return  # already aborted this attempt — drop any further tokens
+        if not self._peeking:
+            self._outer_callback(delta)
+            return
+        self._buffer += delta
+        if _looks_like_leaked_prompt(self._buffer):
+            self.leaked = True
+            return
+        if len(self._buffer) >= _LEAK_PEEK_THRESHOLD:
+            self._peeking = False
+            self._outer_callback(self._buffer)
+
+    def finalize_clean(self) -> None:
+        """Call once generation finished without tripping the guard — flushes
+        a still-buffered prefix (response shorter than the peek threshold)."""
+        if self._peeking and self._buffer and not self.leaked:
+            self._outer_callback(self._buffer)
+
+
+def _generate(query_for_llm: str, chat_history: list, model, *, stream: bool) -> tuple[str | None, bool]:
+    """One LLM call for the generation step. Returns ``(text, leaked)``:
+    ``text`` is None only for a genuinely empty response (no content at all —
+    distinct from a leak, and not worth retrying); ``leaked`` is True if a
+    leaked-prompt signature was detected (streamed: caught live by the peek
+    guard: buffered: checked on the full text). ``stream=False`` forces the
+    buffered path regardless of any outer streaming context — used for
+    retries, where correctness matters more than typing effect."""
+    outer_callback = token_callback_var.get()
+    if not stream or outer_callback is None:
+        with TokenCallbackContext(None):
+            response = _llm.chat(
+                query=query_for_llm, chat_history=chat_history, model=model, system_prompt=SOCRATIC_V2_GENERATE_PROMPT
+            )
+        text = response.content.strip() if response.content else None
+        return text, bool(text and _looks_like_leaked_prompt(text))
+
+    guard = _PeekLeakGuard(outer_callback)
+    with TokenCallbackContext(guard.feed), StreamPhaseContext("final"):
+        response = _llm.chat(
+            query=query_for_llm, chat_history=chat_history, model=model, system_prompt=SOCRATIC_V2_GENERATE_PROMPT
+        )
+    text = response.content.strip() if response.content else None
+    leaked = guard.leaked or bool(text and _looks_like_leaked_prompt(text))
+    if not leaked:
+        guard.finalize_clean()
+    return text, leaked
+
+
+def _generate_validated(query_for_llm: str, chat_history: list, model) -> str:
+    """Generate the tutor message with a streamed peek-guard; on a detected
+    leak, retry once (buffered, no live streaming) against the more reliable
+    Azure fallback model; if that also leaks, use the safe static fallback.
+    A genuinely empty response (not a leak) goes straight to the static
+    fallback without a retry. A leaked response never reaches the learner."""
+    text, leaked = _generate(query_for_llm, chat_history, model, stream=True)
+    if not leaked:
+        return text if text is not None else GENERATION_FALLBACK
+
+    logger.warning("socratic_v2 generation looked like a leaked prompt — retrying with Azure fallback")
+    retry_text, retry_leaked = _generate(query_for_llm, chat_history, Models.AZURE_FALLBACK, stream=False)
+    if retry_text is None or retry_leaked:
+        logger.warning("socratic_v2 generation still leaked after retry — using static fallback")
+        return GENERATION_FALLBACK
+    return retry_text
 
 
 def _grade_pending_quiz(
@@ -91,14 +207,7 @@ KURSMATERIAL:
 
 ANTWORT DER LERNENDEN PERSON: {user_query}"""
 
-    with StreamPhaseContext("final"):
-        response = _llm.chat(
-            query=query_for_llm,
-            chat_history=chat_history,
-            model=model,
-            system_prompt=SOCRATIC_V2_GENERATE_PROMPT,
-        )
-    answer = response.content.strip() if response.content else GENERATION_FALLBACK
+    answer = _generate_validated(query_for_llm, chat_history, model)
 
     langfuse_context.update_current_observation(
         metadata={
@@ -148,19 +257,7 @@ KURSMATERIAL:
 
 LETZTE ANTWORT DER LERNENDEN PERSON: {user_query}"""
 
-    # Stream the user-facing message token by token (same mechanism as the
-    # summary answerer); the policy call above stays non-streamed.
-    with StreamPhaseContext("final"):
-        response = _llm.chat(
-            query=query_for_llm,
-            chat_history=chat_history,
-            model=model,
-            system_prompt=SOCRATIC_V2_GENERATE_PROMPT,
-        )
-
-    if response.content is None:
-        return GENERATION_FALLBACK
-    return response.content.strip()
+    return _generate_validated(query_for_llm, chat_history, model)
 
 
 @observe(name="socratic_v2_core")

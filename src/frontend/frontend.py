@@ -170,17 +170,20 @@ def convert_selected_index_to_id(course_or_module_index: int) -> dict:
 
 
 def _tree_default_index() -> int:
-    """Reflects the tree's own last known selection back as its `index`.
+    """Reflects the last known tree selection back as its `index`.
 
     sac.tree() treats `index` as authoritative on every rerun, not just on
     first mount — passing a hardcoded 0 would snap the selection back to
     "Alle Inhalte aus Drupal" on any unrelated rerun (e.g. a different
     sidebar button), even though the user never touched the tree.
+
+    Reads the non-widget mirror `course_selection_index` (maintained in
+    select_course_or_module) instead of the widget key itself: Streamlit
+    drops widget state whenever the tree doesn't get instantiated during a
+    run, while the mirror survives — and it lets reset_history() snap the
+    tree back to "Alle Inhalte" deliberately.
     """
-    value = st.session_state.get("course_selection", 0)
-    if isinstance(value, list):
-        return value[0] if value else 0
-    return value
+    return st.session_state.get("course_selection_index", 0)
 
 
 def select_course_or_module():
@@ -197,22 +200,42 @@ def select_course_or_module():
         st.session_state["course_id"] != talk_to_course_ids["course_id"]
         or st.session_state["module_id"] != talk_to_course_ids["module_id"]
     ):
-        reset_history()
+        # keep_socratic: erst "Lernmodus starten" klicken und dann den Kurs
+        # wählen ist ein legitimer Ablauf — die Aktivierung darf der
+        # Kurswechsel-Reset nicht stillschweigend wieder löschen.
+        reset_history(keep_socratic=True)
 
     st.session_state["course_id"] = talk_to_course_ids["course_id"]
     st.session_state["module_id"] = talk_to_course_ids["module_id"]
+    st.session_state.course_selection_index = index_selected
 
 
-def reset_history():
+def reset_history(keep_socratic: bool = False):
     st.session_state.messages = []
     st.session_state.course_id = None
     st.session_state.module_id = None
     st.session_state.thread_id = None
     st.session_state.last_activity = None
     st.session_state._auto_restored = False
-    st.session_state.start_socratic = False
-    st.session_state.start_socratic_v2 = False
+    st.session_state._load_error = None
+    st.session_state.course_selection_index = 0
+    if not keep_socratic:
+        st.session_state.start_socratic = False
+        st.session_state.start_socratic_v2 = False
     st.experimental_set_query_params()
+
+
+def _arm_socratic(version: str) -> None:
+    """on_click-Callback für die Lernmodus-Buttons.
+
+    Callbacks laufen VOR dem Rerun, den der Klick ohnehin auslöst — es
+    braucht also kein st.rerun(). Das frühere `if st.button(...): ...
+    st.rerun()`-Muster brach das Skript mitten in der Sidebar ab; die noch
+    nicht instanziierten Widgets darunter (LLM-Auswahl, Kursbaum) verloren
+    dadurch ihren Widget-State und sprangen auf den Default zurück.
+    """
+    st.session_state.start_socratic = version == "v1"
+    st.session_state.start_socratic_v2 = version == "v2"
 
 
 SESSION_TTL = 30 * 60  # 30 Minuten – muss mit Backend-Wert übereinstimmen
@@ -229,16 +252,27 @@ def _load_session_from_backend(thread_id: str, auto_restored: bool = False) -> N
         headers={"Api-Key": env.REST_API_KEYS[0]},
     )
     if response.status_code != 200:
-        st.sidebar.error(f"Session nicht gefunden: {response.status_code}")
+        # Fehler über Session-State statt st.sidebar.error(): diese Funktion
+        # läuft auch in on_click-Callbacks, wo direkt gerenderte Elemente
+        # nicht zuverlässig in der Sidebar landen. Anzeige erfolgt im
+        # Sidebar-Block unter dem Laden-Button.
+        st.session_state._load_error = f"Session nicht gefunden: {response.status_code}"
         return
     data = response.json()
     messages = data.get("messages", [])
+    st.session_state._load_error = None
     st.session_state.thread_id = thread_id
     st.session_state.last_activity = time.time()
     st.session_state._auto_restored = auto_restored
     st.session_state.messages = [
         {"role": msg["role"], "content": msg["content"]} for msg in messages
     ]
+
+
+def _load_session_clicked() -> None:
+    load_id = st.session_state.get("load_session_input", "").strip()
+    if load_id:
+        _load_session_from_backend(load_id)
 
 
 def submit_feedback(feedback: dict, trace_id: str):
@@ -306,14 +340,8 @@ with st.sidebar:
         st.info("v1 aktiviert für die nächste Nachricht.")
     if st.session_state.get("start_socratic_v2"):
         st.info("v2 aktiviert für die nächste Nachricht.")
-    if st.button("Lernmodus starten (v1)", key="start_socratic_btn"):
-        st.session_state.start_socratic = True
-        st.session_state.start_socratic_v2 = False
-        st.rerun()
-    if st.button("✨ Lernmodus starten (v2)", key="start_socratic_v2_btn"):
-        st.session_state.start_socratic_v2 = True
-        st.session_state.start_socratic = False
-        st.rerun()
+    st.button("Lernmodus starten (v1)", key="start_socratic_btn", on_click=_arm_socratic, args=("v1",))
+    st.button("✨ Lernmodus starten (v2)", key="start_socratic_v2_btn", on_click=_arm_socratic, args=("v2",))
 
     st.divider()
     st.caption("🧪 Moodle-Simulation")
@@ -325,12 +353,11 @@ with st.sidebar:
     else:
         st.text("Keine aktive Session")
 
-    load_id = st.text_input("Session-ID laden", placeholder="thread_id hier einfügen…", key="load_session_input")
-    if st.button("Laden", key="load_session_btn") and load_id:
-        _load_session_from_backend(load_id.strip())
-        st.rerun()
-    if st.button("Neue Session", key="new_session_btn"):
-        reset_history()
+    st.text_input("Session-ID laden", placeholder="thread_id hier einfügen…", key="load_session_input")
+    st.button("Laden", key="load_session_btn", on_click=_load_session_clicked)
+    if st.session_state.get("_load_error"):
+        st.error(st.session_state._load_error)
+    st.button("Neue Session", key="new_session_btn", on_click=reset_history)
 
     st.divider()
     _model_options = list(Models)
@@ -371,7 +398,12 @@ if "messages" not in st.session_state:
     url_thread_id = st.experimental_get_query_params().get("thread_id", [None])[0]
     if url_thread_id:
         _load_session_from_backend(url_thread_id, auto_restored=True)
-        st.rerun()  # Sidebar neu rendern damit Badge + Session-ID sofort sichtbar sind
+        if "messages" in st.session_state:
+            st.rerun()  # Sidebar neu rendern damit Badge + Session-ID sofort sichtbar sind
+        # Laden fehlgeschlagen (z.B. abgelaufene Session in der URL): Param
+        # entfernen, sonst rerunnt die Seite endlos gegen dieselbe tote thread_id.
+        st.session_state.messages = []
+        st.experimental_set_query_params()
     else:
         st.session_state.messages = []
 

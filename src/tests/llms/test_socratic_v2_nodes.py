@@ -27,7 +27,13 @@ from src.llm.state.socratic_v2_routing import (
 )
 from src.llm.tools.contextualize import contextualize_and_route
 from src.llm.tools.socratic_v2_consolidation import socratic_v2_consolidation
-from src.llm.tools.socratic_v2_core import socratic_v2_core
+from src.llm.tools.socratic_v2_core import (
+    GENERATION_FALLBACK,
+    _generate_validated,
+    _looks_like_leaked_prompt,
+    _PeekLeakGuard,
+    socratic_v2_core,
+)
 from src.llm.tools.socratic_v2_opening import (
     NO_CONTENT_MESSAGE,
     NO_SCOPE_MESSAGE,
@@ -446,6 +452,124 @@ class TestOpeningQuizLoading:
             result = socratic_v2_opening(_base_state())
         assert result["socratic_v2_phase"] == "core"
         assert result["v2_quiz_items"] == []
+
+
+# ---------------------------------------------------------------------------
+# Leaked-prompt guard: a small model (observed with Gemma4) occasionally
+# echoes its own system prompt / the engineered query labels instead of
+# generating the tutor message. This must never reach the learner, whether
+# streaming is active or not.
+# ---------------------------------------------------------------------------
+
+
+LEAKED_TEXT = (
+    "# ROLLE #\nDu bist ein herausragender sokratischer Tutor auf dem KI-Campus.\n"
+    "ZUG: FRAGE\nZIELKONZEPT: Funktionsweise von LLMs\nSITZUNGS-LERNZIEL: ...\n"
+    "LERNSTAND: ...\nKURSMATERIAL:\n...\n"
+)
+CLEAN_TEXT = "Das ist nicht ganz richtig. Was denkst du, woher das Modell seine Vorhersage nimmt?"
+
+
+class TestLooksLikeLeakedPrompt:
+    def test_detects_field_label(self):
+        assert _looks_like_leaked_prompt("Text mit ZIELKONZEPT: Overfitting drin") is True
+
+    def test_detects_role_header(self):
+        assert _looks_like_leaked_prompt("# ROLLE #\nDu bist ein Tutor...") is True
+
+    def test_clean_tutor_reply_is_not_flagged(self):
+        assert _looks_like_leaked_prompt(CLEAN_TEXT) is False
+
+    def test_full_leaked_example_is_flagged(self):
+        assert _looks_like_leaked_prompt(LEAKED_TEXT) is True
+
+
+class TestPeekLeakGuard:
+    def test_short_clean_response_flushes_on_finalize(self):
+        forwarded = []
+        guard = _PeekLeakGuard(forwarded.append)
+        guard.feed("Kurze ")
+        guard.feed("Antwort.")
+        assert forwarded == []  # still buffered — under threshold, not finalized yet
+        guard.finalize_clean()
+        assert forwarded == ["Kurze Antwort."]
+        assert guard.leaked is False
+
+    def test_long_clean_response_streams_live_after_threshold(self):
+        forwarded = []
+        guard = _PeekLeakGuard(forwarded.append)
+        long_clean = "Das ist eine ausführliche, aber völlig unauffällige Tutor-Antwort ohne jede Markierung. " * 3
+        for chunk in [long_clean[i : i + 10] for i in range(0, len(long_clean), 10)]:
+            guard.feed(chunk)
+        assert guard.leaked is False
+        assert "".join(forwarded) == long_clean  # nothing dropped, just re-chunked around the threshold
+        assert len(forwarded) > 1  # buffered prefix once, then individual chunks live
+        # tail tokens fed after commit are forwarded immediately, one by one
+        guard.feed(" Noch mehr Text.")
+        assert forwarded[-1] == " Noch mehr Text."
+
+    def test_leak_in_prefix_is_never_forwarded(self):
+        forwarded = []
+        guard = _PeekLeakGuard(forwarded.append)
+        for chunk in ["# ROLLE #\n", "Du bist ein ", "ZIELKONZEPT: X"]:
+            guard.feed(chunk)
+        assert guard.leaked is True
+        assert forwarded == []
+        # further tokens after detection are dropped, not forwarded
+        guard.feed("noch mehr")
+        assert forwarded == []
+
+    def test_finalize_clean_does_nothing_after_leak(self):
+        forwarded = []
+        guard = _PeekLeakGuard(forwarded.append)
+        guard.feed("ZIELKONZEPT: X SITZUNGS-LERNZIEL: Y")
+        guard.finalize_clean()
+        assert forwarded == []
+
+
+class TestGenerateValidated:
+    """No streaming context is active in these tests (token_callback_var is
+    unset), so _generate() always takes the buffered path — this exercises
+    the retry/fallback ladder directly against mocked LLM responses."""
+
+    def test_clean_first_attempt_returned_as_is(self):
+        with patch("src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response(CLEAN_TEXT)):
+            result = _generate_validated("query", [], Models.GEMMA4_31B)
+        assert result == CLEAN_TEXT
+
+    def test_leaked_first_attempt_retries_with_azure_fallback(self):
+        responses = [_mock_llm_response(LEAKED_TEXT), _mock_llm_response(CLEAN_TEXT)]
+        with patch("src.llm.tools.socratic_v2_core._llm.chat", side_effect=responses) as mock_chat:
+            result = _generate_validated("query", [], Models.GEMMA4_31B)
+        assert result == CLEAN_TEXT
+        assert mock_chat.call_args_list[1].kwargs["model"] == Models.AZURE_FALLBACK
+
+    def test_leaked_on_both_attempts_falls_back_to_static_message(self):
+        responses = [_mock_llm_response(LEAKED_TEXT), _mock_llm_response(LEAKED_TEXT)]
+        with patch("src.llm.tools.socratic_v2_core._llm.chat", side_effect=responses):
+            result = _generate_validated("query", [], Models.GEMMA4_31B)
+        assert result == GENERATION_FALLBACK
+
+    def test_none_content_falls_back_without_retry(self):
+        with patch("src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response(None)) as mock_chat:
+            result = _generate_validated("query", [], Models.GEMMA4_31B)
+        assert result == GENERATION_FALLBACK
+        mock_chat.assert_called_once()  # None content is not a leak — no retry needed
+
+
+class TestCoreNeverLeaksToUser:
+    """End-to-end through socratic_v2_core: even if the generation LLM leaks
+    on the first attempt, the answer that reaches the user is always clean."""
+
+    def test_frage_move_answer_is_never_a_leak(self):
+        state = _base_state()
+        responses = [_mock_llm_response(LEAKED_TEXT), _mock_llm_response(CLEAN_TEXT)]
+        with patch("src.llm.tools.socratic_v2_core.run_policy", return_value=_policy("FRAGE")), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", side_effect=responses
+        ):
+            result = socratic_v2_core(state)
+        assert result["answer"] == CLEAN_TEXT
+        assert _looks_like_leaked_prompt(result["answer"]) is False
 
 
 # ---------------------------------------------------------------------------
