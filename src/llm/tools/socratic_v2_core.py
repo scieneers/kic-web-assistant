@@ -24,11 +24,15 @@ from src.llm.state.models import GraphState
 from src.llm.state.socratic_v2_routing import (
     V2_EXIT_MESSAGE,
     V2_QUESTION_MOVES,
+    build_pending_quiz,
+    grade_quiz_answer,
     initial_learner_model,
     format_learner_model,
     merge_learner_update,
+    render_quiz_message,
     reset_socratic_v2_state,
     run_policy,
+    select_quiz_item,
 )
 from src.llm.streaming import StreamPhaseContext
 
@@ -45,6 +49,76 @@ MAX_QUESTION_STREAK = 3  # question moves in a row before a HINT is forced
 MAX_HINTS_PER_CONCEPT = 2  # hints on one concept before a MICRO_EXPLAIN is forced
 
 GENERATION_FALLBACK = "Kannst du deine Überlegung genauer erklären?"
+
+
+def _grade_pending_quiz(
+    *,
+    pending_quiz: dict,
+    user_query: str,
+    chat_history: list,
+    model,
+    learner_model: dict,
+    session_goal: str | None,
+    reranked: list,
+    hint_count: int,
+    target_concept: str | None,
+) -> dict:
+    """Resolve a posed quiz question: deterministic grading, evidence-based
+    learner-model update, LLM only phrases the feedback."""
+    verdict = grade_quiz_answer(pending_quiz, user_query)
+
+    # Evidence-based learner-model update — a graded answer is a stronger
+    # signal than any LLM assessment.
+    concept = pending_quiz.get("concept") or target_concept
+    if concept and verdict["recognized"]:
+        learner_model = merge_learner_update(
+            learner_model, {"konzepte": {concept: "sicher" if verdict["correct"] else "wackelig"}}
+        )
+
+    grading_summary = (
+        f"ERKANNTE ANTWORT: {verdict['matched_option'] or 'keine der Optionen erkannt'}\n"
+        f"BEWERTUNG: {'RICHTIG' if verdict['correct'] else 'FALSCH' if verdict['recognized'] else 'NICHT ERKANNT'}\n"
+        f"KORREKTE ANTWORT(EN): {', '.join(verdict['correct_options'])}"
+    )
+    query_for_llm = f"""ZUG: QUIZ_FEEDBACK
+QUIZFRAGE: {pending_quiz.get('question')}
+{grading_summary}
+SITZUNGS-LERNZIEL: {session_goal or "noch nicht vereinbart"}
+LERNSTAND: {format_learner_model(learner_model)}
+
+KURSMATERIAL:
+{chr(10).join(f"[Material {i + 1}]{chr(10)}{chunk.text}" for i, chunk in enumerate(reranked)) or "Kein spezifisches Kursmaterial gefunden."}
+
+ANTWORT DER LERNENDEN PERSON: {user_query}"""
+
+    with StreamPhaseContext("final"):
+        response = _llm.chat(
+            query=query_for_llm,
+            chat_history=chat_history,
+            model=model,
+            system_prompt=SOCRATIC_V2_GENERATE_PROMPT,
+        )
+    answer = response.content.strip() if response.content else GENERATION_FALLBACK
+
+    langfuse_context.update_current_observation(
+        metadata={
+            "executed_move": "QUIZ_FEEDBACK",
+            "quiz_correct": verdict["correct"],
+            "quiz_recognized": verdict["recognized"],
+            "target_concept": concept,
+            "learner_model": learner_model,
+        }
+    )
+
+    return {
+        "socratic_v2_phase": "core",
+        "v2_learner_model": learner_model,
+        "v2_pending_quiz": None,
+        "v2_hint_count": hint_count,
+        "v2_question_streak": 0,  # the resolution IS the Gegenwert
+        "answer": answer,
+        "citations_markdown": None,
+    }
 
 
 def _generate_move_response(
@@ -116,6 +190,26 @@ def socratic_v2_core(state: GraphState) -> dict:
     hint_count = state.get("v2_hint_count", 0)
     question_streak = state.get("v2_question_streak", 0)
     previous_concept = state.get("v2_target_concept")
+    quiz_items = state.get("v2_quiz_items") or []
+    pending_quiz = state.get("v2_pending_quiz")
+
+    # 0) A posed quiz question is graded DETERMINISTICALLY against the known
+    #    solution — no policy call, no LLM judgement on correctness. Only the
+    #    feedback wording comes from the generation LLM.
+    if pending_quiz:
+        return _grade_pending_quiz(
+            pending_quiz=pending_quiz,
+            user_query=user_query,
+            chat_history=chat_history,
+            model=model,
+            learner_model=learner_model,
+            session_goal=session_goal,
+            reranked=reranked,
+            hint_count=hint_count,
+            target_concept=previous_concept,
+        )
+
+    unasked_quiz_items = sum(1 for item in quiz_items if not item.get("asked"))
 
     # 1) Policy: which move, and what did we learn about the learner?
     policy = run_policy(
@@ -127,6 +221,7 @@ def socratic_v2_core(state: GraphState) -> dict:
         hint_count=hint_count,
         question_streak=question_streak,
         model=model,
+        available_quiz_items=unasked_quiz_items,
     )
     move = policy["move"]
 
@@ -141,6 +236,40 @@ def socratic_v2_core(state: GraphState) -> dict:
     target_concept = policy.get("zielkonzept") or previous_concept
     concept_changed = bool(previous_concept) and target_concept != previous_concept
     effective_hint_count = 0 if concept_changed else hint_count
+
+    # QUIZ: pose a REAL course quiz question — rendered deterministically
+    # (no LLM, nothing can leak), graded on the next turn. Falls back to
+    # FRAGE when no unasked item is left despite the policy's choice.
+    if move == "QUIZ":
+        item_index = select_quiz_item(quiz_items, target_concept)
+        pending = build_pending_quiz(quiz_items[item_index], concept=target_concept) if item_index is not None else None
+        if pending:
+            updated_items = [dict(item) for item in quiz_items]
+            updated_items[item_index]["asked"] = True
+            langfuse_context.update_current_observation(
+                metadata={
+                    "policy_move": "QUIZ",
+                    "executed_move": "QUIZ",
+                    "quiz_question": pending["question"],
+                    "target_concept": target_concept,
+                }
+            )
+            return {
+                "socratic_v2_phase": "core",
+                "v2_session_goal": session_goal,
+                "v2_learner_model": learner_model,
+                "v2_target_concept": target_concept,
+                "v2_hint_count": effective_hint_count,
+                # A quiz gives its resolution next turn — it does not count
+                # into the question streak.
+                "v2_question_streak": question_streak,
+                "v2_quiz_items": updated_items,
+                "v2_pending_quiz": pending,
+                "answer": render_quiz_message(pending),
+                "citations_markdown": None,
+            }
+        logger.debug("socratic_v2_core: QUIZ chosen but no usable item — falling back to FRAGE")
+        move = "FRAGE"
 
     # 2) Deterministic guards — the ladder holds even if the policy drifts.
     original_move = move

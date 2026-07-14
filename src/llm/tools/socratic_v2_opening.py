@@ -21,8 +21,13 @@ from langfuse.decorators import langfuse_context, observe
 from src.llm.objects.LLMs import LLM, Models
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.state.models import GraphState
-from src.llm.state.socratic_v2_routing import initial_learner_model, reset_socratic_v2_state
+from src.llm.state.socratic_v2_routing import (
+    GRADEABLE_QUIZ_KINDS,
+    initial_learner_model,
+    reset_socratic_v2_state,
+)
 from src.llm.tools.retrieve import get_retriever
+from src.vectordb.doc_types import QUIZ_ITEM
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +143,19 @@ def socratic_v2_opening(state: GraphState) -> dict:
     if not objectives:
         objectives = [f"Die Inhalte von „{scope_title}“ verstehen" if scope_title else "Die Inhalte dieses Moduls verstehen"]
 
+    # Real course quiz items of the target module (structured QuizItem docs
+    # with known solutions) → enable the deterministic QUIZ move. Best-effort:
+    # a failing typed fetch must not block the session opening.
+    quiz_items: list[dict] = []
+    try:
+        quiz_nodes = retriever.retrieve_items(QUIZ_ITEM, course_id=course_id, module_id=target_module, top=0)
+        for node in quiz_nodes:
+            payload = (node.metadata or {}).get("payload") or {}
+            if payload.get("kind") in GRADEABLE_QUIZ_KINDS and payload.get("question"):
+                quiz_items.append({**payload, "asked": False})
+    except Exception:
+        logger.warning("socratic_v2_opening: quiz item fetch failed — QUIZ move disabled", exc_info=True)
+
     langfuse_context.update_current_observation(
         metadata={
             "course_id": course_id,
@@ -145,6 +163,7 @@ def socratic_v2_opening(state: GraphState) -> dict:
             "n_content_nodes": len(content_nodes),
             "n_objectives": len(objectives),
             "n_concepts": len(concepts),
+            "n_quiz_items": len(quiz_items),
             "scope_title": scope_title,
         }
     )
@@ -159,6 +178,8 @@ def socratic_v2_opening(state: GraphState) -> dict:
         "v2_hint_count": 0,
         "v2_question_streak": 0,
         "v2_scope_title": scope_title,
+        "v2_quiz_items": quiz_items,
+        "v2_pending_quiz": None,
         "answer": _compose_welcome(scope_title, objectives),
         "citations_markdown": None,
     }

@@ -17,10 +17,13 @@ from src.api.models.serializable_text_node import SerializableTextNode
 from src.llm.objects.LLMs import Models
 from src.llm.state.socratic_v2_routing import (
     V2_EXIT_MESSAGE,
+    build_pending_quiz,
+    grade_quiz_answer,
     initial_learner_model,
     merge_learner_update,
     parse_policy_response,
     reset_socratic_v2_state,
+    select_quiz_item,
 )
 from src.llm.tools.contextualize import contextualize_and_route
 from src.llm.tools.socratic_v2_consolidation import socratic_v2_consolidation
@@ -150,9 +153,10 @@ class TestMergeLearnerUpdate:
 
 
 class TestSocraticV2Opening:
-    def _run(self, state, nodes, llm_content="LERNZIEL: Overfitting erkennen\nKONZEPT: Overfitting"):
+    def _run(self, state, nodes, llm_content="LERNZIEL: Overfitting erkennen\nKONZEPT: Overfitting", quiz_nodes=None):
         retriever = MagicMock()
         retriever.retrieve_all.return_value = nodes
+        retriever.retrieve_items.return_value = quiz_nodes or []
         with patch("src.llm.tools.socratic_v2_opening.get_retriever", return_value=retriever), patch(
             "src.llm.tools.socratic_v2_opening._llm.chat", return_value=_mock_llm_response(llm_content)
         ):
@@ -284,6 +288,164 @@ class TestSocraticV2Core:
         state = _base_state(reranked=[_make_chunk("Overfitting bedeutet ...")])
         _, _, mock_generate = self._run(state, _policy("FRAGE"))
         assert "Overfitting bedeutet ..." in mock_generate.call_args.kwargs["query"]
+
+
+# ---------------------------------------------------------------------------
+# QUIZ move: deterministic posing + grading of real course quiz items
+# ---------------------------------------------------------------------------
+
+
+def _quiz_payload(**overrides) -> dict:
+    payload = {
+        "kind": "multichoice",
+        "question": "Was ist Overfitting?",
+        "correct_answers": ["Auswendiglernen der Trainingsdaten"],
+        "incorrect_answers": ["Ein zu kleines Modell"],
+        "asked": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestQuizMove:
+    def _run(self, state, policy, llm_content="Feedback."):
+        with patch("src.llm.tools.socratic_v2_core.run_policy", return_value=policy) as mock_policy, patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response(llm_content)
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        return result, mock_policy, mock_generate
+
+    def test_quiz_move_poses_question_deterministically(self):
+        state = _base_state(v2_quiz_items=[_quiz_payload()])
+        result, _, mock_generate = self._run(state, _policy("QUIZ"))
+        mock_generate.assert_not_called()  # rendering is deterministic, no LLM
+        assert "Was ist Overfitting?" in result["answer"]
+        assert "A)" in result["answer"] and "B)" in result["answer"]
+        assert "Korrekt" not in result["answer"]  # nothing leaks
+        assert result["v2_pending_quiz"] is not None
+        assert result["v2_quiz_items"][0]["asked"] is True
+
+    def test_quiz_options_carry_ground_truth_in_state_only(self):
+        state = _base_state(v2_quiz_items=[_quiz_payload()])
+        result, _, _ = self._run(state, _policy("QUIZ"))
+        options = result["v2_pending_quiz"]["options"]
+        assert sum(1 for o in options if o["correct"]) == 1
+        correct_option = next(o for o in options if o["correct"])
+        assert correct_option["text"] == "Auswendiglernen der Trainingsdaten"
+
+    def test_quiz_without_items_falls_back_to_frage(self):
+        state = _base_state(v2_quiz_items=[])
+        result, _, mock_generate = self._run(state, _policy("QUIZ"), llm_content="Was denkst du?")
+        assert "ZUG: FRAGE" in mock_generate.call_args.kwargs["query"]
+        assert result.get("v2_pending_quiz") is None
+
+    def test_policy_receives_available_quiz_count(self):
+        state = _base_state(v2_quiz_items=[_quiz_payload(), _quiz_payload(asked=True)])
+        _, mock_policy, _ = self._run(state, _policy("FRAGE"))
+        assert mock_policy.call_args.kwargs["available_quiz_items"] == 1
+
+    def _pending_state(self):
+        pending = build_pending_quiz(_quiz_payload(), concept="Overfitting")
+        return _base_state(v2_pending_quiz=pending), pending
+
+    def test_grading_correct_letter_updates_learner_model(self):
+        state, pending = self._pending_state()
+        correct_letter = next(o["letter"] for o in pending["options"] if o["correct"])
+        state["user_query"] = correct_letter.lower()
+        with patch("src.llm.tools.socratic_v2_core.run_policy") as mock_policy, patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Richtig!")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        mock_policy.assert_not_called()  # grading is deterministic
+        assert result["v2_learner_model"]["konzepte"]["Overfitting"] == "sicher"
+        assert result["v2_pending_quiz"] is None
+        assert "BEWERTUNG: RICHTIG" in mock_generate.call_args.kwargs["query"]
+
+    def test_grading_wrong_answer_marks_concept_wackelig(self):
+        state, pending = self._pending_state()
+        wrong = next(o for o in pending["options"] if not o["correct"])
+        state["user_query"] = wrong["text"]
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Leider falsch.")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        assert result["v2_learner_model"]["konzepte"]["Overfitting"] == "wackelig"
+        assert "BEWERTUNG: FALSCH" in mock_generate.call_args.kwargs["query"]
+
+    def test_grading_unrecognized_answer_does_not_touch_learner_model(self):
+        state, _ = self._pending_state()
+        state["user_query"] = "warum fragst du mich das?"
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Kein Problem!")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        assert "Overfitting" not in result["v2_learner_model"]["konzepte"]
+        assert "BEWERTUNG: NICHT ERKANNT" in mock_generate.call_args.kwargs["query"]
+
+
+class TestQuizHelpers:
+    def test_grade_truefalse_synonyms(self):
+        pending = build_pending_quiz(
+            {"kind": "truefalse", "question": "F?", "correct_answers": ["Falsch"], "incorrect_answers": ["Wahr"]}
+        )
+        assert grade_quiz_answer(pending, "stimmt nicht")["correct"] is True
+        assert grade_quiz_answer(pending, "ja")["correct"] is False
+        assert grade_quiz_answer(pending, "b")["correct"] is True  # B) Falsch
+
+    def test_build_pending_quiz_shuffles_deterministically(self):
+        payload = _quiz_payload(incorrect_answers=["Falsch 1", "Falsch 2", "Falsch 3"])
+        first = build_pending_quiz(payload)
+        second = build_pending_quiz(payload)
+        assert [o["text"] for o in first["options"]] == [o["text"] for o in second["options"]]
+        assert len(first["options"]) == 4
+
+    def test_build_pending_quiz_rejects_ungradeable_kind(self):
+        assert build_pending_quiz({"kind": "blanks", "question": "F?", "text_with_blanks": "*x*"}) is None
+
+    def test_select_quiz_item_prefers_target_concept(self):
+        items = [
+            _quiz_payload(question="Was ist ein Neuron?"),
+            _quiz_payload(question="Was ist Overfitting?"),
+        ]
+        assert select_quiz_item(items, "Overfitting") == 1
+        assert select_quiz_item(items, None) == 0
+
+    def test_select_quiz_item_skips_asked(self):
+        items = [_quiz_payload(asked=True), _quiz_payload()]
+        assert select_quiz_item(items, None) == 1
+        assert select_quiz_item([_quiz_payload(asked=True)], None) is None
+
+
+class TestOpeningQuizLoading:
+    def test_opening_loads_gradeable_quiz_items(self):
+        node_gradeable = MagicMock()
+        node_gradeable.metadata = {"payload": {"kind": "truefalse", "question": "F?", "correct_answers": ["Wahr"]}}
+        node_blanks = MagicMock()
+        node_blanks.metadata = {"payload": {"kind": "blanks", "question": "L?", "text_with_blanks": "*x*"}}
+
+        retriever = MagicMock()
+        retriever.retrieve_all.return_value = [MagicMock(metadata={"type": "module", "fullname": "M"}, text="Inhalt")]
+        retriever.retrieve_items.return_value = [node_gradeable, node_blanks]
+        with patch("src.llm.tools.socratic_v2_opening.get_retriever", return_value=retriever), patch(
+            "src.llm.tools.socratic_v2_opening._llm.chat",
+            return_value=_mock_llm_response("LERNZIEL: X\nKONZEPT: Y"),
+        ):
+            result = socratic_v2_opening(_base_state())
+        assert len(result["v2_quiz_items"]) == 1  # blanks filtered out
+        assert result["v2_quiz_items"][0]["asked"] is False
+        assert result["v2_pending_quiz"] is None
+
+    def test_opening_survives_quiz_fetch_failure(self):
+        retriever = MagicMock()
+        retriever.retrieve_all.return_value = [MagicMock(metadata={"type": "module", "fullname": "M"}, text="Inhalt")]
+        retriever.retrieve_items.side_effect = RuntimeError("index down")
+        with patch("src.llm.tools.socratic_v2_opening.get_retriever", return_value=retriever), patch(
+            "src.llm.tools.socratic_v2_opening._llm.chat",
+            return_value=_mock_llm_response("LERNZIEL: X"),
+        ):
+            result = socratic_v2_opening(_base_state())
+        assert result["socratic_v2_phase"] == "core"
+        assert result["v2_quiz_items"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -58,6 +58,10 @@ class GraphState(TypedDict, total=False):
     v2_hint_count: int  # hints given for the CURRENT target concept (2 → forced micro-explain)
     v2_question_streak: int  # consecutive question moves without giving anything back (3 → forced hint)
     v2_scope_title: Optional[str]  # module/course display name for tutor messages
+    # QUIZ move: real course quiz items (structured QuizItem payloads with the
+    # known solutions), loaded once at opening; answers graded deterministically.
+    v2_quiz_items: Optional[List[Dict[str, Any]]]  # [{...payload, "asked": bool}]
+    v2_pending_quiz: Optional[Dict[str, Any]]  # question currently posed: {question, kind, concept, options: [{letter, text, correct}]}
 
     # output
     answer: Optional[str]
