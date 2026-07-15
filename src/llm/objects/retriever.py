@@ -12,6 +12,21 @@ from src.api.models.serializable_text_node import SerializableTextNode
 logger = logging.getLogger(__name__)
 
 
+def _numeric_in_clause(field: str, values: list[int] | tuple[int, ...]) -> str:
+    """OData membership test for a NUMERIC field over a list of values.
+
+    Azure AI Search's ``search.in`` only accepts string fields
+    (search.in(Edm.String, ...)), so it can't be used on the numeric
+    ``course_id`` / ``module_id`` fields — doing so raises "No function
+    signature for search.in matches". Build an ``eq``-OR expression instead,
+    which works for numeric fields.
+    """
+    ids = [int(v) for v in values]
+    if len(ids) == 1:
+        return f"{field} eq {ids[0]}"
+    return "(" + " or ".join(f"{field} eq {v}" for v in ids) + ")"
+
+
 def _build_odata_filter(
     course_id: int | list[int] | tuple[int, ...] | None,
     module_id: int | list[int] | tuple[int, ...] | None,
@@ -55,8 +70,7 @@ def _build_odata_filter(
 
     if course_id is not None:
         if isinstance(course_id, (list, tuple)):
-            ids = ",".join(str(int(c)) for c in course_id)
-            clauses.append(f"search.in(course_id, '{ids}', ',')")
+            clauses.append(_numeric_in_clause("course_id", course_id))
             reasons.append(f"course_id list provided: filter to courses {list(course_id)}")
         else:
             clauses.append(f"course_id eq {int(course_id)}")
@@ -64,8 +78,7 @@ def _build_odata_filter(
 
     if module_id is not None:
         if isinstance(module_id, (list, tuple)):
-            ids = ",".join(str(int(m)) for m in module_id)
-            clauses.append(f"search.in(module_id, '{ids}', ',')")
+            clauses.append(_numeric_in_clause("module_id", module_id))
             reasons.append(f"module_id list provided: filter to modules {list(module_id)}")
         else:
             clauses.append(f"module_id eq {int(module_id)}")

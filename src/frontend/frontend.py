@@ -129,88 +129,189 @@ def create_courses_modules_tree() -> list:
     return tree_items
 
 
-def convert_selected_index_to_id(course_or_module_index: int) -> dict:
-    tree = create_courses_modules_tree()
+def _flatten_tree_nodes() -> list[dict]:
+    """DFS-ordered flat list of tree nodes, matching sac.tree's return_index numbering.
 
-    course_id = None
-    course_name = None
-    module_level = False
-    i = -1
-    flag_done = False
+    sac.tree(return_index=True) numbers nodes depth-first: root=0, then each
+    course, immediately followed by that course's modules, then the next
+    course. Every helper that maps an `index` (or list of indices) back to
+    IDs relies on this exact ordering.
+
+    Each entry carries: index, course_id, module_id, is_module, is_root.
+    """
+    tree = create_courses_modules_tree()
+    nodes = []
+    i = 0
     for course in tree:
-        if flag_done:
-            break
-        module_id = None
-        module_name = None
-        course_id = course.description
-        course_name = course.label
-        module_level = False
-        i = i + 1
-        if course_or_module_index == i:
-            break
+        nodes.append(
+            {
+                "index": i,
+                "course_id": course.description,
+                "module_id": None,
+                "is_module": False,
+                "is_root": course.description is None,  # "Alle Inhalte aus Drupal"
+            }
+        )
+        i += 1
         if course.children:
             for module in course.children:
-                module_id = module["description"]
-                module_name = module["label"]
-                module_level = True
-                i = i + 1
-                if course_or_module_index == i:
-                    flag_done = True
-                    break
-
-    response = {
-        "module_level": module_level,
-        "course_id": course_id,
-        "course_name": course_name,
-        "module_id": module_id,
-        "module_name": module_name,
-    }
-
-    return response
+                nodes.append(
+                    {
+                        "index": i,
+                        "course_id": course.description,
+                        "module_id": module["description"],
+                        "is_module": True,
+                        "is_root": False,
+                    }
+                )
+                i += 1
+    return nodes
 
 
-def _tree_default_index() -> int:
+def _restrict_to_single_course(new_indices: list[int], prev_indices: list[int]) -> list[int]:
+    """Prune a checkbox selection down to at most one course.
+
+    The tree's checkboxes physically allow ticking nodes across several
+    courses, but the API only accepts module IDs belonging to a single
+    course_id. Rather than rejecting an invalid selection after the fact
+    (which leaves the stray checkboxes visually ticked), we auto-switch:
+    checking something in a new course drops the previously selected course.
+
+    on_change fires per single click, so the item(s) in `new` but not in
+    `prev` identify the course the user just moved into.
+
+    - checking the root ("Alle Inhalte") wins -> whole corpus
+    - otherwise keep only the nodes of the course the user just touched
+    """
+    by_index = {n["index"]: n for n in _flatten_tree_nodes()}
+    new = [i for i in new_indices if i in by_index]
+    added = [i for i in new if i not in set(prev_indices)]
+
+    # A freshly ticked root means "talk to everything" — clear the rest.
+    root_idx = next((n["index"] for n in by_index.values() if n["is_root"]), None)
+    if any(by_index[i]["is_root"] for i in added):
+        return [root_idx] if root_idx is not None else []
+
+    non_root = [i for i in new if not by_index[i]["is_root"]]
+    courses = {by_index[i]["course_id"] for i in non_root}
+    if len(courses) <= 1:
+        # Single course (or nothing but root): a course pick beats the corpus,
+        # so drop a co-selected root and keep the course nodes.
+        return non_root if non_root else new
+
+    # Spans >1 course: keep only the course the user just clicked into
+    # (fall back to any present course if the diff is ambiguous).
+    added_courses = {by_index[i]["course_id"] for i in added if not by_index[i]["is_root"]}
+    target = next(iter(added_courses), next(iter(courses)))
+    return [i for i in non_root if by_index[i]["course_id"] == target]
+
+
+def resolve_selection(indices: list[int]) -> dict:
+    """Map a list of checked tree indices to a (course_id, module_id) filter.
+
+    Assumes the indices have already been restricted to a single course
+    (see _restrict_to_single_course). The API requires all module IDs to
+    belong to one course_id.
+
+    - root / nothing checked         -> course_id=None, module_id=None   (whole corpus)
+    - only a course node checked      -> course_id=X,    module_id=None   (whole course)
+    - one or more module nodes checked-> course_id=X,    module_id=[...]  (those modules)
+
+    Explicit module checkboxes always win over a co-checked course node: the
+    more specific selection is what the user means. (checkbox_strict means the
+    course node is never auto-ticked, so a co-check is an intentional extra.)
+    """
+    by_index = {n["index"]: n for n in _flatten_tree_nodes()}
+    selected = [by_index[i] for i in indices if i in by_index]
+
+    course_nodes = [n for n in selected if not n["is_root"] and not n["is_module"]]
+    module_nodes = [n for n in selected if n["is_module"]]
+    root_selected = any(n["is_root"] for n in selected)
+
+    # Root or empty selection means "talk to everything".
+    if root_selected or not selected:
+        return {"course_id": None, "module_id": None}
+
+    course_id = next(iter({n["course_id"] for n in course_nodes} | {n["course_id"] for n in module_nodes}))
+    # Specific modules win; only a bare course selection means the whole course.
+    module_id = [n["module_id"] for n in module_nodes] if module_nodes else None
+    return {"course_id": course_id, "module_id": module_id}
+
+
+def _tree_default_indices() -> list[int]:
     """Reflects the last known tree selection back as its `index`.
 
     sac.tree() treats `index` as authoritative on every rerun, not just on
-    first mount — passing a hardcoded 0 would snap the selection back to
-    "Alle Inhalte aus Drupal" on any unrelated rerun (e.g. a different
-    sidebar button), even though the user never touched the tree.
+    first mount — passing a hardcoded default would snap the selection back on
+    any unrelated rerun (e.g. a different sidebar button), even though the user
+    never touched the tree. It also lets us reject an invalid (multi-course)
+    selection by snapping the widget back to the last valid indices.
 
-    Reads the non-widget mirror `course_selection_index` (maintained in
-    select_course_or_module) instead of the widget key itself: Streamlit
-    drops widget state whenever the tree doesn't get instantiated during a
-    run, while the mirror survives — and it lets reset_history() snap the
-    tree back to "Alle Inhalte" deliberately.
+    Reads the non-widget mirror `course_selection_indices` (maintained in
+    select_course_or_module) instead of the widget key itself: Streamlit drops
+    widget state whenever the tree doesn't get instantiated during a run, while
+    the mirror survives — and it lets reset_history() clear the tree.
     """
-    return st.session_state.get("course_selection_index", 0)
+    return st.session_state.get("course_selection_indices", [])
+
+
+def _tree_widget_key() -> str:
+    """Versioned key for the course tree.
+
+    sac.tree only honours the `index` prop on a FRESH mount, not on later
+    reruns — so setting the mirror alone can't visually un-tick a stray
+    cross-course checkbox. Bumping `tree_version` (via _bump_tree) changes the
+    key, which forces Streamlit to remount the widget; the fresh mount then
+    reads `index=_tree_default_indices()` and renders exactly the pruned set.
+    """
+    return f"course_tree_{st.session_state.get('tree_version', 0)}"
+
+
+def _bump_tree() -> None:
+    """Remount the tree on the next run so it re-reads `index` (the mirror)."""
+    st.session_state.tree_version = st.session_state.get("tree_version", 0) + 1
 
 
 def select_course_or_module():
-    # st.session_state.course_selection is a list with a single item
-    # everytime the user collapses the tree :(
-    if type(st.session_state.course_selection) is list:
-        index_selected = st.session_state.course_selection[0]
+    # Read the value under the *current* versioned key (tree_version hasn't been
+    # bumped yet at callback time, so this is the key the widget rendered with).
+    raw = st.session_state.get(_tree_widget_key())
+    # checkbox mode returns a list of checked indices; guard against a bare int/None.
+    if isinstance(raw, list):
+        indices = raw
+    elif raw is None:
+        indices = []
     else:
-        index_selected = st.session_state.course_selection
+        indices = [raw]
 
-    talk_to_course_ids = convert_selected_index_to_id(index_selected)
+    # Enforce the single-course rule up front: ticking a node in another course
+    # auto-switches instead of piling up a cross-course (API-invalid) selection.
+    prev = st.session_state.get("course_selection_indices", [])
+    pruned = _restrict_to_single_course(indices, prev)
+
+    resolved = resolve_selection(pruned)
 
     if (
-        st.session_state["course_id"] != talk_to_course_ids["course_id"]
-        or st.session_state["module_id"] != talk_to_course_ids["module_id"]
+        st.session_state["course_id"] != resolved["course_id"]
+        or st.session_state["module_id"] != resolved["module_id"]
     ):
         # keep_socratic: erst "Lernmodus starten" klicken und dann den Kurs
         # wählen ist ein legitimer Ablauf — die Aktivierung darf der
         # Kurswechsel-Reset nicht stillschweigend wieder löschen.
-        reset_history(keep_socratic=True)
+        # remount_tree=False: we manage the tree's own state below.
+        reset_history(keep_socratic=True, remount_tree=False)
 
-    st.session_state["course_id"] = talk_to_course_ids["course_id"]
-    st.session_state["module_id"] = talk_to_course_ids["module_id"]
-    st.session_state.course_selection_index = index_selected
+    st.session_state["course_id"] = resolved["course_id"]
+    st.session_state["module_id"] = resolved["module_id"]
+    # Mirror the pruned indices so a remount can restore exactly them.
+    st.session_state.course_selection_indices = pruned
+    # If pruning dropped a cross-course tick, remount to clear it visually
+    # (sac.tree won't drop the tick from a plain index update).
+    if set(pruned) != set(indices):
+        _bump_tree()
 
 
-def reset_history(keep_socratic: bool = False):
+def reset_history(keep_socratic: bool = False, remount_tree: bool = True):
     st.session_state.messages = []
     st.session_state.course_id = None
     st.session_state.module_id = None
@@ -218,7 +319,13 @@ def reset_history(keep_socratic: bool = False):
     st.session_state.last_activity = None
     st.session_state._auto_restored = False
     st.session_state._load_error = None
-    st.session_state.course_selection_index = 0
+    # remount_tree=False when called from the tree's own callback: the widget
+    # already shows the new selection, and remounting would collapse the tree.
+    # Hard resets (New Session / LLM change / TTL) keep the default so the tree
+    # clears its ticks (sac.tree ignores a plain index update).
+    if remount_tree:
+        st.session_state.course_selection_indices = []
+        _bump_tree()
     if not keep_socratic:
         st.session_state.start_socratic = False
         st.session_state.start_socratic_v2 = False
@@ -324,6 +431,9 @@ if "course_id" not in st.session_state:
 if "module_id" not in st.session_state:
     st.session_state.module_id = None
 
+if "tree_version" not in st.session_state:
+    st.session_state.tree_version = 0
+
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = None
 
@@ -373,14 +483,18 @@ with st.sidebar:
 
     sac.tree(
         items=create_courses_modules_tree(),
-        index=_tree_default_index(),
-        key="course_selection",
+        index=_tree_default_indices(),
+        key=_tree_widget_key(),
         size="sm",
         show_line=False,
-        checkbox=False,
+        checkbox=True,
+        # Eltern-/Kind-Knoten entkoppeln: ein Kurs-Häkchen = ganzer Kurs,
+        # Modul-Häkchen = einzelnes Modul. Ohne strict würde das Ankreuzen
+        # eines Kurses automatisch alle Module mit-selektieren.
+        checkbox_strict=True,
         return_index=True,
         on_change=select_course_or_module,
-        label="Make a selection to talk to a course - or module",
+        label="Mehrere Module eines Kurses auswählbar – oder ganzer Kurs",
     )
 
 # Initialize assistant

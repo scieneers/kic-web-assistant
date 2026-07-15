@@ -58,7 +58,7 @@ class TestRetrieveAll:
         retriever = self._retriever([])
         retriever.retrieve_all(course_id=79, module_id=[1, 33])
         odata_filter = retriever.vector_db.fetch_all.call_args.args[0]
-        assert "search.in(module_id, '1,33', ',')" in odata_filter
+        assert "(module_id eq 1 or module_id eq 33)" in odata_filter
         assert "course_id eq 79" in odata_filter
 
 

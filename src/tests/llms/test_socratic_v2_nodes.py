@@ -206,11 +206,13 @@ class TestSocraticV2Opening:
         assert result["socratic_v2_phase"] == "core"
         assert len(result["v2_learning_objectives"]) == 1  # fallback objective
 
-    def test_module_list_targets_last_module(self):
+    def test_module_list_uses_all_selected_modules(self):
+        # Multi-select means all chosen modules are worked on equally — the
+        # full list must reach the retriever, not just the last entry.
         state = _base_state()
         state["runtime_config"]["module_id"] = [3, 5, 9]
         _, retriever = self._run(state, [_make_chunk("Inhalt")])
-        retriever.retrieve_all.assert_called_once_with(course_id=42, module_id=9)
+        retriever.retrieve_all.assert_called_once_with(course_id=42, module_id=[3, 5, 9])
 
 
 # ---------------------------------------------------------------------------

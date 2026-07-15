@@ -301,16 +301,24 @@ class Fetch_Data:
         watchdog: Watchdog | None = None
 
         # Initialize for return values (ensures we can reference them in exception paths)
+        # Counter-Semantik (für alle drei Quellen einheitlich):
+        #   *_documents = alle in diesem Lauf gesehenen Dokumente
+        #   *_ingested  = davon neu oder geändert → tatsächlich (re-)geschrieben
+        #   *_skipped   = davon unverändert (Hash-Match) → nichts zu tun
+        # Es gilt: documents = ingested + skipped.
         total_points_upserted = 0
         moodle_courses_total = 0
         moodle_courses_done = 0
         moodle_documents = 0
+        moodle_ingested = 0
         moodle_skipped = 0
         moodle_stale_deleted = 0
         drupal_documents = 0
+        drupal_ingested = 0
         drupal_skipped = 0
         drupal_stale_deleted = 0
         moochup_documents = 0
+        moochup_ingested = 0
         moochup_skipped = 0
         moochup_stale_deleted = 0
 
@@ -450,8 +458,12 @@ class Fetch_Data:
                         doc.metadata["content_hash"] = new_hash
 
                         if key not in moochup_existing:
+                            moochup_ingested += 1
+                            self.ctx.set_counter("moochup_ingested", moochup_ingested)
                             _queue_document(doc, stage="MOOCHUP_UPSERT")
                         elif moochup_existing[key] != new_hash:
+                            moochup_ingested += 1
+                            self.ctx.set_counter("moochup_ingested", moochup_ingested)
                             self.search_store.delete_by_filter(
                                 self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                             )
@@ -477,6 +489,7 @@ class Fetch_Data:
                         format_kv(
                             RUN_ID=self.run_id,
                             TOTAL=moochup_documents,
+                            INGESTED=moochup_ingested,
                             SKIPPED=moochup_skipped,
                             STALE_DELETED=moochup_stale_deleted,
                         ),
@@ -529,6 +542,8 @@ class Fetch_Data:
                         if key in moodle_seen:
                             continue
                         moodle_seen.add(key)
+                        moodle_documents += 1
+                        self.ctx.set_counter("moodle_documents", moodle_documents)
 
                         if module_id is None:
                             moodle_courses_done += 1
@@ -538,16 +553,16 @@ class Fetch_Data:
                         doc.metadata["content_hash"] = new_hash
 
                         if key not in moodle_existing:
-                            moodle_documents += 1
-                            self.ctx.set_counter("moodle_documents", moodle_documents)
+                            moodle_ingested += 1
+                            self.ctx.set_counter("moodle_ingested", moodle_ingested)
                             _queue_document(doc, stage="MOODLE_UPSERT")
                             self.logger.info(
                                 "MOODLE_DOC %s",
                                 format_kv(RUN_ID=self.run_id, COURSE_ID=course_id, MODULE_ID=module_id, EVENT="DOC_NEW"),
                             )
                         elif moodle_existing[key] != new_hash:
-                            moodle_documents += 1
-                            self.ctx.set_counter("moodle_documents", moodle_documents)
+                            moodle_ingested += 1
+                            self.ctx.set_counter("moodle_ingested", moodle_ingested)
                             self.search_store.delete_by_filter(
                                 self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                             )
@@ -630,7 +645,8 @@ class Fetch_Data:
                         "MOODLE_DELTA %s",
                         format_kv(
                             RUN_ID=self.run_id,
-                            TOTAL_SEEN=len(moodle_seen),
+                            TOTAL=moodle_documents,
+                            INGESTED=moodle_ingested,
                             SKIPPED=moodle_skipped,
                             STALE_DELETED=moodle_stale_deleted,
                             STALE_BY_CLASS=stale_by_class or "-",
@@ -679,8 +695,12 @@ class Fetch_Data:
                         doc.metadata["content_hash"] = new_hash
 
                         if key not in drupal_existing:
+                            drupal_ingested += 1
+                            self.ctx.set_counter("drupal_ingested", drupal_ingested)
                             _queue_document(doc, stage="DRUPAL_UPSERT")
                         elif drupal_existing[key] != new_hash:
+                            drupal_ingested += 1
+                            self.ctx.set_counter("drupal_ingested", drupal_ingested)
                             self.search_store.delete_by_filter(
                                 self.index_name, f"source_doc_key eq '{_odata_escape(key)}'"
                             )
@@ -706,6 +726,7 @@ class Fetch_Data:
                         format_kv(
                             RUN_ID=self.run_id,
                             TOTAL=drupal_documents,
+                            INGESTED=drupal_ingested,
                             SKIPPED=drupal_skipped,
                             STALE_DELETED=drupal_stale_deleted,
                         ),
@@ -728,6 +749,7 @@ class Fetch_Data:
                     EVENT="COMPLETED",
                     ELAPSED_S=elapsed_s,
                     TOTAL_DOCUMENTS=(moochup_documents + moodle_documents + drupal_documents),
+                    TOTAL_INGESTED=(moochup_ingested + moodle_ingested + drupal_ingested),
                     TOTAL_SKIPPED=(moochup_skipped + moodle_skipped + drupal_skipped),
                     TOTAL_STALE_DELETED=(moochup_stale_deleted + moodle_stale_deleted + drupal_stale_deleted),
                     POINTS_UPSERTED=total_points_upserted,
@@ -739,17 +761,21 @@ class Fetch_Data:
                 "log_url": log_url,
                 "counts": {
                     "moochup_documents": moochup_documents,
+                    "moochup_ingested": moochup_ingested,
                     "moochup_skipped": moochup_skipped,
                     "moochup_stale_deleted": moochup_stale_deleted,
                     "moodle_documents": moodle_documents,
+                    "moodle_ingested": moodle_ingested,
                     "moodle_skipped": moodle_skipped,
                     "moodle_stale_deleted": moodle_stale_deleted,
                     "moodle_courses_total": moodle_courses_total,
                     "moodle_courses_done": moodle_courses_done,
                     "drupal_documents": drupal_documents,
+                    "drupal_ingested": drupal_ingested,
                     "drupal_skipped": drupal_skipped,
                     "drupal_stale_deleted": drupal_stale_deleted,
                     "total_documents": (moochup_documents + moodle_documents + drupal_documents),
+                    "total_ingested": (moochup_ingested + moodle_ingested + drupal_ingested),
                     "points_upserted": total_points_upserted,
                 },
                 "status": "completed",

@@ -9,9 +9,17 @@ class TestModuleIdFilter:
         assert "module_id eq 42" in odata_filter
         assert "search.in(module_id" not in odata_filter
 
-    def test_module_id_list_uses_search_in(self):
+    def test_module_id_list_uses_eq_or(self):
+        # module_id is a numeric field; Azure's search.in only accepts string
+        # fields, so a list must expand to an eq-OR expression.
         odata_filter = _build_odata_filter(course_id=79, module_id=[1, 33, 102])
-        assert "search.in(module_id, '1,33,102', ',')" in odata_filter
+        assert "(module_id eq 1 or module_id eq 33 or module_id eq 102)" in odata_filter
+        assert "search.in(module_id" not in odata_filter
+
+    def test_single_element_module_list_uses_bare_eq(self):
+        odata_filter = _build_odata_filter(course_id=79, module_id=[42])
+        assert "module_id eq 42" in odata_filter
+        assert "(module_id" not in odata_filter
 
     def test_none_module_id_excludes_empty_module_marker(self):
         odata_filter = _build_odata_filter(course_id=79, module_id=None)
@@ -34,16 +42,19 @@ class TestCourseIdFilter:
         odata_filter = _build_odata_filter(course_id=79, module_id=None)
         assert "course_id eq 79" in odata_filter
 
-    def test_course_id_list_uses_search_in(self):
+    def test_course_id_list_uses_eq_or(self):
         odata_filter = _build_odata_filter(course_id=[79, 102], module_id=None)
-        assert "search.in(course_id, '79,102', ',')" in odata_filter
+        assert "(course_id eq 79 or course_id eq 102)" in odata_filter
+        assert "search.in(course_id" not in odata_filter
 
 
 class TestCombinedFilter:
     def test_course_list_and_module_list_together(self):
         odata_filter = _build_odata_filter(course_id=[79, 102], module_id=[1, 33])
-        assert "search.in(course_id, '79,102', ',')" in odata_filter
-        assert "search.in(module_id, '1,33', ',')" in odata_filter
+        assert "(course_id eq 79 or course_id eq 102)" in odata_filter
+        assert "(module_id eq 1 or module_id eq 33)" in odata_filter
+        assert "search.in(course_id" not in odata_filter
+        assert "search.in(module_id" not in odata_filter
 
 
 class TestTypeExclusion:

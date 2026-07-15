@@ -8,10 +8,10 @@ First step of the v2 workflow ("Lernmodus v2"):
 3. Emit a deterministic welcome message that names the objectives and asks the
    learner what to work on and what they already know.
 
-Multi-module scope: module_id may be a list (course progress). The LAST entry
-is treated as the current/target module whose objectives drive the session;
-the earlier modules stay in the retrieval scope during the core loop, so
-questions may build on their content as expected prior knowledge.
+Multi-module scope: module_id may be a list when the learner selects several
+modules of one course. ALL selected modules are treated equally — objectives,
+key concepts, the welcome scope title and the quiz pool are built from the
+combined content of every selected module (not just one).
 """
 
 import logging
@@ -107,23 +107,31 @@ def socratic_v2_opening(state: GraphState) -> dict:
         logger.debug("socratic_v2_opening: no course/module scope — not starting a session")
         return {**reset_socratic_v2_state(), "answer": NO_SCOPE_MESSAGE, "citations_markdown": None}
 
-    # Multi-module scope: the last ID is the current/target module.
-    target_module = module_id[-1] if isinstance(module_id, list) and module_id else module_id
-
+    # Multi-module scope: all selected modules are worked on equally. The
+    # retriever accepts the whole list, so content/objectives/quiz span them.
     retriever = get_retriever()
-    nodes = retriever.retrieve_all(course_id=course_id, module_id=target_module)
+    nodes = retriever.retrieve_all(course_id=course_id, module_id=module_id)
     content_nodes = [n for n in nodes if n.metadata.get("type") != "EmptyModule"]
 
     if not content_nodes:
         logger.debug(
-            "socratic_v2_opening: no content in scope (course_id=%s, module_id=%s)", course_id, target_module
+            "socratic_v2_opening: no content in scope (course_id=%s, module_id=%s)", course_id, module_id
         )
         return {**reset_socratic_v2_state(), "answer": NO_CONTENT_MESSAGE, "citations_markdown": None}
 
-    scope_title = next(
-        (n.metadata.get("fullname") or n.metadata.get("title") for n in content_nodes if n.metadata.get("fullname") or n.metadata.get("title")),
-        None,
-    )
+    # Scope title spans every selected module (dedup, keep order); cap the
+    # length so the welcome line stays readable when many modules are picked.
+    module_titles: list[str] = []
+    for n in content_nodes:
+        name = n.metadata.get("fullname") or n.metadata.get("title")
+        if name and name not in module_titles:
+            module_titles.append(name)
+    if not module_titles:
+        scope_title = None
+    elif len(module_titles) <= 3:
+        scope_title = ", ".join(module_titles)
+    else:
+        scope_title = ", ".join(module_titles[:3]) + " u. a."
 
     content = "\n\n".join(n.text for n in content_nodes)[:MAX_EXTRACTION_CHARS]
 
@@ -143,12 +151,12 @@ def socratic_v2_opening(state: GraphState) -> dict:
     if not objectives:
         objectives = [f"Die Inhalte von „{scope_title}“ verstehen" if scope_title else "Die Inhalte dieses Moduls verstehen"]
 
-    # Real course quiz items of the target module (structured QuizItem docs
-    # with known solutions) → enable the deterministic QUIZ move. Best-effort:
-    # a failing typed fetch must not block the session opening.
+    # Real course quiz items across all selected modules (structured QuizItem
+    # docs with known solutions) → enable the deterministic QUIZ move. Best-
+    # effort: a failing typed fetch must not block the session opening.
     quiz_items: list[dict] = []
     try:
-        quiz_nodes = retriever.retrieve_items(QUIZ_ITEM, course_id=course_id, module_id=target_module, top=0)
+        quiz_nodes = retriever.retrieve_items(QUIZ_ITEM, course_id=course_id, module_id=module_id, top=0)
         for node in quiz_nodes:
             payload = (node.metadata or {}).get("payload") or {}
             if payload.get("kind") in GRADEABLE_QUIZ_KINDS and payload.get("question"):
@@ -159,7 +167,7 @@ def socratic_v2_opening(state: GraphState) -> dict:
     langfuse_context.update_current_observation(
         metadata={
             "course_id": course_id,
-            "target_module": target_module,
+            "module_id": module_id,
             "n_content_nodes": len(content_nodes),
             "n_objectives": len(objectives),
             "n_concepts": len(concepts),
