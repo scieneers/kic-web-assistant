@@ -49,6 +49,7 @@ _llm = LLM()
 # Guardrails of the pedagogical ladder — deterministic, not up to the policy:
 MAX_QUESTION_STREAK = 3  # question moves in a row before a HINT is forced
 MAX_HINTS_PER_CONCEPT = 2  # hints on one concept before a MICRO_EXPLAIN is forced
+MIN_CORE_TURNS_BEFORE_CONSOLIDATE = 4  # core exchanges before CONSOLIDATE is allowed to fire
 
 GENERATION_FALLBACK = "Kannst du deine Überlegung genauer erklären?"
 
@@ -178,6 +179,7 @@ def _grade_pending_quiz(
     reranked: list,
     hint_count: int,
     target_concept: str | None,
+    core_turns: int,
 ) -> dict:
     """Resolve a posed quiz question: deterministic grading, evidence-based
     learner-model update, LLM only phrases the feedback."""
@@ -225,6 +227,7 @@ ANTWORT DER LERNENDEN PERSON: {user_query}"""
         "v2_pending_quiz": None,
         "v2_hint_count": hint_count,
         "v2_question_streak": 0,  # the resolution IS the Gegenwert
+        "v2_core_turns": core_turns + 1,
         "answer": answer,
         "citations_markdown": None,
     }
@@ -267,8 +270,11 @@ def socratic_v2_core(state: GraphState) -> dict:
 
     Flow transitions (via socratic_v2_phase):
     - → "core" (default): dialogue continues
-    - → "consolidation": policy chose CONSOLIDATE, the learner was asked to
-      summarize — the next user turn is handled by the consolidation node
+    - → "consolidation": policy chose CONSOLIDATE (only honored once
+      MIN_CORE_TURNS_BEFORE_CONSOLIDATE core exchanges have happened — a
+      premature CONSOLIDATE is overridden to FRAGE, same as the other
+      guards), the learner was asked to summarize — the next user turn is
+      handled by the consolidation node
     - → None (reset): policy chose EXIT
 
     Changes:
@@ -289,6 +295,7 @@ def socratic_v2_core(state: GraphState) -> dict:
     previous_concept = state.get("v2_target_concept")
     quiz_items = state.get("v2_quiz_items") or []
     pending_quiz = state.get("v2_pending_quiz")
+    core_turns = state.get("v2_core_turns", 0)
 
     # 0) A posed quiz question is graded DETERMINISTICALLY against the known
     #    solution — no policy call, no LLM judgement on correctness. Only the
@@ -304,6 +311,7 @@ def socratic_v2_core(state: GraphState) -> dict:
             reranked=reranked,
             hint_count=hint_count,
             target_concept=previous_concept,
+            core_turns=core_turns,
         )
 
     unasked_quiz_items = sum(1 for item in quiz_items if not item.get("asked"))
@@ -362,6 +370,7 @@ def socratic_v2_core(state: GraphState) -> dict:
                 "v2_question_streak": question_streak,
                 "v2_quiz_items": updated_items,
                 "v2_pending_quiz": pending,
+                "v2_core_turns": core_turns + 1,
                 "answer": render_quiz_message(pending),
                 "citations_markdown": None,
             }
@@ -374,13 +383,16 @@ def socratic_v2_core(state: GraphState) -> dict:
         move = "HINT"
     if move == "HINT" and effective_hint_count >= MAX_HINTS_PER_CONCEPT:
         move = "MICRO_EXPLAIN"
+    if move == "CONSOLIDATE" and core_turns < MIN_CORE_TURNS_BEFORE_CONSOLIDATE:
+        move = "FRAGE"
     if move != original_move:
         logger.debug(
-            "socratic_v2_core: guard override %s → %s (streak=%d, hints=%d)",
+            "socratic_v2_core: guard override %s → %s (streak=%d, hints=%d, core_turns=%d)",
             original_move,
             move,
             question_streak,
             effective_hint_count,
+            core_turns,
         )
 
     # 3) Generate the tutor message for the (possibly overridden) move.
@@ -416,6 +428,7 @@ def socratic_v2_core(state: GraphState) -> dict:
             "question_streak": new_question_streak,
             "learner_model": learner_model,
             "next_phase": next_phase,
+            "core_turns": core_turns + 1,
         }
     )
 
@@ -426,6 +439,7 @@ def socratic_v2_core(state: GraphState) -> dict:
         "v2_target_concept": target_concept,
         "v2_hint_count": new_hint_count,
         "v2_question_streak": new_question_streak,
+        "v2_core_turns": core_turns + 1,
         "answer": answer,
         "citations_markdown": None,
     }

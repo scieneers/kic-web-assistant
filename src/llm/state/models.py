@@ -57,6 +57,7 @@ class GraphState(TypedDict, total=False):
     v2_target_concept: Optional[str]  # concept the current core exchange focuses on
     v2_hint_count: int  # hints given for the CURRENT target concept (2 → forced micro-explain)
     v2_question_streak: int  # consecutive question moves without giving anything back (3 → forced hint)
+    v2_core_turns: int  # core-phase exchanges so far — guards against a premature CONSOLIDATE
     v2_scope_title: Optional[str]  # module/course display name for tutor messages
     # QUIZ move: real course quiz items (structured QuizItem payloads with the
     # known solutions), loaded once at opening; answers graded deterministically.

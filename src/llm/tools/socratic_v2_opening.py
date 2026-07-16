@@ -185,6 +185,7 @@ def socratic_v2_opening(state: GraphState) -> dict:
         "v2_target_concept": None,
         "v2_hint_count": 0,
         "v2_question_streak": 0,
+        "v2_core_turns": 0,
         "v2_scope_title": scope_title,
         "v2_quiz_items": quiz_items,
         "v2_pending_quiz": None,

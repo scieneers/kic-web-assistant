@@ -65,6 +65,7 @@ def reset_socratic_v2_state() -> Dict[str, Any]:
         "v2_target_concept": None,
         "v2_hint_count": 0,
         "v2_question_streak": 0,
+        "v2_core_turns": 0,
         "v2_scope_title": None,
         "v2_quiz_items": None,
         "v2_pending_quiz": None,
