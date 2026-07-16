@@ -72,7 +72,8 @@ kic-web-assistant/
 │  ┌──────────────┐   ┌────────────────────────────────┐  │
 │  │  contextualize│   │  Subgraph (je nach Routing):   │  │
 │  │  _and_route  │──▶│  no_vectordb / simple_hop /    │  │
-│  └──────────────┘   │  socratic                      │  │
+│  └──────────────┘   │  summarize / socratic /        │  │
+│                     │  socratic_v2                   │  │
 │                     └────────────────────────────────┘  │
 └─────────┬───────────────────────┬───────────────────────┘
           │                       │
@@ -118,9 +119,18 @@ kic-web-assistant/
    │                       ► Antwort generieren           │
    │                       ► Zitate parsen               │
    │                                                      │
-   └─ socratic ─────────► Lernziel ermitteln            │
-                           ► Diagnose                      │
-                           ► Hinweise / Reflektion         │
+   ├─ summarize ────────► Vollen Scope laden            │
+   │                       (retrieve_all, kein Top-k)     │
+   │                       ► Sprache erkennen (parallel)  │
+   │                       ► Zusammenfassung generieren   │
+   │                       ► Zitate parsen               │
+   │                                                      │
+   ├─ socratic (v1) ────► Lernziel ermitteln            │
+   │                       ► Diagnose                      │
+   │                       ► Hinweise / Reflektion         │
+   │                                                      │
+   └─ socratic_v2 ──────► opening / core / consolidation│
+                           (Move-Policy, s. 5.5)           │
                                                           │
 6. State persistieren (Checkpoint) ◄──────────────────────┘
    │
@@ -139,10 +149,14 @@ Die Klassifizierung erfolgt **LLM-basiert** in `src/llm/tools/contextualize.py`.
 |----------|--------------|---------|
 | `no_vectordb` | Konversationelle Frage, kein Kontext nötig | "Was kann KI-Campus?" |
 | `simple_hop` | Standard-RAG: Default für alle Wissensfragen (auch Multi-Konzept-/Vergleichsfragen) | "Worum geht es im Kurs X?" |
-| `socratic` | Geführtes Lernen (opt-in via `enable_socratic`) | Student arbeitet sich durch Stoff |
-| `exit_complete` | Sonderfall: Socratic-Session beenden | "exit" / "beende den Lernmodus" |
+| `summarize` | Zusammenfassungs-Anfrage über den gewählten Scope; lädt den **vollen** Inhalt statt Top-k | "Fasse dieses Modul zusammen" |
+| `socratic` | Geführtes Lernen v1 (Feature-Flag `ENABLE_SOCRATIC`; Start via Request-Flag `start_socratic` oder Trigger-Phrase, z. B. "unterstütze mich beim lernen") | Student arbeitet sich durch Stoff |
+| `socratic_v2` | Lernmodus v2 (Feature-Flag `ENABLE_SOCRATIC_V2`; Start via `start_socratic_v2` oder "starte lernmodus v2"); braucht Kurs-/Modul-Scope | s. 5.5 |
+| `exit_complete` | Sonderfall: aktive Socratic-Session beenden (v1 und v2) | "exit" / "beende den Lernmodus" |
 
-> **Hinweis:** Der frühere `multi_hop`-Subgraph (Query-Dekomposition → paralleles Retrieval → Synthese) wurde im Zuge der Single-Hop-Umstellung entfernt. Alle Retrieval-Fragen — auch Vergleichsfragen — laufen über `simple_hop` (Hybrid-Retrieval + Reranking).
+> **Hinweis 1:** Der frühere `multi_hop`-Subgraph (Query-Dekomposition → paralleles Retrieval → Synthese) wurde im Zuge der Single-Hop-Umstellung entfernt. Alle Retrieval-Fragen — auch Vergleichsfragen — laufen über `simple_hop` (Hybrid-Retrieval + Reranking).
+>
+> **Hinweis 2:** `summarize` ohne gesetzten `course_id`/`module_id`-Scope wird zu `no_vectordb` heruntergestuft (`contextualize.py`). Bei aktiver Socratic-Session (v1 oder v2, im Checkpoint verfolgt) wird die Klassifikation übersprungen und direkt der jeweilige Subgraph fortgesetzt; `socratic_v2` hat Vorrang vor v1.
 
 ---
 
@@ -156,7 +170,7 @@ START ─┬─► retrieve_chunks ──► rerank_chunks ─┐
 ```
 
 - **Retrieval:** Azure AI Search Hybrid (BM25 + Vektor), Top-10
-- **Reranking:** Backend per `RERANKER_TYPE` (Env) wählbar — `llm` (Default), `azure_semantic`, `bge`.
+- **Reranking:** Backend per `RERANKER_TYPE` (Env) wählbar — `azure_semantic` (Default), `llm`, `bge`.
   Bei `azure_semantic` läuft das Reranking **integriert**: Azures Semantic Ranker rescort
   serverseitig innerhalb des Retrieval-Calls (Top-50-Fenster), `rerank_chunks` schneidet dann
   nur noch auf Top-5 und wendet `MIN_RERANKER_SCORE` an — kein zweiter Search-Roundtrip.
@@ -173,13 +187,37 @@ START ─► detect_language ─► direct_answer ─► END
 
 Kein Retrieval, direkter LLM-Call. Für allgemeine Fragen über KI-Campus.
 
-### 5.3 socratic (`src/llm/graphs/socratic.py`)
+### 5.3 socratic — Lernmodus v1 (`src/llm/graphs/socratic.py`)
 
-Drei Phasen: `contract` → `diagnose` → `core`
+Der Lernmodus aus dem Studierendenprojekt (koexistiert mit v2, s. 5.5). Drei Phasen: `contract` → `diagnose` → `core`
 
 - Verfolgt `attempt_count` und `number_given_hints`
 - Führt Studierende zur Antwort, statt sie direkt zu liefern
 - Abbruch via Schlüsselwörter: "exit", "quit", "stop", "beende den lernmodus"
+
+### 5.4 summarize (`src/llm/graphs/summarize.py`)
+
+```
+START ─┬─► retrieve_full_scope ─┐
+       └─► detect_language ─────┴─► summarize_answer ─► parse_citations ─► END
+```
+
+- Lädt per `retriever.retrieve_all()` den **kompletten** Inhalt des gewählten Scopes (Kurs/Module) statt Top-k — Zusammenfassungen decken damit den ganzen Scope ab, kein Reranking.
+- Antwortgenerierung über `SummaryAnswerer` (`src/llm/objects/summary_answerer.py`, Node in `src/llm/tools/summarize.py`).
+- Nur mit gesetztem Kurs-/Modul-Scope erreichbar (sonst Downgrade zu `no_vectordb`, s. Abschnitt 4).
+
+### 5.5 socratic_v2 — Lernmodus v2 (`src/llm/graphs/socratic_v2.py` + `src/llm/tools/socratic_v2_*.py`)
+
+Neu konzipierter sokratischer Tutor (Konzept: `KONZEPT_SOKRATISCHER_LERNASSISTENT.md`, Vergleich zu v1: `VERGLEICH_SOKRATISCH_V1_V2.md`). Drei Phasen, im Checkpoint über `socratic_v2_phase` verfolgt:
+
+```
+opening ──► core (Move-Policy-Loop) ──► consolidation
+```
+
+- **opening** (`socratic_v2_opening.py`): lädt den Modulinhalt via `retrieve_all()`, extrahiert Lernziele/Schlüsselkonzepte per LLM, begrüßt mit Sessionziel. Bei `module_id`-Liste werden **alle gewählten Module gleichrangig** als gemeinsamer Inhaltspool behandelt.
+- **core** (`socratic_v2_core.py`): eigener Retrieval+Rerank-Pfad, dann Move-Policy mit 10 Zügen (u. a. FRAGE, HINT, MICRO_EXPLAIN, QUIZ mit echten H5P-Quizfragen und deterministischer Auswertung, FEHLER_FINDEN, ENCOURAGE). Deterministische Leitplanken: 3 Fragen ohne Fortschritt → HINT, 2 Hints pro Konzept → MICRO_EXPLAIN.
+- **consolidation**: Zusammenfassung + Feedback, danach State-Reset.
+- Benötigt zwingend Kurs-/Modul-Scope; nutzt ein erweitertes History-Limit (`CHAT_HISTORY_LIMIT_SOCRATIC_V2`, Default 40, s. Abschnitt 10). Eigene State-Felder in `src/llm/state/models.py`, Routing-Konstanten in `src/llm/state/socratic_v2_routing.py`.
 
 ---
 
@@ -196,15 +234,35 @@ Drei Phasen: `contract` → `diagnose` → `core`
 | `fullname` | Searchable | Ressourcenname |
 | `title` | Searchable | Seitentitel |
 | `source` | Filterable | "Drupal" oder "Moodle" |
-| `type` | Filterable | Inhaltstyp (Resource, Module, …) |
+| `type` | Filterable | Inhaltstyp, s. Tabelle unten |
 | `course_id` | Filterable (Int64) | Moodle-Kurs |
 | `module_id` | Filterable (Int64) | Moodle-Modul |
 | `url` | Filterable | Link zur Originalquelle |
 | `is_important` | Filterable (bool) | Priorisierung |
+| `date_created` | Filterable (String) | Erstellungsdatum |
+| `modname` | Filterable/Facetable (String) | Moodle-Modultyp (z. B. `h5pactivity`, `page`) — aus `metadata_json` herausgezogen für typisiertes Retrieval |
+| `h5p_content_type` | Filterable (String) | H5P-Inhaltstyp (z. B. `QuestionSet`) |
 | `source_doc_key` | Filterable | Stabiler Dokument-Identifier für Change Detection |
 | `content_hash` | String | Content-Fingerprint für Change Detection |
 | `dense` | Vector (Dim. nach Embedding-Modell, aktuell 3072) | HNSW, Cosine Distance |
 | `metadata_json` | String | Vollständige Metadaten |
+
+Zusätzlich trägt der Index eine **Semantic Configuration** („default") — Voraussetzung für den `azure_semantic`-Reranker.
+
+### Inhaltstypen (`type`-Feld)
+
+Neben den klassischen Typen (`Resource`, `Module`, `Course`, …) existieren:
+
+| Typ | Bedeutung |
+|-----|-----------|
+| `EmptyModule` | Modul ohne extrahierbaren Inhalt (nur Titel) — im normalen Retrieval ausgeschlossen, außer bei explizitem `module_id`-Filter (deterministischer Fallback-Hinweis) |
+| `QuizItem` | Einzelne Quizfrage inkl. Lösung — **unbedingt aus dem normalen RAG ausgeschlossen** (`RETRIEVAL_EXCLUDED_TYPES` in `src/vectordb/doc_types.py`), damit keine Musterlösungen in Antworten gelangen; zugreifbar nur über den typisierten Pfad |
+| `GlossaryEntry` | Glossareintrag (Begriff + Definition) |
+| `Flashcard` | Lernkarte |
+| `Transcript` | Video-Transkript-Abschnitt (mit Zeitstempel für `#t=`-Deep-Links) |
+| `BookChapter` | Kapitel eines Moodle-Books |
+
+**Typisierter Zugriffspfad:** `retriever.retrieve_items()` / `lookup_glossary()` (`src/llm/objects/retriever.py`) — einziger Weg zu `QuizItem`-Dokumenten, genutzt vom Lernmodus v2 (QUIZ-Move).
 
 ### Suchalgorithmus
 
@@ -271,6 +329,7 @@ Sanity Check (URL-Validierung etc.)
 |---------|------|--------------|
 | `POST` | `/api/chat` | Synchrone Anfrage → vollständige Antwort |
 | `POST` | `/api/chat/stream` | Streaming (NDJSON, Token-by-Token) |
+| `GET` | `/api/chat/history/{thread_id}` | Gespeicherten Verlauf laden (leere Liste bei unbekanntem Thread, kein 404) |
 | `POST` | `/api/feedback` | Nutzerfeedback → Langfuse |
 | `GET` | `/health` | Health-Check → `"OK"` |
 
@@ -279,21 +338,27 @@ Sanity Check (URL-Validierung etc.)
 ```python
 {
     user_query: SerializableChatMessage,
-    thread_id: Optional[str],   # Konversations-ID (Persistenz)
-    course_id: Optional[int],   # Moodle-Kursfilter
-    module_id: Optional[int],   # Moodle-Modulfilter
-    model: Models               # LLM-Auswahl
+    thread_id: str | None,               # Konversations-ID (Persistenz)
+    course_id: int | None,               # Moodle-Kursfilter
+    module_id: int | list[int] | None,   # Einzelnes Modul ODER Liste mehrerer Module
+                                         # desselben Kurses (gleichrangiger OR-Filter);
+                                         # course_id ist Pflicht, sobald module_id gesetzt ist
+    model: Models,                       # LLM-Auswahl (Default: GEMMA4_31B)
+    start_socratic: bool = False,        # Lernmodus v1 starten (nur wirksam mit ENABLE_SOCRATIC)
+    start_socratic_v2: bool = False      # Lernmodus v2 starten (nur wirksam mit ENABLE_SOCRATIC_V2)
 }
 ```
+
+Kurs- und Modul-IDs werden serverseitig auf Existenz geprüft (400 bei unbekannter ID); eine leere `module_id`-Liste wird zu `None` normalisiert.
 
 ### Verfügbare Modelle
 
 | Enum-Wert | Beschreibung |
 |-----------|--------------|
-| `AZURE_FALLBACK` | GPT-4/3.5 via Azure (Standard, zuverlässigste) |
-| `MINI` | Hilfstasks: Sprache, Reranking (kostenoptimiert) |
-| `GEMMA4_31B` | Open Model via GWDG-API (Fallback) |
-| `LLAMA3` | Legacy-Alias → mappt auf Gemma4 |
+| `GEMMA4_31B` | Gemma 4 via GWDG-API (**Standard** in API & Frontend) |
+| `AZURE_FALLBACK` | Azure-Modell, automatischer Fallback bei GWDG-Ausfall (Timeout + Unavailability-Fenster) |
+| `MINI` | Hilfstasks: Spracherkennung, Lernziel-Extraktion (kostenoptimiert) |
+| `LLAMA3` | Legacy-Alias → mappt auf Gemma4 (bis alle Frontends umgestellt sind) |
 
 ### Authentifizierung
 
@@ -325,7 +390,7 @@ POST /api/chat/stream
          {"type":"error", ...}                                  ← optional
 ```
 
-**CitationStreamFilter:** Blendet `[docN]`-Marker während des Streamings aus; am Ende werden sie vom CitationParser in Markdown-Links umgewandelt.
+**CitationStreamResolver** (`src/llm/streaming.py`): Löst `[docN]`-Marker **live während des Streamings** in klickbare Markdown-Links mit Anzeigetitel auf (Übergabe an die LLM-Schicht via ContextVar). Der ältere **CitationStreamFilter** (Marker nur ausblenden) bleibt für den `no_vectordb`-Pfad und als Fallback erhalten. **SmartStreamCallback** puffert den Stream-Anfang, um ein reines „NO ANSWER FOUND"-Sentinel abzufangen und durch die Fallback-Nachricht zu ersetzen — Sentinels erreichen die UI nie.
 
 ---
 
@@ -335,8 +400,8 @@ POST /api/chat/stream
 
 | Umgebung | Checkpointer |
 |----------|-------------|
-| Dev | `MemorySaver` (in-memory) |
-| Produktion | PostgreSQL *(geplant, noch nicht umgesetzt)* |
+| Dev + Produktion | `BoundedMemorySaver` (in-memory, erbt von `MemorySaver`; max. `MAX_CHAT_THREADS` = 500 Threads mit FIFO-Verdrängung, lock-geschützt) |
+| Langfristige DB-Persistenz | *bewusst nicht umgesetzt (Angebots-Scope); LangGraph böte drop-in `SqliteSaver`/`PostgresSaver`* |
 
 **Flow:**
 ```
@@ -353,7 +418,9 @@ graph.update_state(config, values) → persistiert State
 Nächster Request mit gleicher thread_id lädt History
 ```
 
-**History-Limit:** Letzte 6 Nachrichten (Context-Window-Management)
+**History-Limit:** Letzte 6 Nachrichten (`CHAT_HISTORY_LIMIT`, Env-Var). Ausnahme: In aktiven Socratic-v2-Sessions gilt ein erweitertes Limit von 40 Nachrichten (`CHAT_HISTORY_LIMIT_SOCRATIC_V2`), damit die Lernsession-Dramaturgie den vollen Verlauf sieht.
+
+**Endpoint:** `GET /api/chat/history/{thread_id}` liefert den gespeicherten Verlauf (für Sitzungs-Wiederherstellung nach Reload, s. `CHAT_PERSISTENCE.md`).
 
 ---
 
@@ -377,14 +444,16 @@ Nächster Request mit gleicher thread_id lädt History
 
 ## 12. Frontend (Streamlit)
 
-**Framework:** Streamlit (`src/frontend/frontend.py`)
+**Framework:** Streamlit (`src/frontend/frontend.py`) — reines **Test-Frontend** (produktive Oberflächen: Moodle/Drupal)
 
 **Features:**
-- Kurs-/Modul-Baum-Browser (linke Sidebar)
-- Chat-Interface mit Streaming-Antworten
-- Thinking-Indikator-Animation
-- Feedback (Daumen hoch/runter + Kommentar)
-- Session-Management via Thread-IDs
+- Passwort-Gate via `FRONTEND_PASSWORD` (übersprungen, wenn nicht gesetzt — lokale Dev)
+- Kurs-/Modul-Baum-Browser (Sidebar) mit Checkboxen: ganzer Kurs oder mehrere Module **eines** Kurses wählbar (→ `module_id`-Liste)
+- Buttons „Lernmodus starten (v1)" / „✨ Lernmodus starten (v2)" (setzen `start_socratic`/`start_socratic_v2` für die nächste Nachricht)
+- Moodle-Simulation: Session-ID anzeigen/laden/neu, `?thread_id=`-URL-Parameter simuliert localStorage über Reloads, 30-min-TTL clientseitig
+- Chat-Interface mit Streaming-Antworten, Thinking-Indikator
+- Feedback (Daumen hoch/runter + Kommentar) → `/api/feedback`
+- LLM-Auswahl (Default `GEMMA4_31B`)
 
 ---
 
@@ -444,10 +513,31 @@ LANGFUSE_SECRET_KEY
 REST_API_URL
 REST_API_KEYS          # kommagetrennte Liste gültiger API-Keys
 
+# Feature-Flags
+ENABLE_SOCRATIC        # Lernmodus v1 (Default: False)
+ENABLE_SOCRATIC_V2     # Lernmodus v2 (Default: False)
+FRONTEND_PASSWORD      # Passwort-Gate fürs Streamlit-Test-Frontend (Default: "UNSET" = aus)
+
+# Retrieval / Reranking
+RERANKER_TYPE          # llm | azure_semantic | bge (Default: azure_semantic)
+MIN_RERANKER_SCORE     # Score-Schwelle 0–1 (Default: 0.5); darunter → No-Answer-Fallback
+
+# Chat-/Betriebsparameter
+MAX_CHAT_THREADS               # max. parallele Threads im BoundedMemorySaver (Default: 500)
+CHAT_HISTORY_LIMIT             # Historie pro Turn (Default: 6)
+CHAT_HISTORY_LIMIT_SOCRATIC_V2 # Historie in aktiven v2-Sessions (Default: 40)
+GWDG_TIMEOUT_SECONDS           # Timeout vor Azure-Fallback (Default: 7)
+GWDG_UNAVAILABLE_RESET_SECONDS # Unavailability-Fenster (Default: 300)
+
 # Datenquellen
 DATA_SOURCE_MOODLE_URL / TOKEN
-DRUPAL_URL / CLIENT_ID / SECRET / USERNAME / PASSWORD
+DATA_SOURCE_MOOCHUP_HPI_URL / DATA_SOURCE_MOOCHUP_MOODLE_URL
+DRUPAL_URL / CLIENT_ID / SECRET / USERNAME / PASSWORD / GRANT_TYPE
+DRUPAL_AUTH_REQUIRED   # True → Loader bricht ohne gültige Drupal-Credentials hart ab (für Prod-Läufe)
 VIMEO_PAT
+
+# Ingestion-Schutz
+STALE_DELETE_MIN_SEEN_RATIO  # Mindestanteil gesehener Bestand, sonst keine Stale-Deletion (Default: 0.5)
 
 # Deployment
 ENVIRONMENT            # DEV oder PRODUCTION
@@ -466,8 +556,14 @@ AUDIO_TRANSCRIPTION_ENABLED
 | `src/llm/state/models.py` | State-Definition (`GraphState`) |
 | `src/llm/graphs/simple_hop.py` | Standard-RAG-Subgraph |
 | `src/llm/graphs/no_vector_db.py` | Konversationale Antworten |
-| `src/llm/graphs/socratic.py` | Lernmodus-Subgraph |
-| `src/llm/objects/retriever.py` | Retrieval-Logik |
+| `src/llm/graphs/summarize.py` | Zusammenfassungs-Subgraph (voller Scope statt Top-k) |
+| `src/llm/graphs/socratic.py` | Lernmodus v1 |
+| `src/llm/graphs/socratic_v2.py` | Lernmodus v2 (Graph) |
+| `src/llm/tools/socratic_v2_*.py` | v2-Nodes: opening / core / consolidation |
+| `src/llm/state/socratic_v2_routing.py` | v2-Moves, Exit-Keywords, Routing-Konstanten |
+| `src/vectordb/doc_types.py` | Inhaltstyp-Konstanten + `RETRIEVAL_EXCLUDED_TYPES` |
+| `src/llm/streaming.py` | CitationStreamResolver / SmartStreamCallback |
+| `src/llm/objects/retriever.py` | Retrieval-Logik (inkl. `retrieve_all`, `retrieve_items`, `lookup_glossary`) |
 | `src/llm/objects/contextualizer.py` | Query-Kontextualisierung & Routing |
 | `src/llm/objects/reranker.py` | LLM-basiertes Reranking |
 | `src/llm/objects/rerankers/` | Pluggable Reranker-Backends (LLM, Azure Semantic, BGE, Passthrough) |
@@ -496,9 +592,9 @@ AUDIO_TRANSCRIPTION_ENABLED
 | 2 | Langfuse-Ersatz wird evaluiert | Niedrig |
 | 3 | Model-Enum: `LLAMA3` → `GEMMA4_31B` umbenennen | Niedrig |
 | 4 | Loader-Logs in Blob Storage: Connection String → Managed Identity | Mittel |
-| 5 | PostgreSQL-Checkpointer für Produktion einsetzen (aktuell: MemorySaver) | Hoch |
+| 5 | Chat-Persistenz: In-Memory (`BoundedMemorySaver`) ist bewusster Scope; DB-Checkpointer (`SqliteSaver`/`PostgresSaver`) nur bei geänderter Anforderung | — (kein offener Punkt) |
 | 6 | Managed Identity für alle Azure-Ressourcen | Mittel |
 
 ---
 
-*Zuletzt aktualisiert: Juni 2026*
+*Zuletzt aktualisiert: 16. Juli 2026 (Summarize-Modus, Lernmodus v2, strukturierte Inhaltstypen, Multi-Modul-Scope, aktualisierte Defaults & Env-Vars)*

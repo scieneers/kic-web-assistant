@@ -53,7 +53,8 @@ Frontend                         Backend
 POST /api/chat/stream
   thread_id: "abc-123"
                             → BoundedMemorySaver.get_state("abc-123")
-                            → chat_history = [vorige Nachrichten, max. 6]
+                            → chat_history = [vorige Nachrichten, max. CHAT_HISTORY_LIMIT (Default 6);
+                                              in aktiven Socratic-v2-Sessions: CHAT_HISTORY_LIMIT_SOCRATIC_V2 (Default 40)]
                             → Graph mit History ausführen
                             → chat_history += [user, assistant]
                             ← Antwort + thread_id: "abc-123"
@@ -124,8 +125,10 @@ Alle Konversationen gehen beim Neustart verloren — das ist bewusst so, da kein
   },
   "thread_id": "550e8400-e29b-41d4-a716-446655440000",
   "course_id": 79,
-  "module_id": null,
-  "model": "Gemma4"
+  "module_id": [1234, 1235],
+  "model": "Gemma4",
+  "start_socratic": false,
+  "start_socratic_v2": false
 }
 ```
 
@@ -135,8 +138,10 @@ Alle Konversationen gehen beim Neustart verloren — das ist bewusst so, da kein
 | `user_query.content` | `string` | ja | Die Frage des Nutzers |
 | `thread_id` | `string \| null` | nein | Bestehende Session-ID. `null` → neue Session |
 | `course_id` | `integer \| null` | nein | Kurs-ID für gefilterte Suche (z.B. `79`) |
-| `module_id` | `integer \| null` | nein | Modul-ID; erfordert `course_id` |
-| `model` | `string` | nein | Zu nutzendes LLM. Default: `"Gemma4"`. Weitere Werte: `"Azure-Fallback"`, `"Llama3"` |
+| `module_id` | `integer \| integer[] \| null` | nein | Einzelne Modul-ID **oder Liste mehrerer Module desselben Kurses** (gleichrangiger OR-Filter, z. B. „alle bisher bearbeiteten Module"); erfordert `course_id`. Leere Liste = `null` |
+| `model` | `string` | nein | Zu nutzendes LLM. Default: `"Gemma4"`. Weitere Werte: `"Azure-Fallback"`, `"Llama3"` (Legacy-Alias → Gemma4) |
+| `start_socratic` | `boolean` | nein | Lernmodus v1 für diese Session starten (nur wirksam, wenn Backend-Flag `ENABLE_SOCRATIC` gesetzt ist) |
+| `start_socratic_v2` | `boolean` | nein | Lernmodus v2 starten (Backend-Flag `ENABLE_SOCRATIC_V2`; braucht Kurs-/Modul-Scope). Alternativ per Trigger-Phrase im Chat |
 
 **Response: NDJSON-Stream** (`Content-Type: application/x-ndjson`)
 
@@ -225,8 +230,9 @@ Simuliert das Moodle-Verhalten für lokale Tests. Analog zu `localStorage` wird 
 `BoundedMemorySaver` ersetzt den Standard-`MemorySaver` von LangGraph.
 
 - Hält intern ein `OrderedDict` mit der Erstellungsreihenfolge aller `thread_ids`
-- Sobald `max_threads` (Standard: 500) überschritten wird → ältester Thread wird aus dem internen LangGraph-Speicher entfernt
-- FIFO-Verdrängung (kein LRU — Overhead pro Request nicht gerechtfertigt)
+- Sobald `max_threads` überschritten wird → ältester Thread wird aus dem internen LangGraph-Speicher entfernt
+- FIFO-Verdrängung (kein LRU — Overhead pro Request nicht gerechtfertigt), lock-geschützt
+- **Konfigurierbar per Env-Vars** (`src/env.py`): `MAX_CHAT_THREADS` (Default 500), `CHAT_HISTORY_LIMIT` (Default 6), `CHAT_HISTORY_LIMIT_SOCRATIC_V2` (Default 40 — erweitertes Historien-Fenster für aktive Lernmodus-v2-Sessions)
 - Eingebaut in `src/llm/assistant.py`, getestet in `src/tests/llms/test_bounded_memory_saver.py`
 
 ---

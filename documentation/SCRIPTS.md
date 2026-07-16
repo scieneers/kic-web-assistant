@@ -284,6 +284,16 @@ uv run python scripts/vectordb/update_index_schema.py
 uv run python scripts/vectordb/update_index_schema.py --index my-other-index
 ```
 
+### Typ-Felder backfillen (`modname`/`h5p_content_type`)
+
+Hebt für Bestandsdokumente `modname` und `h5p_content_type` aus `metadata_json` auf die filterbaren Top-Level-Indexfelder — merge-only, **ohne Re-Embedding**. Nach Schema-Update und Ingest-Lauf ausführen, nie parallel zum Ingest (s. Migrations-Runbook in [PLAN_INHALTSTYPEN.md](PLAN_INHALTSTYPEN.md)).
+
+```bash
+uv run python scripts/vectordb/backfill_type_fields.py --dry-run
+uv run python scripts/vectordb/backfill_type_fields.py
+uv run python scripts/vectordb/backfill_type_fields.py --index my-other-index
+```
+
 ### Index zurücksetzen
 
 ```bash

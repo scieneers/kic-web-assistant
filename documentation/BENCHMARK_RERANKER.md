@@ -2,6 +2,8 @@
 
 **Stand:** 2026-07-09 · **Lauf-Typ:** offizieller Entscheidungslauf (siehe [SCRIPTS.md](SCRIPTS.md), Abschnitt „Reranker Evaluation") · **Ergebnisdatei:** `results_fair.json`
 
+> **Nachtrag:** Empfehlung 1 ist umgesetzt — `RERANKER_TYPE`-Default steht seit Commit `67da6f5` auf `azure_semantic`. Wo dieses Dokument den LLM-Reranker als „aktuellen Produktions-Default" bezeichnet, beschreibt es den Stand **zum Zeitpunkt des Laufs** (09.07.); dieses Dokument ist ein historisches Ergebnis-Snapshot und wird nicht fortgeschrieben.
+
 ```bash
 uv run python -m evaluation.benchmark --pool-sizes 10,30 --runs 1 --cooldown 2 \
   --model Gemma4 --judge-model Azure-Fallback --output results_fair.json
