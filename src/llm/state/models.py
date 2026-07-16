@@ -31,6 +31,15 @@ class GraphState(TypedDict, total=False):
     contextualized_query: Optional[str]
     detected_language: Optional[str]
 
+    # module→course scope escalation: when a module-scoped question finds no
+    # answer, the fallback offers to retry at course level.
+    # pending_scope_escalation is set by the answer node and survives exactly
+    # one turn (contextualize_and_route consumes or clears it on the next
+    # message); scope_escalated is per-turn and makes retrieval drop the
+    # module filter while keeping the course filter.
+    pending_scope_escalation: Optional[Dict[str, Any]]  # {"contextualized_query": str}
+    scope_escalated: bool
+
     # retrieval artifacts
     retrieved: List[SerializableTextNode]
     # True when retrieval already ranked the results with Azure's semantic

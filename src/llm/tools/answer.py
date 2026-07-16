@@ -7,7 +7,11 @@ import logging
 from langfuse.decorators import observe
 
 from src.llm.state.models import GraphState, get_doc_as_textnodes
-from src.llm.objects.question_answerer import NO_CONTENT_IN_MODULE, NO_CONTENT_UNSUPPORTED_TYPE
+from src.llm.objects.question_answerer import (
+    NO_CONTENT_IN_MODULE,
+    NO_CONTENT_UNSUPPORTED_TYPE,
+    get_fallback_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,18 @@ def generate_answer(state: GraphState) -> dict:
     model = state["runtime_config"]["model"]
     is_moodle = state["runtime_config"]["course_id"] is not None
     course_id = state["runtime_config"]["course_id"]
+    module_id = state["runtime_config"].get("module_id")
+    scope_escalated = state.get("scope_escalated", False)
+
+    # Modul-Scope mit Kurs-Kontext und noch keine Eskalation in diesem Turn →
+    # ein No-Answer bietet die Kurs-Suche an statt in der Sackgasse zu enden.
+    offer_course_escalation = bool(module_id) and course_id is not None and not scope_escalated
+
+    # Eskalations-Turn: user_query ist nur die Bestätigung ("Ja") — die
+    # eigentliche Frage steckt in der aus dem Vorturn übernommenen
+    # contextualized_query (siehe contextualize_and_route).
+    if scope_escalated and state.get("contextualized_query"):
+        query = state["contextualized_query"]
 
     # EmptyModule-Marker: Modul existiert, hat aber keinen extrahierbaren Inhalt.
     # Kein LLM-Aufruf — direkt den fest definierten Fallback-Text zurückgeben.
@@ -94,9 +110,16 @@ def generate_answer(state: GraphState) -> dict:
         sources=sources,
         model=model,
         is_moodle=is_moodle,
-        course_id=course_id
+        course_id=course_id,
+        offer_course_escalation=offer_course_escalation,
     )
 
     logger.debug("generate_answer: done, response_len=%d chars", len(response.content))
-    # Extract answer text
-    return {"answer": response.content}
+    updates: dict = {"answer": response.content}
+    # Angebot wurde ausgesprochen → Retrieval-Query für den möglichen
+    # Ja-Folgeturn festhalten (contextualize_and_route konsumiert das Flag).
+    if offer_course_escalation and get_fallback_type(response.content) == "no_answer_module_offer_course":
+        updates["pending_scope_escalation"] = {
+            "contextualized_query": state.get("contextualized_query") or query,
+        }
+    return updates

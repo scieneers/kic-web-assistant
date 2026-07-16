@@ -111,3 +111,46 @@ def test_generic_capability_question_classified_as_no_vectordb(contextualizer):
         query="Was kannst du alles?", model=MODEL
     )
     assert result == "no_vectordb"
+
+
+# ---------------------------------------------------------------------------
+# Scope-aware routing: inside a course, domain terms are NEVER out of scope.
+# Regression for the "Dienstvereinbarung" case: course 344 defines the term in
+# its glossary, but the bare query looks like labor law, not AI — the router
+# must not reject it before retrieval gets a chance (evidence decides).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+@pytest.mark.parametrize("query", [
+    pytest.param("Was ist eine Dienstvereinbarung?", id="dienstvereinbarung"),
+    pytest.param("Was ist ein Tarifvertrag?", id="tarifvertrag"),
+    pytest.param("Was bedeutet Warenverfügbarkeit?", id="warenverfuegbarkeit"),
+])
+@pytest.mark.parametrize("scope", ["course", "module"])
+def test_domain_terms_in_course_scope_routed_to_rag(contextualizer, query, scope):
+    result = contextualizer.classify_scenario(query=query, model=MODEL, scope=scope)
+    assert result == "simple_hop", (
+        f"'{query}' (scope={scope}) → expected simple_hop, got '{result}'"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("query", [
+    pytest.param("Hallo!", id="greeting"),
+    pytest.param("asdfkjhgfds", id="gibberish"),
+    pytest.param("Kannst du das nochmal einfacher erklären?", id="followup"),
+])
+def test_smalltalk_stays_no_vectordb_even_in_course_scope(contextualizer, query):
+    """The scope relaxation only disables OUT-OF-SCOPE rejection — gibberish,
+    small talk and conversation-meta must still skip retrieval."""
+    result = contextualizer.classify_scenario(query=query, model=MODEL, scope="module")
+    assert result == "no_vectordb", f"'{query}' (scope=module) → expected no_vectordb, got '{result}'"
+
+
+@pytest.mark.integration
+def test_domain_term_in_global_scope_stays_out_of_scope(contextualizer):
+    """Without course context, a pure labor-law term remains out of scope."""
+    result = contextualizer.classify_scenario(
+        query="Was ist eine Dienstvereinbarung?", model=MODEL, scope="global"
+    )
+    assert result == "no_vectordb"

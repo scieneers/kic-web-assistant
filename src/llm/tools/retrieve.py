@@ -45,6 +45,12 @@ def retrieve_chunks(state: GraphState) -> dict:
     # Extract optional filters from runtime_config (set by frontend)
     course_id = state["runtime_config"]["course_id"]
     module_id = state["runtime_config"]["module_id"]
+    # Modul→Kurs-Eskalation: Nutzer hat dem Retry auf Kurslevel zugestimmt —
+    # Modul-Filter fällt weg, Kurs-Filter bleibt (nie auf global weiten).
+    scope_escalated = state.get("scope_escalated", False)
+    if scope_escalated and module_id:
+        logger.debug("retrieve_chunks: scope escalation — dropping module filter (was module_id=%s)", module_id)
+        module_id = None
     query = state["contextualized_query"]
     retrieve_top_n = state["system_config"]["retrieve_top_n"]
     # Integrated reranking: with the Azure Semantic backend, the semantic
@@ -79,6 +85,7 @@ def retrieve_chunks(state: GraphState) -> dict:
             "query": query,
             "course_id": course_id,
             "module_id": module_id,
+            "scope_escalated": scope_escalated,
             "retrieve_top_n": retrieve_top_n,
             "semantic_ranked": retriever.use_semantic,
             "n_retrieved": len(nodes),

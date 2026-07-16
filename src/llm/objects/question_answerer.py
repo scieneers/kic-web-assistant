@@ -34,6 +34,12 @@ NO_CONTENT_UNSUPPORTED_TYPE = (
 ANSWER_NOT_FOUND_SECOND_TIME_MOODLE = """Es tut mir leid, aber ich konnte die benötigten Informationen im Kurs nicht finden, um deine Frage zu beantworten. Schau bitte im Kurs selbst nach, um weitere Hilfe zu erhalten. Hier ist der Kurslink: https://moodle.ki-campus.org/course/view.php?id={course_id}
 """
 
+# Modul-Scope: statt einer Sackgasse die Eskalation aufs Kurslevel anbieten.
+# Ein bejahender Folge-Turn wird deterministisch erkannt (contextualize.py,
+# ESCALATION_ACCEPT_RESPONSES) und wiederholt die Frage ohne Modul-Filter.
+NO_ANSWER_IN_MODULE_OFFER_COURSE = """Dazu habe ich in diesem Modul leider nichts gefunden. Soll ich stattdessen im gesamten Kurs suchen? Antworte einfach mit „Ja“.
+"""
+
 # Statische Präfixe der Fallback-Templates mit Platzhaltern — aus den Konstanten
 # abgeleitet, damit get_fallback_type() bei Textänderungen nicht auseinanderläuft.
 _MOODLE_NOT_FOUND_PREFIX = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.split("{course_id}")[0]
@@ -55,6 +61,8 @@ def get_fallback_type(answer: str | None) -> str | None:
     text = answer.strip()
     if text == ANSWER_NOT_FOUND_FIRST_TIME.strip():
         return "not_understood_first_time"
+    if text == NO_ANSWER_IN_MODULE_OFFER_COURSE.strip():
+        return "no_answer_module_offer_course"
     if text == NO_RELEVANT_CONTENT.strip():
         return "no_relevant_content"
     if text == ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL.strip():
@@ -110,8 +118,12 @@ class QuestionAnswerer:
         language: str,
         is_moodle: bool,
         course_id: int,
+        offer_course_escalation: bool = False,
     ) -> SerializableChatMessage:
-        
+        """offer_course_escalation: the query was module-scoped and a course-level
+        retry is possible — a first-time no-answer then offers the escalation
+        (NO_ANSWER_IN_MODULE_OFFER_COURSE) instead of the generic fallback."""
+
         # Determine whether the previous assistant turn was already a "no answer"
         # before starting the LLM call — needed to pick the right fallback message.
         previous_bot_response_was_no_answer = False
@@ -119,14 +131,15 @@ class QuestionAnswerer:
             for msg in reversed(chat_history):
                 if msg.role == MessageRole.ASSISTANT:
                     previous_bot_response_was_no_answer = (
-                        msg.content in (ANSWER_NOT_FOUND_FIRST_TIME, NO_RELEVANT_CONTENT)
+                        msg.content
+                        in (ANSWER_NOT_FOUND_FIRST_TIME, NO_RELEVANT_CONTENT, NO_ANSWER_IN_MODULE_OFFER_COURSE)
                     )
                     break
 
         # Early exit: no sources retrieved → skip both rerank and LLM answer call.
         if not sources:
             if not previous_bot_response_was_no_answer:
-                fallback = NO_RELEVANT_CONTENT
+                fallback = NO_ANSWER_IN_MODULE_OFFER_COURSE if offer_course_escalation else NO_RELEVANT_CONTENT
             elif is_moodle and course_id is not None:
                 fallback = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id=course_id)
             elif is_moodle:
@@ -192,7 +205,9 @@ class QuestionAnswerer:
 
         if is_no_answer:
             if not previous_bot_response_was_no_answer:
-                response.content = ANSWER_NOT_FOUND_FIRST_TIME
+                response.content = (
+                    NO_ANSWER_IN_MODULE_OFFER_COURSE if offer_course_escalation else ANSWER_NOT_FOUND_FIRST_TIME
+                )
             else:
                 if is_moodle and course_id is not None:
                     response.content = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id=course_id)

@@ -15,6 +15,7 @@ class Contextualizer:
         self.CONDENSE_QUESTION_PROMPT = load_prompt("contextualizer_prompt")
         self.CONDENSE_SOCRATIC_PROMPT = load_prompt("contextualizer_socratic_prompt")
         self.ROUTER_PROMPT = load_prompt("router_prompt")
+        self.ESCALATION_ACCEPT_PROMPT = load_prompt("escalation_accept_prompt")
 
     @observe()
     def contextualize(self, query: str, chat_history: list[SerializableChatMessage], model: Models) -> str:
@@ -68,7 +69,23 @@ class Contextualizer:
         return contextualized_question.content
 
     @observe()
-    def classify_scenario(self, query: str, model: Models, has_prior_history: bool = False) -> Scenario:
+    def classify_escalation_acceptance(self, query: str, model: Models) -> bool:
+        """True if the reply accepts the pending module→course escalation offer.
+
+        Second stage after the deterministic keyword fast path in
+        contextualize.py (ESCALATION_ACCEPT_RESPONSES): catches free-form
+        consent like "klar, mach mal". The prompt is biased toward OTHER —
+        a wrong ACCEPT would hijack the user's new message.
+        """
+        verdict = self.llm.chat(
+            query=query, chat_history=[], model=model, system_prompt=self.ESCALATION_ACCEPT_PROMPT
+        )
+        return (verdict.content or "").strip().upper() == "ACCEPT"
+
+    @observe()
+    def classify_scenario(
+        self, query: str, model: Models, has_prior_history: bool = False, scope: str = "global"
+    ) -> Scenario:
         """
         LLM-based classification of user query into scenario.
 
@@ -82,6 +99,12 @@ class Contextualizer:
             query: User's current query
             model: LLM model to use for classification
             has_prior_history: Whether this thread already has prior chat history
+            scope: "global", "course" or "module" — where the user currently is.
+                Inside a course/module, topical questions are never classified
+                as out of scope: courses cover AI in many professional domains
+                (law, administration, retail, ...), so whether the material
+                answers a domain question is checked downstream by retrieval,
+                not guessed by the router from the bare query.
 
         Returns:
             Scenario classification
@@ -91,7 +114,22 @@ class Contextualizer:
             if has_prior_history
             else "Session context: this is the first message in this session (no prior conversation)."
         )
-        router_prompt = self.ROUTER_PROMPT.format(history_context=history_context)
+        if scope in ("course", "module"):
+            scope_context = (
+                "Scope context: the user is currently inside a specific course on the platform. "
+                "KI-Campus courses teach AI within many professional domains (law, public administration, "
+                "retail, health, education, ...), so course material legitimately covers domain terms far "
+                "beyond core AI vocabulary. Out-of-scope classification is FORBIDDEN here: never classify "
+                "a topical or factual question as out of scope — whether the course material covers it is "
+                "checked downstream by retrieval. Classify as no_vectordb only gibberish, small talk, and "
+                "conversational/meta requests."
+            )
+        else:
+            scope_context = (
+                "Scope context: the user is browsing the platform globally (no specific course is open). "
+                "Out-of-scope classification is permitted."
+            )
+        router_prompt = self.ROUTER_PROMPT.format(history_context=history_context, scope_context=scope_context)
 
         # Call LLM to classify scenario (no chat_history needed)
         mode = self.llm.chat(

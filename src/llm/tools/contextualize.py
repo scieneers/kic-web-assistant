@@ -12,6 +12,30 @@ from src.llm.state.socratic_v2_routing import V2_EXIT_KEYWORDS, V2_EXIT_MESSAGE,
 
 logger = logging.getLogger(__name__)
 
+# Fast path for accepting the module→course escalation offer ("Soll ich im
+# gesamten Kurs suchen?"). Matched against the lowercased, stripped user turn
+# with trailing punctuation removed — zero-cost and deterministic for the
+# suggested reply ("Antworte einfach mit „Ja""). Free-form consent that this
+# list misses ("klar, mach mal") is caught by a second-stage LLM check
+# (Contextualizer.classify_escalation_acceptance).
+ESCALATION_ACCEPT_RESPONSES = {
+    "ja", "ja gerne", "ja, gerne", "gerne", "ja bitte", "ja, bitte", "bitte",
+    "ok", "okay", "yes", "yes please", "mach das", "ja mach das", "ja, mach das",
+}
+
+
+def _resolve_scope(runtime_config: dict) -> str:
+    """Frontend-Scope der Anfrage: global, kursweit oder modul-eingeschränkt.
+
+    Truthy check for module_id (not `is not None`): an empty module list means
+    "no module filter" — same convention as the Langfuse scope tag.
+    """
+    if runtime_config.get("module_id"):
+        return "module"
+    if runtime_config.get("course_id") is not None:
+        return "course"
+    return "global"
+
 
 def _trace_routing(**metadata) -> None:
     """Routing-Entscheidung als kompakte Metadaten an den Langfuse-Span hängen."""
@@ -181,6 +205,7 @@ def contextualize_and_route(state: GraphState) -> dict:
             return {
                 "mode": "socratic_v2",
                 "socratic_v2_phase": "opening",
+                "pending_scope_escalation": None,
             }
 
         # Check if user wants to start socratic mode (only if enabled) — either via
@@ -194,19 +219,51 @@ def contextualize_and_route(state: GraphState) -> dict:
             _trace_routing(mode="socratic", socratic_mode="contract", socratic_entry=True)
             return {
                 "mode": "socratic",
-                "socratic_mode": "contract"
+                "socratic_mode": "contract",
+                "pending_scope_escalation": None,
             }
+
+        runtime_config = state.get("runtime_config", {})
+
+        # Pending module→course escalation: the previous turn ended with the
+        # offer to retry the failed module-scoped question at course level.
+        # An affirmative reply re-runs the STORED retrieval query with the
+        # module filter dropped (scope_escalated), without re-contextualizing
+        # "Ja". Acceptance is two-stage: keyword fast path first, then an LLM
+        # check for free-form consent. Any other reply discards the offer and
+        # is routed normally.
+        pending_escalation = state.get("pending_scope_escalation")
+        if pending_escalation:
+            accepted = response_clean.rstrip("!. ") in ESCALATION_ACCEPT_RESPONSES
+            if not accepted:
+                accepted = contextualizer.classify_escalation_acceptance(query=user_query, model=model)
+            if accepted:
+                escalated_query = pending_escalation.get("contextualized_query")
+                logger.debug(
+                    "Scope escalation accepted — retrying at course level: query=%r",
+                    escalated_query[:80] if escalated_query else None,
+                )
+                _trace_routing(mode="simple_hop", scope_escalated=True, contextualized_query=escalated_query)
+                return {
+                    "mode": "simple_hop",
+                    "contextualized_query": escalated_query,
+                    "scope_escalated": True,
+                    "pending_scope_escalation": None,
+                }
+            logger.debug("Scope escalation offer not accepted — clearing and routing normally")
 
         # Classify scenario based on original query
         mode = contextualizer.classify_scenario(
-            query=user_query, model=model, has_prior_history=bool(chat_history)
+            query=user_query,
+            model=model,
+            has_prior_history=bool(chat_history),
+            scope=_resolve_scope(runtime_config),
         )
         logger.debug("Scenario classified → mode=%s", mode)
 
         # "summarize" targets the material of the course/module currently in
         # scope. Without a course_id/module_id there is nothing to fetch, so
         # fall back to the conversational path instead of retrieving nothing.
-        runtime_config = state.get("runtime_config", {})
         if mode == "summarize" and not runtime_config.get("course_id") and not runtime_config.get("module_id"):
             logger.debug("mode=summarize has no course/module scope — downgrading to no_vectordb")
             mode = "no_vectordb"
@@ -231,4 +288,5 @@ def contextualize_and_route(state: GraphState) -> dict:
         return {
             "mode": mode,
             "contextualized_query": contextualized_query,
+            "pending_scope_escalation": None,
         }

@@ -252,9 +252,14 @@ class KICampusAssistant:
                     },
                     # Reset per-turn intermediate artifacts so stale checkpoint
                     # values never bleed into the new graph run.
+                    # (pending_scope_escalation is deliberately NOT reset — it
+                    # carries the module→course escalation offer into exactly
+                    # this next turn and is consumed/cleared by
+                    # contextualize_and_route.)
                     "retrieved": [],
                     "retrieval_semantic_ranked": False,
                     "reranked": [],
+                    "scope_escalated": False,
                     "answer": None,
                     "citations_markdown": None,
                     "detected_language": None,
@@ -336,6 +341,8 @@ class KICampusAssistant:
                 tags.append(f"mode:{mode}")
             if fallback_type:
                 tags.append("fallback")
+            if result.get("scope_escalated"):
+                tags.append("scope_escalated")
 
             langfuse_context.update_current_trace(
                 name=f"chat:{mode}" if mode else "chat",
@@ -359,6 +366,7 @@ class KICampusAssistant:
                     "n_retrieved": len(result.get("retrieved") or []),
                     "n_reranked": len(result.get("reranked") or []),
                     "retrieval_semantic_ranked": result.get("retrieval_semantic_ranked"),
+                    "scope_escalated": bool(result.get("scope_escalated")),
                     "fallback_type": fallback_type,
                     "system_config": self.system_config,
                 },
