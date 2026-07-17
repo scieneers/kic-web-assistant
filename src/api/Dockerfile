@@ -38,8 +38,20 @@ COPY --chown=appuser:appuser . ./
 FROM base AS runtime
 
 # Install Azure CLI for defaultcredentials cli login in lockally hosted container
-RUN apt-get install -y curl
+RUN apt-get install -y curl gnupg
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+# Redis 8 aus dem offiziellen Redis-Repo — Debian liefert nur Redis 7 ohne die
+# JSON/Search-Module, die langgraph-checkpoint-redis benötigt. Läuft als
+# Checkpointer-Store für den Chat-State im selben Container (entrypoint.sh);
+# per REDIS_URL-App-Setting auf Azure Managed Redis umschaltbar.
+# Der Versions-Check bricht den Build ab, falls doch ein Redis <8 aufgelöst wird.
+RUN curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
+    chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb bookworm main" > /etc/apt/sources.list.d/redis.list && \
+    apt-get update && apt-get install -y redis && \
+    redis-server --version && \
+    redis-server --version | grep -qE "v=([89]|[1-9][0-9])\."
 
 USER appuser
 WORKDIR /home/appuser
@@ -52,4 +64,8 @@ ENV NLTK_DATA=nltk_data
 RUN python -m nltk.downloader stopwords punkt punkt_tab
 EXPOSE 80
 
-CMD ["gunicorn" , "-b", "0.0.0.0:80", "-c", "src/api/gunicorn.conf.py", "src.api.rest:app"]
+# Default: eingebetteter Redis (entrypoint.sh startet ihn). Für Azure Managed
+# Redis dieses Setting in den App Settings überschreiben (rediss://-URL).
+ENV REDIS_URL="redis://localhost:6379"
+
+CMD ["bash", "src/api/entrypoint.sh"]

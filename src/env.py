@@ -96,6 +96,20 @@ class EnvHelper(BaseModel):
 
     VIMEO_PAT: str = "UNSET"
 
+    # Chat-State-Persistenz (LangGraph-Checkpointer). Wenn gesetzt, wird ein
+    # Redis-Checkpointer verwendet, den sich alle Gunicorn-Worker teilen —
+    # sonst gehen Konversationen verloren, sobald ein Folgerequest auf einem
+    # anderen Worker landet. "UNSET" → in-memory BoundedMemorySaver (lokale
+    # Entwicklung, Tests). Im API-Container zeigt die URL auf den dort
+    # mitlaufenden Redis (siehe src/api/entrypoint.sh). Für den Wechsel auf
+    # Azure Managed Redis nur dieses App-Setting überschreiben:
+    #   rediss://:<access-key>@<name>.<region>.redis.azure.net:10000
+    REDIS_URL: str = "UNSET"
+    # Redis-Checkpointer: Konversationen verfallen nach dieser Zeit ohne Zugriff
+    # (TTL wird bei Lesezugriff erneuert). Ersetzt die FIFO-Verdrängung des
+    # in-memory Savers.
+    CHAT_TTL_MINUTES: int = 1440
+
     # Chat runtime tuning — previously hardcoded constants in assistant.py / LLMs.py.
     MAX_CHAT_THREADS: int = 500  # BoundedMemorySaver: oldest thread evicted beyond this
     CHAT_HISTORY_LIMIT: int = 6  # messages kept per turn when rebuilding graph state

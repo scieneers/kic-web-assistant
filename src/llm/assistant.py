@@ -4,6 +4,7 @@ import uuid
 from collections import OrderedDict
 from langfuse.decorators import observe, langfuse_context
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
@@ -63,6 +64,35 @@ class BoundedMemorySaver(MemorySaver):
         return await super().aput(config, checkpoint, metadata, new_versions)
 
 
+def build_checkpointer() -> BaseCheckpointSaver:
+    """Wählt den LangGraph-Checkpointer anhand von REDIS_URL.
+
+    Mit REDIS_URL: Redis-Checkpointer, den sich alle Gunicorn-Worker teilen —
+    ohne den verliert eine Konversation ihren State, sobald der Folgerequest
+    auf einem anderen Worker landet. Konversationen verfallen per TTL
+    (CHAT_TTL_MINUTES, bei Zugriff erneuert). Funktioniert unverändert gegen
+    den im API-Container mitlaufenden Redis wie gegen Azure Managed Redis
+    (rediss://-URL, siehe env.py).
+
+    Ohne REDIS_URL: in-memory BoundedMemorySaver (lokale Entwicklung, Tests).
+    """
+    # "UNSET" → AttributeError in EnvHelper.__getattribute__ → None
+    redis_url = getattr(env, "REDIS_URL", None)
+    if redis_url:
+        # Lazy Import: braucht das api-Extra; Redis 8 (JSON/Search-Module)
+        from langgraph.checkpoint.redis import RedisSaver
+
+        saver = RedisSaver(
+            redis_url=redis_url,
+            ttl={"default_ttl": env.CHAT_TTL_MINUTES, "refresh_on_read": True},
+        )
+        saver.setup()
+        logger.info("Chat-Checkpointer: Redis (TTL %d min)", env.CHAT_TTL_MINUTES)
+        return saver
+    logger.info("Chat-Checkpointer: in-memory (max %d Threads)", env.MAX_CHAT_THREADS)
+    return BoundedMemorySaver(max_threads=env.MAX_CHAT_THREADS)
+
+
 class KICampusAssistant:
     """
     Main RAG assistant orchestrator using LangGraph.
@@ -109,10 +139,10 @@ class KICampusAssistant:
             "min_reranker_score": min_reranker_score,
         }
         
-        # In-memory persistence for the duration of the backend runtime.
-        # No database persistence — conversations are lost on server restart.
-        # Bounded via MAX_CHAT_THREADS; oldest conversation is evicted when limit is exceeded.
-        self.checkpointer = BoundedMemorySaver(max_threads=env.MAX_CHAT_THREADS)
+        # Redis (shared across workers, survives worker recycling) or
+        # in-memory fallback — see build_checkpointer(). Conversations are
+        # session-scoped either way: TTL respectively restart bounds them.
+        self.checkpointer = build_checkpointer()
 
         # Compile main router graph
         self.graph = self._build_main_graph()
