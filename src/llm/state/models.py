@@ -72,6 +72,12 @@ class GraphState(TypedDict, total=False):
     # known solutions), loaded once at opening; answers graded deterministically.
     v2_quiz_items: Optional[List[Dict[str, Any]]]  # [{...payload, "asked": bool}]
     v2_pending_quiz: Optional[Dict[str, Any]]  # question currently posed: {question, kind, concept, options: [{letter, text, correct}]}
+    # Move tracking — write-only for the app (analysis/benchmark reads it via
+    # get_state): what the policy wanted vs. what ran after the guards. EXIT
+    # and CONSOLIDATION set these on top of the state reset so the final
+    # snapshot still shows how the session ended.
+    v2_last_policy_move: Optional[str]  # move the policy chose (before guards; None if no policy ran)
+    v2_last_move: Optional[str]  # move actually executed (after guards / quiz handling)
 
     # output
     answer: Optional[str]

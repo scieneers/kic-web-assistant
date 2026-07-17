@@ -189,6 +189,8 @@ def socratic_v2_opening(state: GraphState) -> dict:
         "v2_scope_title": scope_title,
         "v2_quiz_items": quiz_items,
         "v2_pending_quiz": None,
+        "v2_last_policy_move": None,
+        "v2_last_move": None,
         "answer": _compose_welcome(scope_title, objectives),
         "citations_markdown": None,
     }

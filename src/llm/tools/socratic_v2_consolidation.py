@@ -13,7 +13,7 @@ is normal chat again (or a fresh Lernmodus start via the button).
 import json
 import logging
 
-from langfuse.decorators import observe
+from langfuse.decorators import langfuse_context, observe
 
 from src.llm.objects.LLMs import LLM
 from src.llm.prompts.prompt_loader import load_prompt
@@ -69,4 +69,24 @@ ZUSAMMENFASSUNG DER LERNENDEN PERSON: {user_query}"""
 
     answer = response.content.strip() if response.content else CONSOLIDATION_FALLBACK
 
-    return {**reset_socratic_v2_state(), "answer": answer, "citations_markdown": None}
+    # Final learner state of the session — after this the checkpoint is reset,
+    # so this observation is the last place the learner model is visible.
+    langfuse_context.update_current_observation(
+        metadata={
+            "executed_move": "CONSOLIDATION",
+            "session_goal": session_goal,
+            "learner_model": learner_model,
+            "n_learning_objectives": len(learning_objectives),
+            "used_fallback": not bool(response.content),
+        }
+    )
+
+    # Tracking fields survive the reset so the final state snapshot shows the
+    # session ended via consolidation (as opposed to EXIT).
+    return {
+        **reset_socratic_v2_state(),
+        "v2_last_policy_move": None,
+        "v2_last_move": "CONSOLIDATION",
+        "answer": answer,
+        "citations_markdown": None,
+    }

@@ -69,6 +69,8 @@ def reset_socratic_v2_state() -> Dict[str, Any]:
         "v2_scope_title": None,
         "v2_quiz_items": None,
         "v2_pending_quiz": None,
+        "v2_last_policy_move": None,
+        "v2_last_move": None,
     }
 
 
@@ -114,7 +116,13 @@ def parse_policy_response(content: str | None) -> Dict[str, Any]:
     fallback continues the dialogue with a plain Socratic question and no
     learner-model update.
     """
-    fallback = {"move": DEFAULT_MOVE, "zielkonzept": None, "lernziel_session": None, "learner_update": None}
+    fallback = {
+        "move": DEFAULT_MOVE,
+        "zielkonzept": None,
+        "lernziel_session": None,
+        "learner_update": None,
+        "begruendung": None,
+    }
     if not content:
         return fallback
 
@@ -139,11 +147,14 @@ def parse_policy_response(content: str | None) -> Dict[str, Any]:
     zielkonzept = data.get("zielkonzept")
     lernziel_session = data.get("lernziel_session")
     learner_update = data.get("learner_update")
+    begruendung = data.get("begruendung")
     return {
         "move": move,
         "zielkonzept": zielkonzept if isinstance(zielkonzept, str) and zielkonzept.strip() else None,
         "lernziel_session": lernziel_session if isinstance(lernziel_session, str) and lernziel_session.strip() else None,
         "learner_update": learner_update if isinstance(learner_update, dict) else None,
+        # Prompt asks for a one-sentence rationale — kept for Langfuse analysis.
+        "begruendung": begruendung if isinstance(begruendung, str) and begruendung.strip() else None,
     }
 
 

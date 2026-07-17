@@ -99,12 +99,16 @@ class TestParsePolicyResponse:
     def test_parses_valid_json(self):
         result = parse_policy_response(
             '{"move": "HINT", "zielkonzept": "Overfitting", "lernziel_session": "Ziel", '
-            '"learner_update": {"konzepte": {"Overfitting": "wackelig"}}}'
+            '"learner_update": {"konzepte": {"Overfitting": "wackelig"}}, "begruendung": "Person hängt fest."}'
         )
         assert result["move"] == "HINT"
         assert result["zielkonzept"] == "Overfitting"
         assert result["lernziel_session"] == "Ziel"
         assert result["learner_update"]["konzepte"]["Overfitting"] == "wackelig"
+        assert result["begruendung"] == "Person hängt fest."
+
+    def test_missing_begruendung_is_none(self):
+        assert parse_policy_response('{"move": "HINT"}')["begruendung"] is None
 
     def test_strips_markdown_fences(self):
         result = parse_policy_response('```json\n{"move": "CONSOLIDATE"}\n```')
@@ -200,6 +204,8 @@ class TestSocraticV2Opening:
         assert result["v2_hint_count"] == 0
         assert result["v2_question_streak"] == 0
         assert result["v2_session_goal"] is None
+        assert result["v2_last_move"] is None
+        assert result["v2_last_policy_move"] is None
 
     def test_extraction_failure_still_starts_session(self):
         result, _ = self._run(_base_state(), [_make_chunk("Inhalt", {"fullname": "ML Modul"})], llm_content="kaputt")
@@ -234,6 +240,17 @@ class TestSocraticV2Core:
         assert result["v2_question_streak"] == 1
         assert result["answer"] == "Gute Überlegung! Was folgt daraus?"
 
+    def test_move_tracking_without_guard_override(self):
+        result, _, _ = self._run(_base_state(), _policy("FRAGE"))
+        assert result["v2_last_policy_move"] == "FRAGE"
+        assert result["v2_last_move"] == "FRAGE"
+
+    def test_move_tracking_records_guard_override(self):
+        # streak guard forces HINT — policy choice and executed move diverge
+        result, _, _ = self._run(_base_state(v2_question_streak=3), _policy("FRAGE"))
+        assert result["v2_last_policy_move"] == "FRAGE"
+        assert result["v2_last_move"] == "HINT"
+
     def test_non_question_move_resets_streak(self):
         result, _, _ = self._run(_base_state(v2_question_streak=2), _policy("ZWISCHENFAZIT"))
         assert result["v2_question_streak"] == 0
@@ -265,14 +282,25 @@ class TestSocraticV2Core:
         assert result["v2_target_concept"] == "Regularisierung"
 
     def test_consolidate_transitions_to_consolidation_phase(self):
-        result, _, _ = self._run(_base_state(), _policy("CONSOLIDATE"))
+        result, _, _ = self._run(_base_state(v2_core_turns=4), _policy("CONSOLIDATE"))
         assert result["socratic_v2_phase"] == "consolidation"
+        assert result["v2_last_move"] == "CONSOLIDATE"
+
+    def test_premature_consolidate_is_overridden_to_frage(self):
+        # fewer core exchanges than MIN_CORE_TURNS_BEFORE_CONSOLIDATE → guard
+        result, _, _ = self._run(_base_state(v2_core_turns=1), _policy("CONSOLIDATE"))
+        assert result["socratic_v2_phase"] == "core"
+        assert result["v2_last_policy_move"] == "CONSOLIDATE"
+        assert result["v2_last_move"] == "FRAGE"
 
     def test_exit_resets_all_v2_state(self):
         result, _, _ = self._run(_base_state(), _policy("EXIT"))
         assert result["socratic_v2_phase"] is None
         assert result["v2_learner_model"] is None
         assert result["answer"] == V2_EXIT_MESSAGE
+        # tracking fields survive the reset so analysis sees how the session ended
+        assert result["v2_last_move"] == "EXIT"
+        assert result["v2_last_policy_move"] == "EXIT"
 
     def test_learner_update_is_merged(self):
         result, _, _ = self._run(
@@ -332,6 +360,8 @@ class TestQuizMove:
         assert "Korrekt" not in result["answer"]  # nothing leaks
         assert result["v2_pending_quiz"] is not None
         assert result["v2_quiz_items"][0]["asked"] is True
+        assert result["v2_last_move"] == "QUIZ"
+        assert result["v2_last_policy_move"] == "QUIZ"
 
     def test_quiz_options_carry_ground_truth_in_state_only(self):
         state = _base_state(v2_quiz_items=[_quiz_payload()])
@@ -368,6 +398,8 @@ class TestQuizMove:
         assert result["v2_learner_model"]["konzepte"]["Overfitting"] == "sicher"
         assert result["v2_pending_quiz"] is None
         assert "BEWERTUNG: RICHTIG" in mock_generate.call_args.kwargs["query"]
+        assert result["v2_last_move"] == "QUIZ_FEEDBACK"
+        assert result["v2_last_policy_move"] is None  # no policy ran
 
     def test_grading_wrong_answer_marks_concept_wackelig(self):
         state, pending = self._pending_state()
@@ -588,7 +620,10 @@ class TestSocraticV2Consolidation:
 
     def test_resets_all_v2_state(self):
         result, _ = self._run(_base_state(socratic_v2_phase="consolidation"))
-        for key, value in reset_socratic_v2_state().items():
+        # v2_last_move survives the reset on purpose: it marks that the
+        # session ended via consolidation (vs. EXIT) for analysis/benchmark.
+        expected = {**reset_socratic_v2_state(), "v2_last_move": "CONSOLIDATION"}
+        for key, value in expected.items():
             assert result[key] == value
 
     def test_answer_from_llm(self):

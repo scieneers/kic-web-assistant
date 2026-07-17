@@ -228,6 +228,8 @@ ANTWORT DER LERNENDEN PERSON: {user_query}"""
         "v2_hint_count": hint_count,
         "v2_question_streak": 0,  # the resolution IS the Gegenwert
         "v2_core_turns": core_turns + 1,
+        "v2_last_policy_move": None,  # no policy call — grading is deterministic
+        "v2_last_move": "QUIZ_FEEDBACK",
         "answer": answer,
         "citations_markdown": None,
     }
@@ -329,10 +331,29 @@ def socratic_v2_core(state: GraphState) -> dict:
         available_quiz_items=unasked_quiz_items,
     )
     move = policy["move"]
+    policy_move = move  # the policy's raw choice, before quiz fallback and guards
 
     if move == "EXIT":
         logger.debug("socratic_v2_core: policy chose EXIT — resetting v2 state")
-        return {**reset_socratic_v2_state(), "answer": V2_EXIT_MESSAGE, "citations_markdown": None}
+        langfuse_context.update_current_observation(
+            metadata={
+                "policy_move": "EXIT",
+                "executed_move": "EXIT",
+                "policy_reasoning": policy.get("begruendung"),
+                "learner_model": learner_model,
+                "core_turns": core_turns,
+                "next_phase": None,
+            }
+        )
+        # Tracking fields survive the reset so the final state snapshot still
+        # shows how the session ended (nothing in the app reads them).
+        return {
+            **reset_socratic_v2_state(),
+            "v2_last_policy_move": "EXIT",
+            "v2_last_move": "EXIT",
+            "answer": V2_EXIT_MESSAGE,
+            "citations_markdown": None,
+        }
 
     # Apply state updates from the policy before the guards.
     learner_model = merge_learner_update(learner_model, policy.get("learner_update"))
@@ -355,6 +376,7 @@ def socratic_v2_core(state: GraphState) -> dict:
                 metadata={
                     "policy_move": "QUIZ",
                     "executed_move": "QUIZ",
+                    "policy_reasoning": policy.get("begruendung"),
                     "quiz_question": pending["question"],
                     "target_concept": target_concept,
                 }
@@ -371,6 +393,8 @@ def socratic_v2_core(state: GraphState) -> dict:
                 "v2_quiz_items": updated_items,
                 "v2_pending_quiz": pending,
                 "v2_core_turns": core_turns + 1,
+                "v2_last_policy_move": "QUIZ",
+                "v2_last_move": "QUIZ",
                 "answer": render_quiz_message(pending),
                 "citations_markdown": None,
             }
@@ -420,8 +444,9 @@ def socratic_v2_core(state: GraphState) -> dict:
 
     langfuse_context.update_current_observation(
         metadata={
-            "policy_move": original_move,
+            "policy_move": policy_move,
             "executed_move": move,
+            "policy_reasoning": policy.get("begruendung"),
             "target_concept": target_concept,
             "session_goal": session_goal,
             "hint_count": new_hint_count,
@@ -440,6 +465,8 @@ def socratic_v2_core(state: GraphState) -> dict:
         "v2_hint_count": new_hint_count,
         "v2_question_streak": new_question_streak,
         "v2_core_turns": core_turns + 1,
+        "v2_last_policy_move": policy_move,
+        "v2_last_move": move,
         "answer": answer,
         "citations_markdown": None,
     }
