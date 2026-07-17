@@ -179,8 +179,8 @@ class TestCitationSuffix:
     def test_positive_start_seconds_produces_suffix(self):
         assert citation_suffix(_node(start_seconds=235.0)) == " (ab Minute 3:55)"
 
-    def test_zero_start_seconds_produces_no_suffix(self):
-        assert citation_suffix(_node(start_seconds=0)) == ""
+    def test_zero_start_seconds_produces_suffix(self):
+        assert citation_suffix(_node(start_seconds=0)) == " (ab Minute 0:00)"
 
     def test_missing_start_seconds_produces_no_suffix(self):
         assert citation_suffix(_node()) == ""

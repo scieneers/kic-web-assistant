@@ -27,7 +27,7 @@ def citation_suffix(doc: TextNode) -> str:
     prose, which smaller models don't follow reliably.
     """
     start = doc.metadata.get("start_seconds")
-    if isinstance(start, (int, float)) and start > 0:
+    if isinstance(start, (int, float)) and start >= 0:
         return f" (ab Minute {_format_video_timestamp(start)})"
     return ""
 
