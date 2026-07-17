@@ -39,6 +39,11 @@ HTTP_CONNECT_TIMEOUT = float(os.getenv("DRUPAL_HTTP_CONNECT_TIMEOUT", "15"))
 HTTP_READ_TIMEOUT = float(os.getenv("DRUPAL_HTTP_READ_TIMEOUT", "120"))
 HTTP_MAX_ATTEMPTS = int(os.getenv("DRUPAL_HTTP_MAX_ATTEMPTS", "4"))
 HTTP_BACKOFF_SECONDS = float(os.getenv("DRUPAL_HTTP_BACKOFF_SECONDS", "10"))
+# Small pause before every outgoing request to avoid hammering ki-campus.org with
+# bursts of parallel-feeling requests (paging, paragraphs, related entities all
+# go through _get). Ingest runtime isn't time-critical, so we trade a bit of
+# extra duration for fewer connection errors in the first place.
+HTTP_REQUEST_DELAY_SECONDS = float(os.getenv("DRUPAL_HTTP_REQUEST_DELAY_SECONDS", "1"))
 
 
 class Drupal:
@@ -112,6 +117,9 @@ class Drupal:
         doesn't kill the whole ingest run. Raises the last exception once
         HTTP_MAX_ATTEMPTS is exhausted.
         """
+        if HTTP_REQUEST_DELAY_SECONDS > 0:
+            time.sleep(HTTP_REQUEST_DELAY_SECONDS)
+
         last_exc: Exception | None = None
         for attempt in range(1, HTTP_MAX_ATTEMPTS + 1):
             try:
