@@ -100,12 +100,16 @@ class LLM:
                 # GPT-5-family reasoning model: like AZURE_FALLBACK, do NOT set
                 # temperature/max_tokens (the API rejects temperature != 1 and
                 # uses max_completion_tokens). The prompt keeps the output short.
+                # reasoning_effort="minimal" turns internal reasoning off — the
+                # aux tasks on this model (language detection) need a one-word
+                # answer, and reasoning tokens dominated latency (4-6s/call).
                 llm = AzureOpenAI(
                     model=env.AZURE_MINI_MODEL,
                     deployment=env.AZURE_MINI_DEPLOYMENT,
                     api_key=env.AZURE_OPENAI_API_KEY,
                     azure_endpoint=env.AZURE_OPENAI_URL,
                     api_version="2024-12-01-preview",
+                    reasoning_effort="minimal",
                     callback_manager=Settings.callback_manager,
                 )
             case Models.LLAMA3:
