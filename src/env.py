@@ -100,9 +100,10 @@ class EnvHelper(BaseModel):
     # Redis-Checkpointer verwendet, den sich alle Gunicorn-Worker teilen —
     # sonst gehen Konversationen verloren, sobald ein Folgerequest auf einem
     # anderen Worker landet. "UNSET" → in-memory BoundedMemorySaver (lokale
-    # Entwicklung, Tests). Im API-Container zeigt die URL auf den dort
-    # mitlaufenden Redis (siehe src/api/entrypoint.sh). Für den Wechsel auf
-    # Azure Managed Redis nur dieses App-Setting überschreiben:
+    # Entwicklung, Tests). Im Deployment zeigt die URL auf den Redis-Sidecar
+    # neben dem API-Container (IaC; erreichbar über localhost, siehe
+    # src/api/entrypoint.sh). Für den Wechsel auf Azure Managed Redis nur
+    # dieses App-Setting überschreiben:
     #   rediss://:<access-key>@<name>.<region>.redis.azure.net:10000
     REDIS_URL: str = "UNSET"
     # Redis-Checkpointer: Konversationen verfallen nach dieser Zeit ohne Zugriff
