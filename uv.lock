@@ -1345,7 +1345,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'api'", specifier = "~=0.112.0" },
     { name = "gunicorn", marker = "extra == 'api'", specifier = "~=22.0.0" },
     { name = "langchain-openai", marker = "extra == 'ragas'", specifier = "~=1.1.7" },
-    { name = "langfuse", specifier = "~=2.43.1" },
+    { name = "langfuse", specifier = "~=2.60.0" },
     { name = "langgraph", specifier = ">=1.0.0,<2" },
     { name = "langgraph-checkpoint", specifier = ">=2.0.0,<3" },
     { name = "langgraph-checkpoint-redis", marker = "extra == 'api'", specifier = ">=0.1.3" },
@@ -1504,7 +1504,7 @@ wheels = [
 
 [[package]]
 name = "langfuse"
-version = "2.43.3"
+version = "2.60.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1513,11 +1513,12 @@ dependencies = [
     { name = "idna" },
     { name = "packaging" },
     { name = "pydantic" },
+    { name = "requests" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/69/fd130f0c3023aaf940cd532aafd685bca5a1490a64031f45dd27df19644a/langfuse-2.43.3.tar.gz", hash = "sha256:046d872d0d0053d02816d5e5a610be0e4ae7ebb69e65d979111fc522be965691", size = 105518, upload-time = "2024-08-11T16:34:07.442Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/45/77fdf53c9e9f49bb78f72eba3f992f2f3d8343e05976aabfe1fca276a640/langfuse-2.60.10.tar.gz", hash = "sha256:a26d0d927a28ee01b2d12bb5b862590b643cc4e60a28de6e2b0c2cfff5dbfc6a", size = 152648, upload-time = "2025-09-16T15:08:12.426Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/ee/1a216a9035aa6a638df28f477dd1b6f977e24193c54fd7710abb24d85eec/langfuse-2.43.3-py3-none-any.whl", hash = "sha256:62a368009dd26f698905321a52929ab4e75996a871f41db2892beb5257ab69d2", size = 193030, upload-time = "2024-08-11T16:34:04.522Z" },
+    { url = "https://files.pythonhosted.org/packages/76/69/08584fbd69e14398d3932a77d0c8d7e20389da3e6470210d6719afba2801/langfuse-2.60.10-py3-none-any.whl", hash = "sha256:815c6369194aa5b2a24f88eb9952f7c3fc863272c41e90642a71f3bc76f4a11f", size = 275568, upload-time = "2025-09-16T15:08:10.166Z" },
 ]
 
 [[package]]

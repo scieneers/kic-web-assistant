@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Redis läuft als eigener Sidecar-Container (IaC), nicht mehr in diesem
-# Image. Bei REDIS_URL=localhost (Default, Sidecar teilt sich den
-# Network-Namespace mit diesem Container) kurz warten, falls der Sidecar
-# beim Cold-Start noch nicht bereit ist — es gibt keine garantierte
-# Startreihenfolge zwischen App-Service-Sidecar-Containern. Für Azure
-# Managed Redis (rediss://-URL) entfällt das Warten, da der Dienst bereits
-# läuft.
 if [[ "${REDIS_URL:-}" == *"localhost"* || "${REDIS_URL:-}" == *"127.0.0.1"* ]]; then
+    echo "Warte auf Redis-Sidecar (Port 6379)..."
     ready=false
-    for _ in $(seq 1 40); do
-        (: < /dev/tcp/127.0.0.1/6379) 2>/dev/null && ready=true && break
-        sleep 0.25
+    # 120 Versuche à 1 Sekunde = 2 Minuten Puffer für Image Pull & Container Start
+    for i in $(seq 1 120); do
+        if (: < /dev/tcp/127.0.0.1/6379) 2>/dev/null; then
+            ready=true
+            echo "Redis-Sidecar Port ist offen (Versuch $i)."
+            break
+        fi
+        sleep 1
     done
     if ! $ready; then
-        echo "Redis-Sidecar unter localhost:6379 nicht erreichbar — Abbruch." >&2
+        echo "Redis-Sidecar unter ${REDIS_URL} nach 120s nicht erreichbar — Abbruch." >&2
         exit 1
     fi
 fi

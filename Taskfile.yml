@@ -49,6 +49,7 @@ tasks:
         {{ else }}
           docker build -t {{ .REGISTRY }}/rest-api:{{.VERSION}} -f src/api/Dockerfile .
         {{ end }}
+      - echo "Building API with version {{.VERSION}} - done."
 
   build-loader:
     desc: Build the docker image for the data loader (Azure Functions)

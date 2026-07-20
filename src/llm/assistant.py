@@ -1,6 +1,8 @@
 import logging
 import threading
+import time
 import uuid
+import urllib.parse
 from collections import OrderedDict
 from langfuse.decorators import observe, langfuse_context
 from langgraph.graph import StateGraph, START, END
@@ -75,18 +77,46 @@ def build_checkpointer() -> BaseCheckpointSaver:
     (rediss://-URL, siehe env.py).
 
     Ohne REDIS_URL: in-memory BoundedMemorySaver (lokale Entwicklung, Tests).
+
+    Der Sidecar kann beim Cold-Start noch ein paar Sekunden brauchen (siehe
+    entrypoint.sh, das genau darauf schon vor dem Start dieses Prozesses
+    wartet) — hier zusätzlich mit Retries abgesichert, falls Redis zwischen
+    zwei Requests kurz durchstartet (z.B. Managed-Redis-Failover) oder der
+    Worker schneller hochkommt als der Sidecar.
     """
     # "UNSET" → AttributeError in EnvHelper.__getattribute__ → None
     redis_url = getattr(env, "REDIS_URL", None)
     if redis_url:
         # Lazy Import: braucht das api-Extra; Redis 8 (JSON/Search-Module)
         from langgraph.checkpoint.redis import RedisSaver
+        from redis.exceptions import ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
+# URL für das Logging sicher maskieren (Passwort entfernen)
+        parsed = urllib.parse.urlparse(redis_url)
+        safe_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}" if parsed.hostname else "Redis-Server"
 
-        saver = RedisSaver(
-            redis_url=redis_url,
-            ttl={"default_ttl": env.CHAT_TTL_MINUTES, "refresh_on_read": True},
-        )
-        saver.setup()
+        max_retries = 10
+        retry_delay_seconds = 3
+        saver = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                saver = RedisSaver(
+                    redis_url=redis_url,
+                    ttl={"default_ttl": env.CHAT_TTL_MINUTES, "refresh_on_read": True},
+                )
+                saver.setup()
+                break
+            except (RedisConnectionError, RedisTimeoutError):
+                if attempt == max_retries:
+                    raise
+                logger.warning(
+                    "Redis unter %s nicht erreichbar (Versuch %d/%d), warte %ds...",
+                    safe_url,
+                    attempt,
+                    max_retries,
+                    retry_delay_seconds,
+                )
+                time.sleep(retry_delay_seconds)
+
         logger.info("Chat-Checkpointer: Redis (TTL %d min)", env.CHAT_TTL_MINUTES)
         return saver
     logger.info("Chat-Checkpointer: in-memory (max %d Threads)", env.MAX_CHAT_THREADS)
