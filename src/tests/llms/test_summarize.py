@@ -115,6 +115,7 @@ class TestSummaryAnswerer:
             model=Models.AZURE_FALLBACK,
             language="German",
             scope_name="diesem Modul",
+            is_course_level=False,
         )
         assert "diesem Modul" in result.content
         assert result.role == MessageRole.ASSISTANT
@@ -132,6 +133,7 @@ class TestSummaryAnswerer:
                 model=Models.AZURE_FALLBACK,
                 language="German",
                 scope_name="diesem Modul",
+                is_course_level=False,
             )
 
         mock_chat.assert_not_called()
@@ -160,6 +162,7 @@ class TestSummaryAnswerer:
                 model=Models.AZURE_FALLBACK,
                 language="German",
                 scope_name="diesem Modul",
+                is_course_level=False,
             )
 
         mock_chat.assert_not_called()
@@ -182,6 +185,7 @@ class TestSummaryAnswerer:
                 model=Models.AZURE_FALLBACK,
                 language="German",
                 scope_name="diesem Modul",
+                is_course_level=False,
             )
 
         assert result.content == "Zusammenfassung des Moduls [doc1]"
@@ -202,10 +206,51 @@ class TestSummaryAnswerer:
                 model=Models.AZURE_FALLBACK,
                 language="German",
                 scope_name="diesem Modul",
+                is_course_level=False,
                 focus_hint="nur den zweiten Teil",
             )
 
         assert "nur den zweiten Teil" in mock_chat.call_args.kwargs["query"]
+
+    def test_course_level_uses_compact_scope_guidance(self):
+        answerer = self._answerer()
+        sources = [TextNode(text="Kursinhalt", metadata={})]
+        mock_response = MagicMock()
+        mock_response.content = "Zusammenfassung"
+
+        with patch.object(answerer.llm, "chat", return_value=mock_response) as mock_chat:
+            answerer.summarize(
+                chat_history=[],
+                sources=sources,
+                model=Models.AZURE_FALLBACK,
+                language="German",
+                scope_name="diesem Kurs",
+                is_course_level=True,
+            )
+
+        system_prompt = mock_chat.call_args.kwargs["system_prompt"]
+        assert "COURSE-level summary" in system_prompt
+        assert "MODULE-" not in system_prompt
+
+    def test_module_level_uses_detailed_scope_guidance(self):
+        answerer = self._answerer()
+        sources = [TextNode(text="Modulinhalt", metadata={})]
+        mock_response = MagicMock()
+        mock_response.content = "Zusammenfassung"
+
+        with patch.object(answerer.llm, "chat", return_value=mock_response) as mock_chat:
+            answerer.summarize(
+                chat_history=[],
+                sources=sources,
+                model=Models.AZURE_FALLBACK,
+                language="German",
+                scope_name="diesem Modul",
+                is_course_level=False,
+            )
+
+        system_prompt = mock_chat.call_args.kwargs["system_prompt"]
+        assert "MODULE-" in system_prompt
+        assert "COURSE-level summary" not in system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +288,22 @@ class TestGenerateSummaryNode:
         assert result == {"answer": "Zusammenfassung"}
         call_kwargs = mock_answerer.summarize.call_args.kwargs
         assert call_kwargs["scope_name"] == "diesem Modul"
+        assert call_kwargs["is_course_level"] is False
+
+    def test_course_level_request_marked_as_such(self):
+        from src.llm.tools import summarize as summarize_module
+
+        mock_answerer = MagicMock()
+        mock_answerer.summarize.return_value = SerializableChatMessage(
+            role=MessageRole.ASSISTANT, content="Zusammenfassung"
+        )
+        node = SerializableTextNode(text="Inhalt", metadata={})
+
+        with patch.object(summarize_module, "get_summary_answerer", return_value=mock_answerer):
+            summarize_module.generate_summary(self._state([node], module_id=None))
+
+        call_kwargs = mock_answerer.summarize.call_args.kwargs
+        assert call_kwargs["is_course_level"] is True
 
 
 class TestScopeName:

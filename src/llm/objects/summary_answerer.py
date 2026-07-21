@@ -16,6 +16,19 @@ NO_CONTENT_TO_SUMMARIZE = "Zu {scope_name} liegt mir kein Inhalt vor, den ich zu
 
 SUMMARY_SYSTEM_PROMPT = load_prompt("summary_prompt")
 
+# Course-level requests (module_id is None) pull every module's content into
+# `sources` at once — without this, the "cover everything" instruction below
+# would make the response grow with the number of modules in the course,
+# producing an effectively unbounded wall of text for long courses.
+COURSE_LEVEL_SCOPE_GUIDANCE = """This is a COURSE-level summary — the <SOURCES> span an entire course with multiple modules.
+Give a compact overview: 2-4 sentences per module naming what it covers, not a full readout of every page, quiz, or video inside it. Skip minor sub-structure (individual quiz questions, single glossary entries) — just name that it exists.
+Cite one representative source per module, not every distinct source chunk.
+Keep total length proportionate to the number of modules, not to the number of source chunks: a 10-module course still gets roughly one paragraph or a few bullet points per module, not a page per module."""
+
+MODULE_LEVEL_SCOPE_GUIDANCE = """This is a MODULE- or page-level summary — the <SOURCES> are a single module or document.
+Keep it concise: name every distinct part of the content, but in brief — a sentence or two per part, not a full paraphrase of it. Cite the source(s) backing each part; several chunks belonging to the same part don't each need their own separate mention.
+Length should track the module's actual size, not maximize detail: a one-page module gets a short paragraph, a multi-document module gets a few short, structured sections — never a long, exhaustive read-through."""
+
 USER_TASK_WITH_SOURCES_PROMPT = """<TASK>:
 Fasse den folgenden Lerninhalt vollständig zusammen.{focus_line}
 
@@ -43,6 +56,7 @@ class SummaryAnswerer:
         model: Models,
         language: str,
         scope_name: str,
+        is_course_level: bool,
         focus_hint: str | None = None,
     ) -> SerializableChatMessage:
         """
@@ -54,6 +68,10 @@ class SummaryAnswerer:
             scope_name: Short German phrase describing the scope (e.g. "diesem Modul",
                 "diesem Kurs") — only used when `sources` is empty and there is no
                 document to pull an actual name from
+            is_course_level: True when the request covers a whole course (no module_id)
+                — steers the prompt towards a compact per-module overview instead of
+                exhaustive per-source coverage, which would otherwise scale with the
+                number of modules in the course
             focus_hint: Optional contextualized query hint (e.g. "nur den zweiten Teil")
                 to weight the summary towards, without dropping other major parts
         """
@@ -83,7 +101,8 @@ class SummaryAnswerer:
                 content=NO_CONTENT_IN_MODULE.format(module_name=module_name),
             )
 
-        system_prompt = SUMMARY_SYSTEM_PROMPT.format(language=language)
+        scope_guidance = COURSE_LEVEL_SCOPE_GUIDANCE if is_course_level else MODULE_LEVEL_SCOPE_GUIDANCE
+        system_prompt = SUMMARY_SYSTEM_PROMPT.format(language=language, scope_guidance=scope_guidance)
         formatted_sources = format_sources(sources, max_length=sys.maxsize)
         focus_line = f"\nFokus: {focus_hint}" if focus_hint else ""
         prompted_user_query = USER_TASK_WITH_SOURCES_PROMPT.format(

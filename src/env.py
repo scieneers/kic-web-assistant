@@ -234,5 +234,24 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = env.LANGFUSE_PUBLIC_KEY
 os.environ["LANGFUSE_SECRET_KEY"] = env.LANGFUSE_SECRET_KEY
 os.environ["LANGFUSE_HOST"] = env.LANGFUSE_HOST
 
+# Diagnostic: log what actually got resolved for Langfuse (env var vs. Key
+# Vault vs. still UNSET). Uses `warning` deliberately so this is visible even
+# with the default logging config (root level WARNING, no .basicConfig yet
+# called at this import time) — this is the only place that would otherwise
+# tell us *why* traces silently never reach Langfuse (wrong/missing host or
+# keys) instead of just observing that they don't show up.
+# NB: bypass EnvHelper.__getattribute__ (raises AttributeError on "UNSET")
+# via object.__dict__ so this diagnostic itself can't crash on the exact
+# misconfiguration it's meant to surface.
+_langfuse_host = env.__dict__["LANGFUSE_HOST"]
+_langfuse_public_key = env.__dict__["LANGFUSE_PUBLIC_KEY"]
+_langfuse_secret_key = env.__dict__["LANGFUSE_SECRET_KEY"]
+logging.warning(
+    "Langfuse config resolved: LANGFUSE_HOST=%r, LANGFUSE_PUBLIC_KEY=%s, LANGFUSE_SECRET_KEY=%s",
+    _langfuse_host,
+    f"{_langfuse_public_key[:6]}... (len={len(_langfuse_public_key)})" if _langfuse_public_key != "UNSET" else "UNSET",
+    f"set (len={len(_langfuse_secret_key)})" if _langfuse_secret_key != "UNSET" else "UNSET",
+)
+
 if __name__ == "__main__":
     print(env.get_REST_API_KEYS())

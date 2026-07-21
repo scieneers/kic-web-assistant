@@ -77,6 +77,7 @@ def generate_summary(state: GraphState) -> dict:
         model=model,
         language=language,
         scope_name=_scope_name(course_id, module_id),
+        is_course_level=not module_id,
         focus_hint=focus_hint,
     )
 

@@ -30,11 +30,18 @@ if env.DEBUG_MODE:
         format="%(asctime)s - %(levelname)-8s - %(name)s - %(message)s",
     )
     logging.getLogger("src.llm").setLevel(logging.DEBUG)
+    # The langfuse SDK only logs actual send failures at WARNING/ERROR by
+    # default; bump to DEBUG under DEBUG_MODE so its own batch-upload /
+    # retry traces (task manager, ingestion consumer) become visible too —
+    # that's the SDK's own view of whether events are being sent at all.
+    logging.getLogger("langfuse").setLevel(logging.DEBUG)
 else:
     logging.basicConfig(
         level=logging.WARNING,
         format="%(asctime)s - %(levelname)-8s - %(name)s - %(message)s",
     )
+
+logger = logging.getLogger(__name__)
 
 # Lazy singletons - initialized on first request to avoid blocking app startup
 _vector_db: VectorDBAzureSearch | None = None
@@ -83,6 +90,21 @@ async def api_key_auth(api_key: Annotated[str, Depends(api_key_header)]):
 
     if api_key not in ALLOWED_API_KEYS:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
+
+
+@app.on_event("startup")
+def check_langfuse_connectivity() -> None:
+    """One-off diagnostic at boot: verify the resolved Langfuse credentials
+    can actually reach LANGFUSE_HOST and authenticate. This is the one gap
+    the SDK's own logging doesn't cover — an invalid/rotated key fails inside
+    the background upload thread and is dropped without ever logging
+    anything (see langfuse's ingestion_consumer error handling), so traces
+    can silently never arrive even though the app runs fine otherwise."""
+    try:
+        ok = Langfuse().auth_check()
+        logger.warning("Langfuse auth_check succeeded (host=%s): %s", env.LANGFUSE_HOST, ok)
+    except Exception:
+        logger.error("Langfuse auth_check FAILED (host=%s) — traces will not reach Langfuse", env.LANGFUSE_HOST, exc_info=True)
 
 
 # APIs
@@ -245,6 +267,7 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
 
     trace_id = langfuse_context.get_current_trace_id()
     if not trace_id:
+        logger.warning("No Langfuse trace_id available for this request — tracing is not active.")
         trace_id = "TRACING_UNAVAILABLE"
     
     # llm_response is SerializableChatMessage, extract content string
@@ -315,6 +338,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                 }
             )
         except Exception as e:
+            logger.exception("chat_stream worker failed (trace_id=%s, thread_id=%s)", trace_id, thread_id)
             q.put({"type": "error", "message": str(e), "response_id": trace_id, "thread_id": thread_id})
         finally:
             q.put(DONE)
@@ -367,9 +391,13 @@ class FeedbackRequest(BaseModel):
 @app.post("/api/feedback", dependencies=[Depends(api_key_auth)])
 def track_feedback(feedback_request: FeedbackRequest) -> None:
     """Update feedback in langfuse logs."""
-    Langfuse().score(
-        trace_id=feedback_request.response_id,
-        name="user-explicit-feedback",
-        value=feedback_request.score,
-        comment=feedback_request.feedback,
-    )
+    try:
+        Langfuse().score(
+            trace_id=feedback_request.response_id,
+            name="user-explicit-feedback",
+            value=feedback_request.score,
+            comment=feedback_request.feedback,
+        )
+    except Exception:
+        logger.exception("Failed to send feedback score to Langfuse (response_id=%s)", feedback_request.response_id)
+        raise

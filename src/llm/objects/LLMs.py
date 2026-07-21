@@ -149,6 +149,11 @@ class LLM:
         returning the final assembled message.
         """
         langfuse_handler = langfuse_context.get_current_llama_index_handler()
+        if langfuse_handler is None:
+            logger.warning(
+                "No Langfuse callback handler for this call — LLM generation span will not be traced "
+                "(no active trace context, e.g. missing/invalid credentials or called outside @observe)."
+            )
         Settings.callback_manager = CallbackManager([langfuse_handler] if langfuse_handler else [])
 
         token_callback = token_callback_var.get()

@@ -11,7 +11,9 @@ First step of the v2 workflow ("Lernmodus v2"):
 Multi-module scope: module_id may be a list when the learner selects several
 modules of one course. ALL selected modules are treated equally — objectives,
 key concepts, the welcome scope title and the quiz pool are built from the
-combined content of every selected module (not just one).
+combined content of every selected module (not just one). The extraction
+input's character budget is split evenly per module (_cap_content_per_module)
+so a content-heavy module can't crowd smaller ones out of the LLM's input.
 """
 
 import logging
@@ -39,6 +41,9 @@ _llm = LLM()
 
 # Cap the extraction input — whole modules can be large, and the extraction
 # only needs enough material to name objectives/concepts, not every chunk.
+# Split evenly across the selected modules (see _cap_content_per_module) so a
+# single content-heavy module can't consume the whole budget and starve the
+# others out of the extraction entirely.
 MAX_EXTRACTION_CHARS = 60_000
 
 NO_SCOPE_MESSAGE = (
@@ -64,6 +69,29 @@ def _compose_welcome(scope_title: str | None, objectives: list[str]) -> str:
         "_(Du kannst den Lernmodus jederzeit beenden, z. B. mit „stopp“.)_",
     ]
     return "\n".join(lines)
+
+
+def _cap_content_per_module(content_nodes: list, max_chars: int) -> str:
+    """Concatenate node text, capping each module's share of the budget evenly.
+
+    content_nodes arrive grouped module-by-module (retrieve_all sorts by
+    source_doc_key, see retriever._scope_sort_key), not interleaved. A single
+    global [:max_chars] cut would then let one content-heavy module consume
+    the whole budget and cut later modules out of the extraction input
+    entirely. Splitting the budget evenly per module_id keeps every selected
+    module represented regardless of size or sort order.
+    """
+    modules: dict[object, list[str]] = {}
+    order: list[object] = []
+    for node in content_nodes:
+        key = (node.metadata or {}).get("module_id")
+        if key not in modules:
+            modules[key] = []
+            order.append(key)
+        modules[key].append(node.text)
+
+    per_module_budget = max_chars // len(order) if order else max_chars
+    return "\n\n".join("\n\n".join(modules[key])[:per_module_budget] for key in order)
 
 
 def _parse_extraction(content: str | None) -> tuple[list[str], list[str]]:
@@ -133,7 +161,7 @@ def socratic_v2_opening(state: GraphState) -> dict:
     else:
         scope_title = ", ".join(module_titles[:3]) + " u. a."
 
-    content = "\n\n".join(n.text for n in content_nodes)[:MAX_EXTRACTION_CHARS]
+    content = _cap_content_per_module(content_nodes, MAX_EXTRACTION_CHARS)
 
     # MINI: long-context auxiliary extraction — deliberately NOT the runtime
     # model, because a large prompt through the GWDG path would routinely trip

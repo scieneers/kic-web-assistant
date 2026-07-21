@@ -220,6 +220,24 @@ class TestSocraticV2Opening:
         _, retriever = self._run(state, [_make_chunk("Inhalt")])
         retriever.retrieve_all.assert_called_once_with(course_id=42, module_id=[3, 5, 9])
 
+    def test_content_budget_split_evenly_across_modules(self):
+        # Regression test: a content-heavy module must not crowd a smaller
+        # module out of the extraction input (per-module budget split).
+        huge = _make_chunk("A" * 100_000, {"module_id": 1, "fullname": "Großes Modul"})
+        small = _make_chunk("Prompting Grundlagen", {"module_id": 2, "fullname": "Prompting"})
+        state = _base_state()
+        state["runtime_config"]["module_id"] = [1, 2]
+        retriever = MagicMock()
+        retriever.retrieve_all.return_value = [huge, small]
+        retriever.retrieve_items.return_value = []
+        with patch("src.llm.tools.socratic_v2_opening.get_retriever", return_value=retriever), patch(
+            "src.llm.tools.socratic_v2_opening._llm.chat",
+            return_value=_mock_llm_response("LERNZIEL: Prompting verstehen"),
+        ) as mock_chat:
+            socratic_v2_opening(state)
+        extraction_input = mock_chat.call_args.kwargs["query"]
+        assert "Prompting Grundlagen" in extraction_input
+
 
 # ---------------------------------------------------------------------------
 # Core node
