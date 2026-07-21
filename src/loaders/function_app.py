@@ -230,8 +230,9 @@ async def stop_ingest(req: func.HttpRequest, client: df.DurableOrchestrationClie
 # =============================================================================
 
 @app.function_name(name="timer_trigger")
-# @app.timer_trigger(schedule="0 0 5 * * 4", arg_name="mytimer", run_on_startup=False, use_monitor=False)
-@app.timer_trigger(schedule="0 0 5 * * *", arg_name="mytimer", run_on_startup=False, use_monitor=False)
+# läuft um 3 Uhr deutscher Zeit
+# @app.timer_trigger(schedule="0 0 1 * * 4", arg_name="mytimer", run_on_startup=False, use_monitor=False)
+@app.timer_trigger(schedule="0 0 1 * * *", arg_name="mytimer", run_on_startup=False, use_monitor=False)
 @app.durable_client_input(client_name="client")
 async def timer_trigger(mytimer: func.TimerRequest, client: df.DurableOrchestrationClient) -> None:
     # """Weekly timer that starts the durable orchestration."""
