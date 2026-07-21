@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import httpx
 import streamlit as st
@@ -73,6 +74,19 @@ def render_thinking_indicator(phrases: list[str], switch_seconds: float = 1.0) -
         f"</style>"
         f"<span class=\"thinking-wrap\">{items_html}</span>"
     )
+
+
+# Streamlit's markdown renderer treats ":word" (colon directly followed by a
+# letter) as its colored-text directive (`:color[text]`). Only a handful of
+# color names are recognized (red, blue, green, violet, orange, gray, grey,
+# rainbow) — any other word is parsed as an unknown directive and silently
+# dropped, colon included. This bites German colon-gendering (e.g. "Ärzt:innen"
+# renders as "Ärzt"). Escaping the colon disables directive parsing for it.
+GENDER_COLON_PATTERN = re.compile(r"(?<=\w):(?=[a-zA-ZäöüÄÖÜß])")
+
+
+def escape_markdown_directives(text: str) -> str:
+    return GENDER_COLON_PATTERN.sub(r"\\:", text)
 
 
 @st.cache_resource
@@ -523,7 +537,7 @@ if "messages" not in st.session_state:
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"], unsafe_allow_html=True)
+        st.markdown(escape_markdown_directives(message["content"]), unsafe_allow_html=True)
 
 
 # React to user input
@@ -539,7 +553,7 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
     st.session_state.last_activity = time.time()
 
     with st.chat_message("user"):
-        st.markdown(query)
+        st.markdown(escape_markdown_directives(query))
 
     # Store user message in UI history (for display only)
     st.session_state.messages.append({"role": MessageRole.USER, "content": query})
@@ -593,12 +607,12 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
                         received_first_token = True
                         placeholder.empty()
                     streamed_text += event.get("token", "")
-                    placeholder.markdown(streamed_text, unsafe_allow_html=True)
+                    placeholder.markdown(escape_markdown_directives(streamed_text), unsafe_allow_html=True)
                 elif event.get("type") == "final":
                     final_message = event.get("message", streamed_text)
                     if not received_first_token:
                         placeholder.empty()
-                    placeholder.markdown(final_message, unsafe_allow_html=True)
+                    placeholder.markdown(escape_markdown_directives(final_message), unsafe_allow_html=True)
                     st.session_state.thread_id = event.get("thread_id")
                     st.session_state["trace_id"] = event.get("response_id")
                     streamed_text = final_message
