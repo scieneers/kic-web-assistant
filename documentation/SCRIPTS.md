@@ -5,6 +5,34 @@ Voraussetzung: `.env` mit den nötigen Credentials ist vorhanden.
 
 ---
 
+## Langfuse starten (lokal)
+
+Langfuse läuft lokal per Docker Compose (`docker-compose.yaml` im Root), inkl. Postgres als Datenbank dahinter.
+
+```bash
+docker compose up -d langfuse
+```
+
+Startet automatisch auch `postgres` (via `depends_on`). UI dann erreichbar unter `http://localhost:3000`.
+
+Beim allerersten Start: Account anlegen, Projekt öffnen (bzw. das per `LANGFUSE_DEFAULT_PROJECT_ID: kicwa` vorkonfigurierte Projekt nutzen) und unter Project Settings → API Keys ein Public/Secret-Key-Paar erzeugen. Danach in `.env` eintragen:
+
+```bash
+LANGFUSE_HOST="http://localhost:3000"
+LANGFUSE_PUBLIC_KEY="pk-lf-..."
+LANGFUSE_SECRET_KEY="sk-lf-..."
+```
+
+Stoppen:
+
+```bash
+docker compose down
+```
+
+Daten liegen unter `./db/postgres` (Volume-Mount) und bleiben zwischen Neustarts erhalten.
+
+---
+
 ## Backend starten
 
 ```bash

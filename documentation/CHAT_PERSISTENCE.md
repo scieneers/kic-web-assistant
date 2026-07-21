@@ -2,7 +2,7 @@
 
 ## Warum entsteht bei einem Reload überhaupt eine neue Session?
 
-Das Backend hält Konversationen in einem **In-Memory-Store** (`BoundedMemorySaver`). Es weiß dabei nicht, welche Browser-Session zu welchem Eintrag gehört — es kennt nur die `thread_id`, die das Frontend bei jeder Anfrage mitschickt.
+Das Backend hält Konversationen in einem **Redis-Sitzungsspeicher** (LangGraph-Checkpointer, geteilt über alle Backend-Worker; lokal ohne `REDIS_URL`: in-memory `BoundedMemorySaver`). Es weiß dabei nicht, welche Browser-Session zu welchem Eintrag gehört — es kennt nur die `thread_id`, die das Frontend bei jeder Anfrage mitschickt.
 
 Lädt die Seite neu, verliert das Frontend diese `thread_id`:
 - **Streamlit**: `st.session_state` wird beim Browser-Refresh zurückgesetzt.
@@ -17,10 +17,12 @@ Das Backend hat die Konversation noch im Speicher — es gibt nur niemanden mehr
 ## Komponenten im Überblick
 
 ```
-Browser / Frontend              Backend API               LangGraph / BoundedMemorySaver
+Browser / Frontend              Backend API               LangGraph-Checkpointer
 ─────────────────────           ─────────────────         ──────────────────────────────
 localStorage / session_state ─► POST /api/chat/stream ──► KICampusAssistant
                                 GET /api/chat/history      _get_or_create_state()
+                                                           Redis (TTL 24 h, alle Worker)
+                                                           lokal ohne REDIS_URL:
                                                            BoundedMemorySaver (max 500)
 ```
 
@@ -34,7 +36,7 @@ Frontend                         Backend
 POST /api/chat/stream
   thread_id: null
                             → thread_id = uuid4()   (neu generiert)
-                            → BoundedMemorySaver: kein Eintrag für diese ID
+                            → Checkpointer (Redis): kein Eintrag für diese ID
                             → initial_state: chat_history = []
                             → Graph ausführen
                             → State unter thread_id speichern
@@ -52,7 +54,7 @@ Frontend                         Backend
 ───────                          ───────
 POST /api/chat/stream
   thread_id: "abc-123"
-                            → BoundedMemorySaver.get_state("abc-123")
+                            → Checkpointer (Redis): get_state("abc-123") — egal, welcher Worker antwortet
                             → chat_history = [vorige Nachrichten, max. CHAT_HISTORY_LIMIT (Default 6);
                                               in aktiven Socratic-v2-Sessions: CHAT_HISTORY_LIMIT_SOCRATIC_V2 (Default 40)]
                             → Graph mit History ausführen
@@ -68,7 +70,7 @@ POST /api/chat/stream
 Frontend                         Backend
 ───────                          ───────
 GET /api/chat/history/abc-123
-                            → BoundedMemorySaver.get_state("abc-123")
+                            → Checkpointer (Redis): get_state("abc-123")
                             → gibt chat_history zurück
                             ← { thread_id: "abc-123", messages: [...] }
 
@@ -79,7 +81,7 @@ Frontend zeigt History an, setzt thread_id
 
 ## Flow: TTL-Ablauf (30 Minuten Inaktivität)
 
-Die TTL-Logik liegt vollständig im **Frontend** — das Backend hat keine Meinung darüber, wann eine Session "abläuft".
+Die für die Nutzenden sichtbare TTL-Logik liegt im **Frontend** — es entscheidet, wann eine Session als "abgelaufen" gilt und verwirft die `thread_id`. Zusätzlich verfallen Sessions serverseitig per Redis-TTL nach 24 h ohne Zugriff (`CHAT_TTL_MINUTES`, bei jedem Zugriff erneuert) — das ist Speicherhygiene, kein UX-Mechanismus; bei den üblichen 30-Minuten-Client-TTLs greift sie praktisch nie zuerst.
 
 ```
 Frontend                         Backend
@@ -99,15 +101,17 @@ POST /api/chat/stream
 ## Flow: Server-Neustart
 
 ```
-Backend startet neu:
-  BoundedMemorySaver = {}   ← leer
+Site/Container-Gruppe wird neu gestartet (Deployment, az webapp restart):
+  Redis-Sidecar startet leer   ← Sessions weg
 
 Frontend schickt thread_id: "abc-123"
   → kein Eintrag gefunden
   → neue leere Session für "abc-123"
 ```
 
-Alle Konversationen gehen beim Neustart verloren — das ist bewusst so, da keine Datenbankpersistenz gewünscht ist.
+Redis läuft seit der IaC-Umstellung (2026-07-20) als **eigener Sidecar-Container** neben der API, nicht mehr im API-Image selbst — das entkoppelt Redis-Version/-Konfiguration vom API-Image. Ob ein reguläres API-Deploy (`task deploy-api`, ruft `az webapp restart` auf) nur den API-Container oder die gesamte Site inkl. Sidecar neu startet, hängt von Azure App Service ab und ist noch nicht verifiziert — im Zweifel gilt weiterhin: jeder Site-Neustart leert Redis, das ist akzeptiert, da keine dauerhafte Speicherung gewünscht ist. Ein Recycling einzelner Gunicorn-Worker im laufenden Betrieb (`max_requests`) betraf die Sessions schon vorher nicht, da Redis als eigener Prozess unabhängig davon lief.
+
+**Wichtig:** Der Sidecar löst nicht das Scale-out-Problem — bei mehreren App-Service-Instanzen bekommt jede Instanz ihre eigene Kopie des Sidecars (kein geteilter Redis zwischen Instanzen). Für Betrieb mit >1 Instanz bleibt Azure Managed Redis (nur `REDIS_URL`-App-Setting) die Lösung.
 
 ---
 
@@ -187,7 +191,7 @@ Lädt den gespeicherten Gesprächsverlauf, z.B. nach Page-Reload.
 }
 ```
 
-Gibt `messages: []` zurück wenn die Session unbekannt oder der Server neu gestartet wurde — kein Fehler, einfach leerer Chat.
+Gibt `messages: []` zurück wenn die Session unbekannt ist, serverseitig abgelaufen (Redis-TTL) oder der Container neu gestartet wurde — kein Fehler, einfach leerer Chat.
 
 ---
 
@@ -225,15 +229,24 @@ Simuliert das Moodle-Verhalten für lokale Tests. Analog zu `localStorage` wird 
 
 ---
 
-## Speicherbegrenzung
+## Speicher & Verdrängung
 
-`BoundedMemorySaver` ersetzt den Standard-`MemorySaver` von LangGraph.
+Die Auswahl trifft `build_checkpointer()` in `src/llm/assistant.py` anhand von `REDIS_URL`:
 
-- Hält intern ein `OrderedDict` mit der Erstellungsreihenfolge aller `thread_ids`
-- Sobald `max_threads` überschritten wird → ältester Thread wird aus dem internen LangGraph-Speicher entfernt
-- FIFO-Verdrängung (kein LRU — Overhead pro Request nicht gerechtfertigt), lock-geschützt
-- **Konfigurierbar per Env-Vars** (`src/env.py`): `MAX_CHAT_THREADS` (Default 500), `CHAT_HISTORY_LIMIT` (Default 6), `CHAT_HISTORY_LIMIT_SOCRATIC_V2` (Default 40 — erweitertes Historien-Fenster für aktive Lernmodus-v2-Sessions)
-- Eingebaut in `src/llm/assistant.py`, getestet in `src/tests/llms/test_bounded_memory_saver.py`
+**Deployment (`REDIS_URL` gesetzt — Default im API-Image):** `RedisSaver` aus `langgraph-checkpoint-redis`.
+
+- Ein gemeinsamer Sessionstore für **alle Gunicorn-Worker** — welcher Worker eine Anfrage bedient, spielt keine Rolle.
+- Redis läuft als **Sidecar-Container neben der API** (IaC, nicht Teil dieses Repos), erreichbar über `REDIS_URL=redis://localhost:6379` (Azure-App-Service-Sidecars teilen den Network-Namespace mit dem Hauptcontainer). `src/api/entrypoint.sh` wartet beim Start kurz, falls der Sidecar noch nicht bereit ist. Wechsel auf **Azure Managed Redis** = nur `REDIS_URL` überschreiben (`rediss://:<key>@<name>.<region>.redis.azure.net:10000`), kein Code-Umbau.
+- Verdrängung über **TTL** statt FIFO: `CHAT_TTL_MINUTES` (Default 1440 = 24 h), bei jedem Zugriff erneuert. `maxmemory`/Eviction-Policy des Sidecars sind IaC-Konfiguration, nicht Teil dieses Repos.
+- Kein Snapshotting/AOF gewünscht — Sessions sind bewusst flüchtig (Konfiguration ebenfalls im Sidecar/IaC).
+
+**Lokal / Tests (`REDIS_URL` nicht gesetzt):** `BoundedMemorySaver` (ersetzt den Standard-`MemorySaver` von LangGraph).
+
+- Hält intern ein `OrderedDict` mit der Erstellungsreihenfolge aller `thread_ids`; sobald `MAX_CHAT_THREADS` (Default 500) überschritten wird, fliegt der älteste Thread raus (FIFO, lock-geschützt).
+
+**Unabhängig vom Backend** gelten `CHAT_HISTORY_LIMIT` (Default 6) und `CHAT_HISTORY_LIMIT_SOCRATIC_V2` (Default 40 — erweitertes Historien-Fenster für aktive Lernmodus-v2-Sessions); alle Settings in `src/env.py`.
+
+Getestet in `src/tests/llms/test_checkpointer_factory.py` (Auswahl-Logik) und `src/tests/llms/test_bounded_memory_saver.py` (FIFO-Verdrängung).
 
 ---
 
@@ -259,3 +272,6 @@ Simuliert das Moodle-Verhalten für lokale Tests. Analog zu `localStorage` wird 
 | Moodle-Simulation Sidebar | `frontend.py` | Session-ID anzeigen + Laden/Reset für lokale Tests |
 | `st.rerun()` nach Streaming | `frontend.py` | Sidebar zeigt thread_id sofort nach erster Antwort |
 | Tests für `BoundedMemorySaver` | `src/tests/llms/test_bounded_memory_saver.py` | 5 Unit- + 4 Integrationstests |
+| `build_checkpointer()`: Redis-Checkpointer mit TTL, in-memory Fallback | `assistant.py`, `env.py` | Ein gemeinsamer Sessionstore für alle Gunicorn-Worker |
+| Tests für die Checkpointer-Auswahl | `src/tests/llms/test_checkpointer_factory.py` | 3 Unit-Tests inkl. `rediss://`-Pfad |
+| Redis als Sidecar-Container (IaC, außerhalb dieses Repos); `entrypoint.sh` wartet auf Erreichbarkeit statt Redis selbst zu starten | `src/api/Dockerfile`, `src/api/entrypoint.sh` | Redis-Lifecycle von API-Image entkoppelt; Managed-Redis-Wechsel weiterhin nur per `REDIS_URL` |

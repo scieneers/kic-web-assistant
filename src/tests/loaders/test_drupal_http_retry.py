@@ -20,6 +20,7 @@ from src.loaders.drupal import Drupal
 def drupal(monkeypatch) -> Drupal:
     monkeypatch.setattr(Drupal, "get_oauth_token", lambda self, base_url: None)
     monkeypatch.setattr(drupal_module.env, "DRUPAL_AUTH_REQUIRED", False, raising=False)
+    monkeypatch.setattr(drupal_module, "HTTP_REQUEST_DELAY_SECONDS", 0)
     instance = Drupal()
     return instance
 
