@@ -160,6 +160,7 @@ tasks:
       ACR: 'kicacr{{.ENV | default "dev"}}.azurecr.io'
       RESOURCE_GROUP: 'kic-aichat-{{.ENV | default "dev"}}'
       WEB_APP: 'kic-restapi-{{.ENV | default "dev"}}'
+      SITECONTAINERS_API_VERSION: "2023-12-01"
       VERSION:
         sh: |
           if [ -n "{{.CLI_ARGS}}" ]; then
@@ -169,7 +170,26 @@ tasks:
           fi
     cmds:
       - echo "Deploying api {{.ACR}}/rest-api:{{.VERSION}} to {{.WEB_APP}} ({{.RESOURCE_GROUP}})"
-      - az webapp config container set --name {{.WEB_APP}} --resource-group {{.RESOURCE_GROUP}} --container-image-name {{.ACR}}/rest-api:{{.VERSION}}
+      - |
+        # The site runs in sitecontainers mode (converted by the IaC repo's
+        # convert-to-sitecontainers.sh so the Redis sidecar gets scheduled).
+        # `az webapp config container set` would reset linuxFxVersion to
+        # "DOCKER|<image>", silently switching the whole site back to
+        # classic single-container mode and dropping the sidecar. Instead,
+        # PATCH only the image on the existing main sitecontainer entry via
+        # the same ARM API scripts/deploy-sidecar.sh (IaC repo) uses for
+        # Redis, preserving isMain/authType/userManagedIdentityClientId.
+        SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+        BASE_URI="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/{{.RESOURCE_GROUP}}/providers/Microsoft.Web/sites/{{.WEB_APP}}/sitecontainers"
+        LIST=$(az rest --method GET --uri "${BASE_URI}?api-version={{.SITECONTAINERS_API_VERSION}}")
+        MAIN_NAME=$(echo "$LIST" | jq -r '.value[] | select(.properties.isMain==true) | .name')
+        if [ -z "$MAIN_NAME" ]; then
+          echo "No sitecontainer with isMain=true found on {{.WEB_APP}} - is it still in sitecontainers mode?" >&2
+          exit 1
+        fi
+        CURRENT=$(az rest --method GET --uri "${BASE_URI}/${MAIN_NAME}?api-version={{.SITECONTAINERS_API_VERSION}}")
+        NEW_BODY=$(echo "$CURRENT" | jq --arg img "{{.ACR}}/rest-api:{{.VERSION}}" '{properties: (.properties + {image: $img})}')
+        az rest --method PUT --uri "${BASE_URI}/${MAIN_NAME}?api-version={{.SITECONTAINERS_API_VERSION}}" --body "$NEW_BODY"
       - az webapp restart --name {{.WEB_APP}} --resource-group {{.RESOURCE_GROUP}}
 
   deploy-frontend:
