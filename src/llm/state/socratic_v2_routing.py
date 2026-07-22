@@ -42,9 +42,12 @@ V2_MOVES = {
     "EXIT",
 }
 # Moves that put a question to the learner without giving anything back.
+# ENCOURAGE counts too — it still ends in a question, just a softer one — so
+# repeated frustration-signal answers escalate to HINT instead of looping
+# ENCOURAGE indefinitely.
 # Capped via v2_question_streak (see socratic_v2_core): after 3 in a row the
 # next move is forced to HINT — "nie mehr als ~3 Fragen ohne Gegenwert".
-V2_QUESTION_MOVES = {"FRAGE", "ERKLAER_ZURUECK", "FEHLER_FINDEN"}
+V2_QUESTION_MOVES = {"FRAGE", "ERKLAER_ZURUECK", "FEHLER_FINDEN", "ENCOURAGE"}
 
 DEFAULT_MOVE = "FRAGE"
 

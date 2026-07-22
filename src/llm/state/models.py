@@ -81,6 +81,10 @@ class GraphState(TypedDict, total=False):
 
     # output
     answer: Optional[str]
+    # Set only when `answer` is a canned fallback message — identifies which
+    # one, for Langfuse tagging and cross-turn no-answer detection (see
+    # SerializableChatMessage.fallback_type).
+    fallback_type: Optional[str]
     citations_markdown: Optional[str]
 
 

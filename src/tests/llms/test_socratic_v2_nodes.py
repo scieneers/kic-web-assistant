@@ -273,6 +273,18 @@ class TestSocraticV2Core:
         result, _, _ = self._run(_base_state(v2_question_streak=2), _policy("ZWISCHENFAZIT"))
         assert result["v2_question_streak"] == 0
 
+    def test_encourage_counts_toward_streak(self):
+        result, _, _ = self._run(_base_state(v2_question_streak=0), _policy("ENCOURAGE"))
+        assert result["v2_question_streak"] == 1
+
+    def test_encourage_streak_guard_forces_hint(self):
+        # repeated ENCOURAGE without progress must escalate too, not loop forever
+        result, _, mock_generate = self._run(_base_state(v2_question_streak=3), _policy("ENCOURAGE"))
+        generated_query = mock_generate.call_args.kwargs["query"]
+        assert "ZUG: HINT" in generated_query
+        assert result["v2_last_move"] == "HINT"
+        assert result["v2_question_streak"] == 0
+
     def test_question_streak_guard_forces_hint(self):
         result, _, mock_generate = self._run(_base_state(v2_question_streak=3), _policy("FRAGE"))
         generated_query = mock_generate.call_args.kwargs["query"]

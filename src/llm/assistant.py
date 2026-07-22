@@ -376,7 +376,10 @@ class KICampusAssistant:
             reranker_type = self.system_config.get("reranker_type")
             # Fallback-Texte kommen nie mit Citations, daher gegen das rohe
             # "answer"-Feld klassifizieren (nicht gegen citations_markdown).
-            fallback_type = get_fallback_type(result.get("answer"))
+            # result["fallback_type"] is set by the answer/summarize nodes
+            # themselves and survives fallback-text translation; text-based
+            # classification is only a fallback for scenarios that don't set it.
+            fallback_type = result.get("fallback_type") or get_fallback_type(result.get("answer"))
 
             # Anfrage-Scope: fragt das Frontend global, kursweit oder auf ein
             # konkretes Modul eingeschränkt? Als Tag direkt filter-/zählbar.
@@ -484,7 +487,9 @@ class KICampusAssistant:
 
         # Generiere Assistant-Response
         assistant_content = result.get("citations_markdown") or result.get("answer") or ""
-        assistant_message = SerializableChatMessage(role="assistant", content=assistant_content)
+        assistant_message = SerializableChatMessage(
+            role="assistant", content=assistant_content, fallback_type=result.get("fallback_type")
+        )
 
         self._update_langfuse_trace(
             surface="drupal",
@@ -558,7 +563,9 @@ class KICampusAssistant:
 
         # Generiere Assistant-Response
         assistant_content = result.get("citations_markdown") or result.get("answer") or ""
-        assistant_message = SerializableChatMessage(role="assistant", content=assistant_content)
+        assistant_message = SerializableChatMessage(
+            role="assistant", content=assistant_content, fallback_type=result.get("fallback_type")
+        )
 
         self._update_langfuse_trace(
             surface="moodle",

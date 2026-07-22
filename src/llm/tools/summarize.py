@@ -82,4 +82,4 @@ def generate_summary(state: GraphState) -> dict:
     )
 
     logger.debug("generate_summary: done, response_len=%d chars", len(response.content))
-    return {"answer": response.content}
+    return {"answer": response.content, "fallback_type": response.fallback_type}

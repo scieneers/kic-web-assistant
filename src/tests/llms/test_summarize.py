@@ -285,7 +285,7 @@ class TestGenerateSummaryNode:
         with patch.object(summarize_module, "get_summary_answerer", return_value=mock_answerer):
             result = summarize_module.generate_summary(self._state([node], module_id=42))
 
-        assert result == {"answer": "Zusammenfassung"}
+        assert result == {"answer": "Zusammenfassung", "fallback_type": None}
         call_kwargs = mock_answerer.summarize.call_args.kwargs
         assert call_kwargs["scope_name"] == "diesem Modul"
         assert call_kwargs["is_course_level"] is False

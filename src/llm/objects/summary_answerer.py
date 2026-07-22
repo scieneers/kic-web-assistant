@@ -8,7 +8,13 @@ from llama_index.core.schema import TextNode
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.objects.LLMs import LLM, Models
 from src.llm.objects.citation_parser import CITATION_TEXT, _get_display_title, citation_suffix
-from src.llm.objects.question_answerer import NO_CONTENT_IN_MODULE, NO_CONTENT_UNSUPPORTED_TYPE, format_sources
+from src.llm.objects.question_answerer import (
+    NO_CONTENT_IN_MODULE,
+    NO_CONTENT_UNSUPPORTED_TYPE,
+    format_sources,
+    get_fallback_type,
+    translate_fallback_text,
+)
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.streaming import CitationStreamResolver, SmartStreamCallback, StreamPhaseContext, citation_resolver_var, token_callback_var
 
@@ -21,13 +27,17 @@ SUMMARY_SYSTEM_PROMPT = load_prompt("summary_prompt")
 # would make the response grow with the number of modules in the course,
 # producing an effectively unbounded wall of text for long courses.
 COURSE_LEVEL_SCOPE_GUIDANCE = """This is a COURSE-level summary — the <SOURCES> span an entire course with multiple modules.
-Give a compact overview: 2-4 sentences per module naming what it covers, not a full readout of every page, quiz, or video inside it. Skip minor sub-structure (individual quiz questions, single glossary entries) — just name that it exists.
-Cite one representative source per module, not every distinct source chunk.
-Keep total length proportionate to the number of modules, not to the number of source chunks: a 10-module course still gets roughly one paragraph or a few bullet points per module, not a page per module."""
+Default to a compact overview: 1-2 sentences per module naming what it covers, not a full readout of every page, quiz, or video inside it. Skip minor sub-structure (individual quiz questions, single glossary entries) — just name that it exists.
+When the course has many modules (roughly 8 or more), do not give every module its own line — group them into a few thematic stages of the course and describe those, naming an individual module only where that adds real information. Total length should grow sub-linearly with module count, not one line per module indefinitely.
+Only expand toward one line per module, or 2-4 sentences per module, when the learner explicitly asked for a more detailed/thorough summary (see <TASK>).
+Cite one representative source per module (or per thematic group, when grouping), not every distinct source chunk.
+Do not close with a paragraph that recaps or restates the introduction — end once the last module/component is covered."""
 
 MODULE_LEVEL_SCOPE_GUIDANCE = """This is a MODULE- or page-level summary — the <SOURCES> are a single module or document.
-Keep it concise: name every distinct part of the content, but in brief — a sentence or two per part, not a full paraphrase of it. Cite the source(s) backing each part; several chunks belonging to the same part don't each need their own separate mention.
-Length should track the module's actual size, not maximize detail: a one-page module gets a short paragraph, a multi-document module gets a few short, structured sections — never a long, exhaustive read-through."""
+Default to one brief sentence per distinct part of the content, not a full paraphrase of it. Cite the source(s) backing each part; several chunks belonging to the same part don't each need their own separate mention.
+Only expand to a sentence or two per part when the learner explicitly asked for a more detailed/thorough summary (see <TASK>).
+Length should track the module's actual size, not maximize detail: a one-page module gets a short paragraph, a multi-document module gets a few short, structured sections — never a long, exhaustive read-through.
+Do not close with a paragraph that recaps or restates the introduction — end once the last part is covered."""
 
 USER_TASK_WITH_SOURCES_PROMPT = """<TASK>:
 Fasse den folgenden Lerninhalt vollständig zusammen.{focus_line}
@@ -76,9 +86,11 @@ class SummaryAnswerer:
                 to weight the summary towards, without dropping other major parts
         """
         if not sources:
+            fallback_text = NO_CONTENT_TO_SUMMARIZE.format(scope_name=scope_name)
             return SerializableChatMessage(
                 role=MessageRole.ASSISTANT,
-                content=NO_CONTENT_TO_SUMMARIZE.format(scope_name=scope_name),
+                content=translate_fallback_text(fallback_text, language),
+                fallback_type="no_content_to_summarize",
             )
 
         # EmptyModule-Marker: gesamter Scope besteht nur aus Modulen ohne Inhalt.
@@ -90,15 +102,19 @@ class SummaryAnswerer:
             module_name = first.get("fullname", scope_name)
             unsupported_label = first.get("unsupported_label")
             if unsupported_label:
+                fallback_text = NO_CONTENT_UNSUPPORTED_TYPE.format(
+                    module_name=module_name, label=unsupported_label, url=first.get("url", "")
+                )
                 return SerializableChatMessage(
                     role=MessageRole.ASSISTANT,
-                    content=NO_CONTENT_UNSUPPORTED_TYPE.format(
-                        module_name=module_name, label=unsupported_label, url=first.get("url", "")
-                    ),
+                    content=translate_fallback_text(fallback_text, language),
+                    fallback_type=get_fallback_type(fallback_text),
                 )
+            fallback_text = NO_CONTENT_IN_MODULE.format(module_name=module_name)
             return SerializableChatMessage(
                 role=MessageRole.ASSISTANT,
-                content=NO_CONTENT_IN_MODULE.format(module_name=module_name),
+                content=translate_fallback_text(fallback_text, language),
+                fallback_type=get_fallback_type(fallback_text),
             )
 
         scope_guidance = COURSE_LEVEL_SCOPE_GUIDANCE if is_course_level else MODULE_LEVEL_SCOPE_GUIDANCE

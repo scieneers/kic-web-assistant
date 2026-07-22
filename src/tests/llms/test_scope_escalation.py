@@ -109,9 +109,10 @@ class TestOfferFallback:
             )
         assert result.content == NO_ANSWER_IN_MODULE_OFFER_COURSE
 
-    def test_declined_offer_then_second_no_answer_uses_course_link(self, answerer):
-        """After the offer was already given, the next no-answer escalates to the
-        second-time Moodle fallback instead of offering in a loop."""
+    def test_escalated_retry_still_no_answer_uses_course_link(self, answerer):
+        """After "Ja" was accepted (scope_escalated=True → offer_course_escalation
+        is False, see answer.py), a still-failing course-wide retry escalates to
+        the second-time Moodle fallback instead of offering in a loop."""
         from src.api.models.serializable_chat_message import SerializableChatMessage
 
         history = [
@@ -119,7 +120,34 @@ class TestOfferFallback:
             SerializableChatMessage(role="assistant", content=NO_ANSWER_IN_MODULE_OFFER_COURSE),
         ]
         result = answerer.answer_question(
-            query="Andere Frage ohne Antwort",
+            query="Was ist eine Dienstvereinbarung?",
+            chat_history=history,
+            sources=[],
+            model=Models.AZURE_FALLBACK,
+            language="German",
+            is_moodle=True,
+            course_id=344,
+            offer_course_escalation=False,
+        )
+        assert "344" in result.content
+        assert "moodle.ki-campus.org" in result.content
+
+    def test_declined_offer_then_new_question_gets_fresh_offer(self, answerer):
+        """Regression test for 5.3.4: declining the offer with a new, unrelated
+        question must not be misread as a second failure on the same question
+        just because the previous assistant message was itself a no-answer
+        fallback text. contextualize.py keeps the module scope for the new
+        question, so answer.py recomputes offer_course_escalation=True — that
+        must win and produce a fresh offer, not the course-link give-up
+        message."""
+        from src.api.models.serializable_chat_message import SerializableChatMessage
+
+        history = [
+            SerializableChatMessage(role="user", content="Was ist Reinforcement Learning?"),
+            SerializableChatMessage(role="assistant", content=NO_ANSWER_IN_MODULE_OFFER_COURSE),
+        ]
+        result = answerer.answer_question(
+            query="Was ist Overfitting?",
             chat_history=history,
             sources=[],
             model=Models.AZURE_FALLBACK,
@@ -128,8 +156,7 @@ class TestOfferFallback:
             course_id=344,
             offer_course_escalation=True,
         )
-        assert "344" in result.content
-        assert "moodle.ki-campus.org" in result.content
+        assert result.content == NO_ANSWER_IN_MODULE_OFFER_COURSE
 
     def test_offer_is_classified_as_fallback(self):
         assert get_fallback_type(NO_ANSWER_IN_MODULE_OFFER_COURSE) == "no_answer_module_offer_course"
@@ -144,6 +171,10 @@ class TestGenerateAnswerSetsPending:
     def _run(self, state, answer_content):
         mock_response = MagicMock()
         mock_response.content = answer_content
+        # A bare MagicMock auto-creates a truthy `.fallback_type` attribute,
+        # unlike the real SerializableChatMessage (defaults to None) — set it
+        # explicitly so generate_answer falls back to text-based classification.
+        mock_response.fallback_type = None
         mock_answerer = MagicMock()
         mock_answerer.answer_question.return_value = mock_response
         with patch("src.llm.tools.answer.get_question_answerer", return_value=mock_answerer):

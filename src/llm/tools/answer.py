@@ -11,6 +11,7 @@ from src.llm.objects.question_answerer import (
     NO_CONTENT_IN_MODULE,
     NO_CONTENT_UNSUPPORTED_TYPE,
     get_fallback_type,
+    translate_fallback_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,13 +83,19 @@ def generate_answer(state: GraphState) -> dict:
                 unsupported_label,
                 module_name,
             )
+            fallback_text = NO_CONTENT_UNSUPPORTED_TYPE.format(
+                module_name=module_name, label=unsupported_label, url=first.get("url", "")
+            )
             return {
-                "answer": NO_CONTENT_UNSUPPORTED_TYPE.format(
-                    module_name=module_name, label=unsupported_label, url=first.get("url", "")
-                )
+                "answer": translate_fallback_text(fallback_text, language),
+                "fallback_type": get_fallback_type(fallback_text),
             }
         logger.debug("generate_answer: EmptyModule marker detected for %r — returning fixed fallback", module_name)
-        return {"answer": NO_CONTENT_IN_MODULE.format(module_name=module_name)}
+        fallback_text = NO_CONTENT_IN_MODULE.format(module_name=module_name)
+        return {
+            "answer": translate_fallback_text(fallback_text, language),
+            "fallback_type": get_fallback_type(fallback_text),
+        }
 
     # Get singleton question answerer (only when we actually need the LLM)
     answerer = get_question_answerer()
@@ -115,10 +122,13 @@ def generate_answer(state: GraphState) -> dict:
     )
 
     logger.debug("generate_answer: done, response_len=%d chars", len(response.content))
-    updates: dict = {"answer": response.content}
+    updates: dict = {"answer": response.content, "fallback_type": response.fallback_type}
     # Angebot wurde ausgesprochen → Retrieval-Query für den möglichen
     # Ja-Folgeturn festhalten (contextualize_and_route konsumiert das Flag).
-    if offer_course_escalation and get_fallback_type(response.content) == "no_answer_module_offer_course":
+    # Falls back to text-based classification when fallback_type wasn't set
+    # (e.g. a mocked QuestionAnswerer in tests).
+    resolved_fallback_type = response.fallback_type or get_fallback_type(response.content)
+    if offer_course_escalation and resolved_fallback_type == "no_answer_module_offer_course":
         updates["pending_scope_escalation"] = {
             "contextualized_query": state.get("contextualized_query") or query,
         }

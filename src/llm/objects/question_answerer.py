@@ -1,3 +1,4 @@
+import logging
 import re
 import sys
 
@@ -10,6 +11,8 @@ from src.llm.objects.LLMs import LLM, Models
 from src.llm.objects.citation_parser import CITATION_TEXT, _get_display_title, citation_suffix
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.streaming import CitationStreamResolver, SmartStreamCallback, StreamPhaseContext, citation_resolver_var, token_callback_var
+
+logger = logging.getLogger(__name__)
 
 ANSWER_NOT_FOUND_FIRST_TIME = """Entschuldige, ich habe deine Frage nicht ganz verstanden. Könntest du dein Problem bitte noch einmal etwas genauer erklären oder anders formulieren?
 """
@@ -76,6 +79,41 @@ def get_fallback_type(answer: str | None) -> str | None:
     return None
 
 
+# The set of fallback types that count as "no answer" for the cross-turn
+# escalation check in answer_question() below (previous_bot_response_was_no_answer).
+_NO_ANSWER_FALLBACK_TYPES = {
+    get_fallback_type(ANSWER_NOT_FOUND_FIRST_TIME),
+    get_fallback_type(NO_RELEVANT_CONTENT),
+    get_fallback_type(NO_ANSWER_IN_MODULE_OFFER_COURSE),
+}
+
+DEFAULT_FALLBACK_LANGUAGE = "German"
+FALLBACK_TRANSLATOR_PROMPT = load_prompt("fallback_translator_prompt")
+
+
+def translate_fallback_text(text: str, language: str | None) -> str:
+    """Translates a canned German fallback message into the detected answer language.
+
+    The fallback constants in this module are only ever authored in German.
+    Skips the LLM call when the target language already is German (the
+    common case) to avoid unnecessary latency/cost. Falls back to the
+    original German text if translation fails for any reason.
+    """
+    if not language or language.strip().lower() == DEFAULT_FALLBACK_LANGUAGE.lower():
+        return text
+    try:
+        translated = LLM().chat(
+            query=text,
+            chat_history=[],
+            model=Models.MINI,
+            system_prompt=FALLBACK_TRANSLATOR_PROMPT.format(language=language),
+        )
+        return translated.content.strip() or text
+    except Exception:
+        logger.warning("Fallback translation to %r failed, keeping German text", language, exc_info=True)
+        return text
+
+
 SYSTEM_PROMPT = load_prompt("system_prompt")
 
 USER_QUERY_WITH_SOURCES_PROMPT = """
@@ -130,23 +168,41 @@ class QuestionAnswerer:
         if chat_history:
             for msg in reversed(chat_history):
                 if msg.role == MessageRole.ASSISTANT:
-                    previous_bot_response_was_no_answer = (
-                        msg.content
-                        in (ANSWER_NOT_FOUND_FIRST_TIME, NO_RELEVANT_CONTENT, NO_ANSWER_IN_MODULE_OFFER_COURSE)
-                    )
+                    if msg.fallback_type is not None:
+                        # Translated fallback text no longer matches the German
+                        # constants below — the type survives translation.
+                        previous_bot_response_was_no_answer = msg.fallback_type in _NO_ANSWER_FALLBACK_TYPES
+                    else:
+                        previous_bot_response_was_no_answer = (
+                            msg.content
+                            in (ANSWER_NOT_FOUND_FIRST_TIME, NO_RELEVANT_CONTENT, NO_ANSWER_IN_MODULE_OFFER_COURSE)
+                        )
                     break
 
         # Early exit: no sources retrieved → skip both rerank and LLM answer call.
         if not sources:
-            if not previous_bot_response_was_no_answer:
-                fallback = NO_ANSWER_IN_MODULE_OFFER_COURSE if offer_course_escalation else NO_RELEVANT_CONTENT
+            # offer_course_escalation reflects this turn's actual scope state
+            # (module+course present, not yet escalated) and must win over
+            # previous_bot_response_was_no_answer: that flag only looks at the
+            # previous message's text, so a declined offer followed by a new,
+            # unrelated question would otherwise be misread as "same question,
+            # second failure" just because the offer text is itself a no-answer
+            # fallback. A fresh question always gets a fresh offer.
+            if offer_course_escalation:
+                fallback = NO_ANSWER_IN_MODULE_OFFER_COURSE
+            elif not previous_bot_response_was_no_answer:
+                fallback = NO_RELEVANT_CONTENT
             elif is_moodle and course_id is not None:
                 fallback = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id=course_id)
             elif is_moodle:
                 fallback = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id="UNKNOWN")
             else:
                 fallback = ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL
-            return SerializableChatMessage(role=MessageRole.ASSISTANT, content=fallback)
+            return SerializableChatMessage(
+                role=MessageRole.ASSISTANT,
+                content=translate_fallback_text(fallback, language),
+                fallback_type=get_fallback_type(fallback),
+            )
 
         system_prompt = SYSTEM_PROMPT.format(language=language)
         formatted_sources = format_sources(sources, max_length=sys.maxsize)
@@ -204,17 +260,21 @@ class QuestionAnswerer:
             is_no_answer = False
 
         if is_no_answer:
-            if not previous_bot_response_was_no_answer:
-                response.content = (
-                    NO_ANSWER_IN_MODULE_OFFER_COURSE if offer_course_escalation else ANSWER_NOT_FOUND_FIRST_TIME
-                )
+            # See the analogous no-sources branch above for why
+            # offer_course_escalation takes priority.
+            if offer_course_escalation:
+                fallback_text = NO_ANSWER_IN_MODULE_OFFER_COURSE
+            elif not previous_bot_response_was_no_answer:
+                fallback_text = ANSWER_NOT_FOUND_FIRST_TIME
             else:
                 if is_moodle and course_id is not None:
-                    response.content = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id=course_id)
+                    fallback_text = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id=course_id)
                 elif is_moodle:
-                    response.content = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id="UNKNOWN")
+                    fallback_text = ANSWER_NOT_FOUND_SECOND_TIME_MOODLE.format(course_id="UNKNOWN")
                 else:
-                    response.content = ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL
+                    fallback_text = ANSWER_NOT_FOUND_SECOND_TIME_DRUPAL
+            response.fallback_type = get_fallback_type(fallback_text)
+            response.content = translate_fallback_text(fallback_text, language)
 
         # Flush streaming buffers (and emit friendly message for NO ANSWER case).
         if smart_cb is not None:
