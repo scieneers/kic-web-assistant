@@ -1,7 +1,12 @@
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 from src.loaders.models.hp5activities import strip_html, extract_library_from_h5p
 from src.loaders.models.h5pactivities.h5p_base import H5PLeaf
+
+# H5P.DragText encodes solutions inline as *word* (like H5P.Blanks). Matched
+# to render neutral placeholders in module text instead of the answer.
+_DRAG_TEXT_SOLUTION = re.compile(r"\*[^*]+\*")
 
 
 @dataclass
@@ -54,8 +59,10 @@ class DragDropText(H5PLeaf):
         return None
     
     def to_text(self) -> str:
+        # Answer-free rendering: inline *word* solutions become ___
+        # placeholders, matching H5P.Blanks (see h5p_blanks.py).
         task_clean = strip_html(self.task_description)
-        text_clean = strip_html(self.text_field)
+        text_clean = _DRAG_TEXT_SOLUTION.sub("___", strip_html(self.text_field))
         return f"[Drag Text] {task_clean}\n{self.hint}\n{text_clean}"
 
 
@@ -147,23 +154,18 @@ class DragDropQuestion(H5PLeaf):
         return None
     
     def to_text(self) -> str:
+        # Answer-free rendering: categories and draggable items are listed,
+        # but correct_mappings (the solution) is deliberately omitted — see
+        # QuizQuestion.to_text in h5p_quiz_questions.py for the same pattern.
         question_clean = strip_html(self.question)
         categories_clean = [strip_html(c) for c in self.categories]
         items_clean = [strip_html(i) for i in self.draggable_items]
-        
-        result = (
+
+        return (
             f"[Drag & Drop] {question_clean}\n"
             f"Kategorien: {', '.join(categories_clean)}\n"
-            f"Elemente: {', '.join(items_clean)}\n\n"
-            f"Korrekte Zuordnung:\n"
+            f"Elemente: {', '.join(items_clean)}"
         )
-        
-        for category, items in self.correct_mappings.items():
-            category_clean = strip_html(category)
-            items_clean_list = [strip_html(item) for item in items]
-            result += f"  {category_clean}: {', '.join(items_clean_list)}\n"
-        
-        return result
     
 @dataclass
 class ImageHotspotQuestion(H5PLeaf):

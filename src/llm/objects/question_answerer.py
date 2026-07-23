@@ -1,6 +1,5 @@
 import logging
 import re
-import sys
 
 from langfuse.decorators import observe
 from llama_index.core.llms import MessageRole
@@ -123,7 +122,15 @@ Metadata: {metadata}
 """
 
 
-def format_sources(sources: list[TextNode], max_length: int = 8000) -> str:
+# Character budget for the <SOURCES> block sent to the LLM. Applies to every
+# model, including the Azure fallback: it's a fallback path, not a separate
+# tier meant to carry more content, and an unbounded (sys.maxsize) source dump
+# for a large course caused a real 400 BadRequestError in production (261745
+# input tokens on a 262144-token model, 2026-07-23).
+SOURCES_MAX_LENGTH = 8_000
+
+
+def format_sources(sources: list[TextNode], max_length: int = SOURCES_MAX_LENGTH) -> str:
     sources_text = ""
     for i, source in enumerate(sources):
         # Handle both TextNode (with get_text()) and SerializableTextNode (with .text attribute)
@@ -205,7 +212,7 @@ class QuestionAnswerer:
             )
 
         system_prompt = SYSTEM_PROMPT.format(language=language)
-        formatted_sources = format_sources(sources, max_length=sys.maxsize)
+        formatted_sources = format_sources(sources, max_length=SOURCES_MAX_LENGTH)
         prompted_user_query = f"<QUERY>:\n {query}\n\n{formatted_sources}"
 
         # When streaming, replace [docN] markers with clickable links in real-time so

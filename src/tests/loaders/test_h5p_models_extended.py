@@ -182,11 +182,12 @@ class TestCrossword:
         result = Crossword.from_h5p_params(self.LIB, self._params())
         assert result.to_text().startswith("[Kreuzworträtsel]")
 
-    def test_to_text_contains_clue_and_answer(self):
+    def test_to_text_contains_clue_but_not_answer(self):
         result = Crossword.from_h5p_params(self.LIB, self._params())
         text = result.to_text()
         assert "Lernende Maschine" in text
-        assert "NEURONALESNETZ" in text
+        assert "NEURONALESNETZ" not in text
+        assert "_" * len("NEURONALESNETZ") in text
 
     def test_task_description_included_when_present(self):
         params = {"words": self._params()["words"], "taskDescription": "Löse das Rätsel"}
@@ -225,11 +226,12 @@ class TestDragDropText:
         result = DragDropText.from_h5p_params(self.LIB, self._params())
         assert "[Drag Text]" in result.to_text()
 
-    def test_to_text_contains_task_and_text_field(self):
+    def test_to_text_contains_task_but_not_solution_words(self):
         result = DragDropText.from_h5p_params(self.LIB, self._params())
         text = result.to_text()
         assert "Ziehe die Wörter" in text
-        assert "Künstliche Intelligenz" in text
+        assert "Künstliche Intelligenz" not in text
+        assert "___" in text
 
     def test_fallback_task_description_used_when_empty(self):
         params = {"taskDescription": "", "textField": "Some *word* here."}
@@ -284,6 +286,12 @@ class TestDragDropQuestion:
         text = result.to_text()
         assert "Element 1" in text
         assert "Element 2" in text
+
+    def test_to_text_does_not_leak_correct_mapping(self):
+        result = DragDropQuestion.from_h5p_params(self.LIB, self._params())
+        text = result.to_text()
+        assert "Korrekte Zuordnung" not in text
+        assert result.correct_mappings  # solution is still extracted, just not rendered
 
     def test_empty_dropzones_returns_none(self):
         params = {"question": {"task": {"dropZones": [], "elements": []}}}

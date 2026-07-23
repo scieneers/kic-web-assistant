@@ -88,18 +88,25 @@ class LLM:
     def get_model(self, model: Models) -> FunctionCallingLLM | llama_llm:
         match model:
             case Models.AZURE_FALLBACK:
+                # GPT-5-family reasoning model: do NOT set temperature/max_tokens
+                # directly (the API rejects temperature != 1, and llama_index only
+                # auto-converts max_tokens -> max_completion_tokens for models it
+                # recognizes as reasoning models by name, which this deployment's
+                # custom model string isn't). Pass max_completion_tokens directly
+                # via additional_kwargs instead, mirroring the GWDG models' hard
+                # max_tokens=400 cap — this is a fallback path, it should behave
+                # like the model it's standing in for, not get a bigger budget.
                 llm = AzureOpenAI(
                     model=env.AZURE_FALLBACK_MODEL,
                     deployment=env.AZURE_FALLBACK_DEPLOYMENT,
                     api_key=env.AZURE_OPENAI_API_KEY,
                     azure_endpoint=env.AZURE_OPENAI_URL,
                     api_version="2024-12-01-preview",
+                    additional_kwargs={"max_completion_tokens": 400},
                     callback_manager=Settings.callback_manager,
                 )
             case Models.MINI:
-                # GPT-5-family reasoning model: like AZURE_FALLBACK, do NOT set
-                # temperature/max_tokens (the API rejects temperature != 1 and
-                # uses max_completion_tokens). The prompt keeps the output short.
+                # Same reasoning-model constraints as AZURE_FALLBACK above.
                 # reasoning_effort="minimal" turns internal reasoning off — the
                 # aux tasks on this model (language detection) need a one-word
                 # answer, and reasoning tokens dominated latency (4-6s/call).
@@ -110,6 +117,7 @@ class LLM:
                     azure_endpoint=env.AZURE_OPENAI_URL,
                     api_version="2024-12-01-preview",
                     reasoning_effort="minimal",
+                    additional_kwargs={"max_completion_tokens": 400},
                     callback_manager=Settings.callback_manager,
                 )
             case Models.LLAMA3:
