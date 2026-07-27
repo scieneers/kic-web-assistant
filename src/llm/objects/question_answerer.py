@@ -148,6 +148,85 @@ def format_sources(sources: list[TextNode], max_length: int = SOURCES_MAX_LENGTH
     return "<SOURCES>:\n" + sources_text
 
 
+# A chunk only earns its place in the prompt if it can carry at least this
+# much real content — otherwise the [docN]/Content:/Metadata: wrapper
+# overhead alone can exceed a chunk's whole budget share, and cramming in
+# every chunk anyway just produces near-empty entries that still add up to
+# far more total length than max_length allows for (see
+# format_sources_full_scope's docstring).
+MIN_CONTENT_PER_CHUNK = 100
+
+
+def format_sources_full_scope(sources: list[TextNode], max_length: int = SOURCES_MAX_LENGTH) -> str:
+    """Formats an unranked, full scope of sources (e.g. a whole course or several
+    selected modules) for summarization.
+
+    Unlike format_sources() — built for a short, relevance-ranked citation list,
+    where stopping once the budget is used up means only dropping the least
+    relevant sources — a full scope has no relevance order: sources are simply
+    grouped by module. Applying the same stop-once-full logic there means
+    whichever module(s) happen to come first in the list eat the entire budget
+    and every module after them is silently dropped instead of trimmed.
+
+    Splitting the budget evenly per *chunk* instead doesn't work either: a
+    whole-course scope can have thousands of chunks (e.g. 2207 for one real
+    course), which would give each chunk only a handful of characters — worse,
+    the fixed per-entry overhead ([docN]/Content:/Metadata: {...}) alone can
+    exceed that, so including every chunk regardless would blow way past
+    max_length in total even though each individual chunk looks "capped".
+
+    Instead: split max_length evenly per *module* first. Within a module,
+    only include as many of its chunks as its own share can afford at
+    MIN_CONTENT_PER_CHUNK real characters each — the rest of that module's
+    chunks are dropped, not shrunk to nothing. A module's total budget no
+    longer depends on how many chunks it happens to have, and how much of it
+    gets seen shrinks gracefully (matching COURSE_LEVEL_SCOPE_GUIDANCE's
+    "1-2 sentences per module" for large courses) instead of every chunk
+    surviving with unusable, budget-blowing scraps of text.
+
+    [docN] markers must keep referring to a source's original position in
+    `sources` (SummaryAnswerer's citation resolver looks sources up by that
+    index) — so chunks are grouped/selected only to decide inclusion and
+    budget, then written out in original order with the original index.
+    """
+    if not sources:
+        return "<SOURCES>:\n"
+
+    indices_per_module: dict[object, list[int]] = {}
+    for i, source in enumerate(sources):
+        indices_per_module.setdefault(source.metadata.get("module_id"), []).append(i)
+
+    per_module_budget = max(max_length // len(indices_per_module), 1)
+
+    included_indices: set[int] = set()
+    content_budget_by_index: dict[int, int] = {}
+    for indices in indices_per_module.values():
+        overhead = len(
+            USER_QUERY_WITH_SOURCES_PROMPT.format(index=indices[0] + 1, content="", metadata=sources[indices[0]].metadata)
+        )
+        max_affordable_chunks = max(per_module_budget // (overhead + MIN_CONTENT_PER_CHUNK), 1)
+        selected = indices[:max_affordable_chunks]
+        per_chunk_budget = per_module_budget // len(selected)
+        for idx in selected:
+            included_indices.add(idx)
+            content_budget_by_index[idx] = max(per_chunk_budget - overhead, 0)
+
+    sources_text = ""
+    for i, source in enumerate(sources):
+        if i not in included_indices:
+            continue
+        content_budget = content_budget_by_index[i]
+        content = source.get_text() if hasattr(source, 'get_text') else source.text
+        if len(content) > content_budget:
+            content = content[:content_budget] + "…"
+        source_entry = USER_QUERY_WITH_SOURCES_PROMPT.format(
+            index=i + 1, content=content, metadata=source.metadata
+        )
+        sources_text += source_entry + "\n"
+
+    return "<SOURCES>:\n" + sources_text.strip()
+
+
 class QuestionAnswerer:
     def __init__(self) -> None:
         self.name = "QuestionAnswer"

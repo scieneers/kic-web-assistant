@@ -11,7 +11,7 @@ from src.llm.objects.question_answerer import (
     NO_CONTENT_IN_MODULE,
     NO_CONTENT_UNSUPPORTED_TYPE,
     SOURCES_MAX_LENGTH,
-    format_sources,
+    format_sources_full_scope,
     get_fallback_type,
     translate_fallback_text,
 )
@@ -119,7 +119,7 @@ class SummaryAnswerer:
 
         scope_guidance = COURSE_LEVEL_SCOPE_GUIDANCE if is_course_level else MODULE_LEVEL_SCOPE_GUIDANCE
         system_prompt = SUMMARY_SYSTEM_PROMPT.format(language=language, scope_guidance=scope_guidance)
-        formatted_sources = format_sources(sources, max_length=SOURCES_MAX_LENGTH)
+        formatted_sources = format_sources_full_scope(sources, max_length=SOURCES_MAX_LENGTH)
         focus_line = f"\nFokus: {focus_hint}" if focus_hint else ""
         prompted_user_query = USER_TASK_WITH_SOURCES_PROMPT.format(
             focus_line=focus_line, sources=formatted_sources
