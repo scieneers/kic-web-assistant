@@ -6,7 +6,9 @@ Heart of the v2 workflow. Each turn:
    exit) and updates the learner model.
 2. Deterministic guards enforce the pedagogical ladder regardless of what the
    policy says: 3 questions in a row → forced HINT, 2 hints on the same
-   concept → forced MICRO_EXPLAIN (which always ends in a transfer check).
+   concept → forced MICRO_EXPLAIN (which always ends in a transfer check),
+   CONSOLIDATE only from the turn floor on (lowered when the learner model
+   already shows mastery, so a confident session can close early).
 3. A generation LLM call produces the actual tutor message for that move,
    grounded in the retrieved course material, streamed to the user through a
    peek-buffered guard (see _PeekLeakGuard) that screens the opening of the
@@ -30,6 +32,7 @@ from src.llm.state.socratic_v2_routing import (
     grade_quiz_answer,
     initial_learner_model,
     format_learner_model,
+    mastery_reached,
     merge_learner_update,
     render_quiz_message,
     reset_socratic_v2_state,
@@ -50,6 +53,10 @@ _llm = LLM()
 MAX_QUESTION_STREAK = 3  # question moves in a row before a HINT is forced
 MAX_HINTS_PER_CONCEPT = 2  # hints on one concept before a MICRO_EXPLAIN is forced
 MIN_CORE_TURNS_BEFORE_CONSOLIDATE = 4  # core exchanges before CONSOLIDATE is allowed to fire
+# Lowered floor for learners who are already demonstrably safe (see
+# mastery_reached) — a fast, confident session may close early; the floor stays
+# as a safety net against a policy that consolidates after a single exchange.
+MIN_CORE_TURNS_WHEN_MASTERED = 2
 
 GENERATION_FALLBACK = "Kannst du deine Überlegung genauer erklären?"
 
@@ -272,8 +279,9 @@ def socratic_v2_core(state: GraphState) -> dict:
 
     Flow transitions (via socratic_v2_phase):
     - → "core" (default): dialogue continues
-    - → "consolidation": policy chose CONSOLIDATE (only honored once
-      MIN_CORE_TURNS_BEFORE_CONSOLIDATE core exchanges have happened — a
+    - → "consolidation": policy chose CONSOLIDATE (only honored from the turn
+      floor on — MIN_CORE_TURNS_BEFORE_CONSOLIDATE normally,
+      MIN_CORE_TURNS_WHEN_MASTERED once the learner model shows mastery; a
       premature CONSOLIDATE is overridden to FRAGE, same as the other
       guards), the learner was asked to summarize — the next user turn is
       handled by the consolidation node
@@ -407,8 +415,14 @@ def socratic_v2_core(state: GraphState) -> dict:
         move = "HINT"
     if move == "HINT" and effective_hint_count >= MAX_HINTS_PER_CONCEPT:
         move = "MICRO_EXPLAIN"
-    if move == "CONSOLIDATE" and core_turns < MIN_CORE_TURNS_BEFORE_CONSOLIDATE:
-        move = "FRAGE"
+    if move == "CONSOLIDATE":
+        min_turns = (
+            MIN_CORE_TURNS_WHEN_MASTERED
+            if mastery_reached(learner_model)
+            else MIN_CORE_TURNS_BEFORE_CONSOLIDATE
+        )
+        if core_turns < min_turns:
+            move = "FRAGE"
     if move != original_move:
         logger.debug(
             "socratic_v2_core: guard override %s → %s (streak=%d, hints=%d, core_turns=%d)",

@@ -20,6 +20,7 @@ from src.llm.state.socratic_v2_routing import (
     build_pending_quiz,
     grade_quiz_answer,
     initial_learner_model,
+    mastery_reached,
     merge_learner_update,
     parse_policy_response,
     reset_socratic_v2_state,
@@ -155,6 +156,24 @@ class TestMergeLearnerUpdate:
     def test_affect_replaced(self):
         merged = merge_learner_update(initial_learner_model(), {"affekt": "frustriert"})
         assert merged["affekt"] == "frustriert"
+
+
+class TestMasteryReached:
+    def test_empty_model_is_not_mastery(self):
+        # nothing assessed yet must never count as mastered
+        assert mastery_reached(initial_learner_model()) is False
+
+    def test_all_concepts_safe(self):
+        model = {"konzepte": {"Overfitting": "sicher", "Regularisierung": "sicher"}, "missverstaendnisse": []}
+        assert mastery_reached(model) is True
+
+    def test_one_unsafe_concept_blocks(self):
+        model = {"konzepte": {"Overfitting": "sicher", "Regularisierung": "gesehen"}, "missverstaendnisse": []}
+        assert mastery_reached(model) is False
+
+    def test_recorded_misconception_blocks(self):
+        model = {"konzepte": {"Overfitting": "sicher"}, "missverstaendnisse": ["A"]}
+        assert mastery_reached(model) is False
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +340,46 @@ class TestSocraticV2Core:
         result, _, _ = self._run(_base_state(v2_core_turns=1), _policy("CONSOLIDATE"))
         assert result["socratic_v2_phase"] == "core"
         assert result["v2_last_policy_move"] == "CONSOLIDATE"
+        assert result["v2_last_move"] == "FRAGE"
+
+    def test_mastered_learner_may_consolidate_below_default_floor(self):
+        # demonstrably safe after two exchanges → lowered floor releases the guard
+        result, _, _ = self._run(
+            _base_state(v2_core_turns=2),
+            _policy("CONSOLIDATE", learner_update={"konzepte": {"Overfitting": "sicher"}}),
+        )
+        assert result["socratic_v2_phase"] == "consolidation"
+        assert result["v2_last_move"] == "CONSOLIDATE"
+
+    def test_mastery_does_not_release_guard_below_absolute_floor(self):
+        result, _, _ = self._run(
+            _base_state(v2_core_turns=1),
+            _policy("CONSOLIDATE", learner_update={"konzepte": {"Overfitting": "sicher"}}),
+        )
+        assert result["socratic_v2_phase"] == "core"
+        assert result["v2_last_move"] == "FRAGE"
+
+    def test_wobbly_concept_keeps_default_consolidate_floor(self):
+        result, _, _ = self._run(
+            _base_state(v2_core_turns=2),
+            _policy("CONSOLIDATE", learner_update={"konzepte": {"Overfitting": "wackelig"}}),
+        )
+        assert result["socratic_v2_phase"] == "core"
+        assert result["v2_last_move"] == "FRAGE"
+
+    def test_open_misconception_keeps_default_consolidate_floor(self):
+        # every concept "sicher" but a misconception on record → no early close
+        result, _, _ = self._run(
+            _base_state(v2_core_turns=2),
+            _policy(
+                "CONSOLIDATE",
+                learner_update={
+                    "konzepte": {"Overfitting": "sicher"},
+                    "missverstaendnisse": ["verwechselt Overfitting mit Underfitting"],
+                },
+            ),
+        )
+        assert result["socratic_v2_phase"] == "core"
         assert result["v2_last_move"] == "FRAGE"
 
     def test_exit_resets_all_v2_state(self):

@@ -112,6 +112,25 @@ def merge_learner_update(learner_model: Dict[str, Any], update: Dict[str, Any] |
     return merged
 
 
+def mastery_reached(learner_model: Dict[str, Any]) -> bool:
+    """True when the learner model shows the session's concepts as mastered.
+
+    Used to release the consolidation guard early: someone who is demonstrably
+    safe after two exchanges should be able to close the session properly
+    instead of being kept in the loop until the default turn floor.
+
+    Requires at least one tracked concept, every tracked concept at "sicher",
+    and no recorded misconceptions. Misconceptions are append-only (see
+    merge_learner_update), so one recorded anywhere in the session falls back
+    to the default floor — deliberately conservative, since a resolved and an
+    open misconception are indistinguishable in the model.
+    """
+    concepts = learner_model.get("konzepte") or {}
+    if not concepts or learner_model.get("missverstaendnisse"):
+        return False
+    return all(status == "sicher" for status in concepts.values())
+
+
 def parse_policy_response(content: str | None) -> Dict[str, Any]:
     """Parse the policy LLM's JSON output; degrade gracefully to a safe default.
 
