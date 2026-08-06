@@ -88,8 +88,7 @@ class APICaller:
 
     def getFile(self, filename, tmp_dir):
         local_filename = Path(f"{tmp_dir}/{filename}")
-        # TEMPORARY: verify=False wegen abgelaufenem Server-Zertifikat
-        with requests.get(self.url, params=self.params, stream=True, verify=False) as r:
+        with requests.get(self.url, params=self.params, stream=True, verify=True) as r:
             r.raise_for_status()
             with open(local_filename, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):

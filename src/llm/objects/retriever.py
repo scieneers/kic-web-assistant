@@ -1,68 +1,157 @@
 import json
+import logging
 
 from langfuse.decorators import observe
 
 from src.env import env
 from src.llm.objects.LLMs import LLM
 from src.vectordb.azure_search import VectorDBAzureSearch
+from src.vectordb.doc_types import RETRIEVAL_EXCLUDED_TYPES
 from src.api.models.serializable_text_node import SerializableTextNode
+
+logger = logging.getLogger(__name__)
+
+
+def _numeric_in_clause(field: str, values: list[int] | tuple[int, ...]) -> str:
+    """OData membership test for a NUMERIC field over a list of values.
+
+    Azure AI Search's ``search.in`` only accepts string fields
+    (search.in(Edm.String, ...)), so it can't be used on the numeric
+    ``course_id`` / ``module_id`` fields — doing so raises "No function
+    signature for search.in matches". Build an ``eq``-OR expression instead,
+    which works for numeric fields.
+    """
+    ids = [int(v) for v in values]
+    if len(ids) == 1:
+        return f"{field} eq {ids[0]}"
+    return "(" + " or ".join(f"{field} eq {v}" for v in ids) + ")"
 
 
 def _build_odata_filter(
     course_id: int | list[int] | tuple[int, ...] | None,
-    module_id: int | None,
+    module_id: int | list[int] | tuple[int, ...] | None,
+    *,
+    doc_type: str | None = None,
 ) -> str:
     """Translate the retrieval filter into an Azure AI Search OData expression.
 
     Filter logic:
-      - always exclude internal ModuleFingerprint bookkeeping docs
+      - UNCONDITIONALLY exclude the retrieval-banned types (QuizItem carries
+        the correct answers in its metadata payload — retrieving it would put
+        assessment solutions into the LLM prompt, regardless of scope)
       - with no course/module given, restrict to Drupal content
       - course_id may be a single value or a list (OData ``search.in``)
-      - module_id is an exact match
+      - module_id may be a single value or a list (OData ``search.in``);
+        an empty list is treated the same as ``None`` (no module filter)
+      - doc_type: typed access path — restrict to exactly this document class
+        (e.g. "QuizItem" for the tutor's quiz fetch). Replaces the exclusion
+        and skips the EmptyModule/Drupal clauses; scope filters still apply.
     """
-    clauses: list[str] = ["type ne 'ModuleFingerprint'"]
+    # Normalize an empty module_id list to "no filter" so downstream checks
+    # only need to distinguish "given" (int / non-empty list) from "absent".
+    if isinstance(module_id, (list, tuple)) and len(module_id) == 0:
+        module_id = None
 
-    if course_id is None and module_id is None:
+    if doc_type is not None:
+        clauses: list[str] = [f"type eq '{doc_type}'"]
+        reasons: list[str] = [f"typed access: only {doc_type} documents"]
+    else:
+        excluded = ",".join(RETRIEVAL_EXCLUDED_TYPES)
+        clauses = [f"not search.in(type, '{excluded}', ',')"]
+        reasons = ["always: exclude bookkeeping docs and answer-bearing quiz items"]
+
+        if module_id is None:
+            clauses.append("type ne 'EmptyModule'")
+            reasons.append("no module_id: exclude empty-module markers")
+
+    if doc_type is None and course_id is None and module_id is None:
         clauses.append("source eq 'Drupal'")
+        reasons.append("no course/module given: restrict to Drupal content")
 
     if course_id is not None:
         if isinstance(course_id, (list, tuple)):
-            ids = ",".join(str(int(c)) for c in course_id)
-            clauses.append(f"search.in(course_id, '{ids}', ',')")
+            clauses.append(_numeric_in_clause("course_id", course_id))
+            reasons.append(f"course_id list provided: filter to courses {list(course_id)}")
         else:
             clauses.append(f"course_id eq {int(course_id)}")
+            reasons.append(f"course_id provided: filter to course {course_id}")
 
     if module_id is not None:
-        clauses.append(f"module_id eq {int(module_id)}")
+        if isinstance(module_id, (list, tuple)):
+            clauses.append(_numeric_in_clause("module_id", module_id))
+            reasons.append(f"module_id list provided: filter to modules {list(module_id)}")
+        else:
+            clauses.append(f"module_id eq {int(module_id)}")
+            reasons.append(f"module_id provided: filter to module {module_id}")
 
-    return " and ".join(clauses)
+    odata_filter = " and ".join(clauses)
+    logger.debug(
+        "OData filter built: %r\n  Clauses:\n%s",
+        odata_filter,
+        "\n".join(f"    - {r}" for r in reasons),
+    )
+    return odata_filter
+
+
+def _scope_sort_key(node: SerializableTextNode) -> tuple:
+    """Coherent read order for a full-scope fetch (summaries, item listings).
+
+    Module document first, then its item documents grouped by class and sorted
+    by the numeric ``item_order`` metadata — NOT by the key string, where
+    "chapter:10" would sort before "chapter:2".
+    """
+    md = node.metadata or {}
+    key = md.get("source_doc_key") or ""
+    parts = key.split(":")
+    if key.startswith("moodle:") and len(parts) >= 5:
+        module_prefix = ":".join(parts[:3])
+        item_class = parts[3]
+    else:
+        module_prefix, item_class = key, ""  # module/course docs sort before items
+    item_order = md.get("item_order")
+    item_order = item_order if isinstance(item_order, int) else -1
+    chunk_index = md.get("chunk_index")
+    chunk_index = chunk_index if isinstance(chunk_index, int) else 0
+    return (module_prefix, item_class, item_order, chunk_index)
 
 
 class KiCampusRetriever:
-    def __init__(self, use_hybrid: bool = True, n_chunks: int = 10):
+    def __init__(self, use_hybrid: bool = True, n_chunks: int = 10, use_semantic: bool = False):
         """Initialize retriever.
 
         Args:
             use_hybrid: If True, hybrid search (vector + BM25 keyword, fused via
                        Azure's Reciprocal Rank Fusion). If False, vector-only.
             n_chunks: Number of chunks to retrieve from the search index.
+            use_semantic: If True, Azure's semantic ranker rescores the results
+                       server-side within the SAME search call (integrated
+                       reranking) — results are ordered by
+                       ``@search.reranker_score`` (0–4) instead of the RRF
+                       score. Requires hybrid mode (the semantic ranker needs
+                       the query text).
         """
+        if use_semantic and not use_hybrid:
+            raise ValueError("use_semantic requires use_hybrid=True (semantic ranking needs the query text)")
         self.use_hybrid = use_hybrid
         self.n_chunks = n_chunks
+        self.use_semantic = use_semantic
         self.embedder = LLM().get_embedder()
         self.vector_db = VectorDBAzureSearch()
         self.index_name = env.AZURE_SEARCH_INDEX
 
     @observe()
     def retrieve(
-        self, query: str, course_id: int | None = None, module_id: int | None = None
+        self,
+        query: str,
+        course_id: int | None = None,
+        module_id: int | list[int] | None = None,
     ) -> list[SerializableTextNode]:
         """Retrieve relevant documents from Azure AI Search.
 
         Args:
             query: Search query
             course_id: Optional filter by course ID
-            module_id: Optional filter by module ID
+            module_id: Optional filter by a single module ID or a list of module IDs
 
         Returns:
             List of relevant SerializableTextNodes
@@ -77,9 +166,99 @@ class KiCampusRetriever:
             index_name=self.index_name,
             odata_filter=odata_filter,
             top=self.n_chunks,
+            use_semantic=self.use_semantic,
         )
 
         return [self._to_node(result) for result in results]
+
+    @observe()
+    def retrieve_all(
+        self, course_id: int | None = None, module_id: int | list[int] | None = None
+    ) -> list[SerializableTextNode]:
+        """Fetch every chunk in scope, ordered for a coherent read-through.
+
+        Used for content-summary requests: there is no topical query to rank
+        against, so this bypasses embedding + hybrid search/reranking entirely
+        and returns the complete scope instead of a "most relevant" subset.
+
+        Args:
+            course_id: Optional filter by course ID
+            module_id: Optional filter by a single module ID or a list of module IDs
+
+        Returns:
+            All matching SerializableTextNodes, ordered by (source_doc_key, chunk_index)
+            — the same order chunks were produced in during ingestion (see
+            get_data.py's chunk_index), so a module's content reads coherently
+            instead of in relevance order.
+        """
+        odata_filter = _build_odata_filter(course_id, module_id)
+        results = self.vector_db.fetch_all(odata_filter, index_name=self.index_name)
+        nodes = [self._to_node(result) for result in results]
+        nodes.sort(key=_scope_sort_key)
+        return nodes
+
+    @observe()
+    def retrieve_items(
+        self,
+        doc_type: str,
+        course_id: int | None = None,
+        module_id: int | list[int] | None = None,
+        query: str | None = None,
+        top: int = 20,
+    ) -> list[SerializableTextNode]:
+        """Typed access to structured item documents (QuizItem, GlossaryEntry, ...).
+
+        With a query: hybrid search restricted to the document class — e.g.
+        "the quiz question best matching concept X". Without: the complete
+        class scope, ordered by item_order (fetch_all path, no ranking);
+        top=0 means "no cap".
+
+        This is the ONLY retrieval path that can reach answer-bearing QuizItem
+        documents — normal retrieval excludes them unconditionally.
+        """
+        odata_filter = _build_odata_filter(course_id, module_id, doc_type=doc_type)
+        if query:
+            dense_embedding = self.embedder.get_query_embedding(query)
+            results = self.vector_db.hybrid_search(
+                query_text=query,
+                query_vector=dense_embedding,
+                index_name=self.index_name,
+                odata_filter=odata_filter,
+                top=top,
+            )
+            return [self._to_node(result) for result in results]
+        results = self.vector_db.fetch_all(odata_filter, index_name=self.index_name)
+        nodes = [self._to_node(result) for result in results]
+        nodes.sort(key=_scope_sort_key)
+        return nodes[:top] if top else nodes
+
+    @observe()
+    def lookup_glossary(
+        self,
+        term: str,
+        course_id: int | None = None,
+        module_id: int | list[int] | None = None,
+        top: int = 3,
+    ) -> list[SerializableTextNode]:
+        """Glossary lookup: exact concept matches first, semantic hits after.
+
+        Glossary entries are indexed as one document per entry with
+        title = concept, so BM25/semantic search lands precisely; an exact
+        (normalized) match on the structured concept payload is preferred.
+        """
+        from src.vectordb.doc_types import GLOSSARY_ENTRY
+
+        candidates = self.retrieve_items(
+            GLOSSARY_ENTRY, course_id=course_id, module_id=module_id, query=term, top=max(top, 10)
+        )
+        normalized_term = term.strip().lower()
+        exact = [
+            node
+            for node in candidates
+            if ((node.metadata.get("payload") or {}).get("concept") or "").strip().lower() == normalized_term
+        ]
+        remainder = [node for node in candidates if node not in exact]
+        return (exact + remainder)[:top]
 
     @staticmethod
     def _to_node(result: dict) -> SerializableTextNode:
@@ -87,6 +266,10 @@ class KiCampusRetriever:
 
         The full original node metadata is restored losslessly from the
         ``metadata_json`` blob rather than reassembled from individual fields.
+
+        With semantic ranking, ``@search.reranker_score`` (0–4 scale) is the
+        relevance signal downstream consumers (min_score filter, no-answer
+        logic) must see — the RRF ``@search.score`` is only the fallback.
         """
         raw_metadata = result.get("metadata_json")
         metadata = json.loads(raw_metadata) if raw_metadata else {}
@@ -94,5 +277,5 @@ class KiCampusRetriever:
             text=result.get("text", ""),
             id_=str(result.get("id")) if result.get("id") is not None else None,
             metadata=metadata,
-            score=result.get("@search.score"),
+            score=result.get("@search.reranker_score") or result.get("@search.score"),
         )

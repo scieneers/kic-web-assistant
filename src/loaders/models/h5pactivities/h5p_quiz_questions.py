@@ -96,10 +96,13 @@ class QuizQuestion(H5PLeaf):
         return None
     
     def to_text(self) -> str:
+        # Answer-free rendering: this text ends up in the embedded module
+        # document that normal chat retrieves — the correct/incorrect split
+        # lives only in the structured QuizItem payload (h5p_payloads.py).
+        # Options sorted alphabetically so the order carries no signal.
         question_clean = strip_html(self.question)
-        correct_clean = [strip_html(a) for a in self.correct_answers]
-        incorrect_clean = [strip_html(a) for a in self.incorrect_answers]
-        return f"[Quiz] {question_clean}\nKorrekte Antwort(en): {', '.join(correct_clean)}\nInkorrekte Antwort(en): {', '.join(incorrect_clean)}"
+        options_clean = sorted(strip_html(a) for a in self.correct_answers + self.incorrect_answers)
+        return f"[Quiz] {question_clean}\nAntwortoptionen: {', '.join(options_clean)}"
 
 
 @dataclass
@@ -148,6 +151,7 @@ class TrueFalseQuestion(H5PLeaf):
         return None
     
     def to_text(self) -> str:
+        # Answer-free rendering — see QuizQuestion.to_text; the solution lives
+        # only in the structured QuizItem payload.
         question_clean = strip_html(self.question)
-        answer = "Wahr" if self.correct_answer else "Falsch"
-        return f"[Wahr/Falsch] {question_clean}\nKorrekte Antwort: {answer}"
+        return f"[Wahr/Falsch] {question_clean}"

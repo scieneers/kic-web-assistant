@@ -13,9 +13,11 @@ class CrosswordEntry:
     orientation: str = "across"  # "across" oder "down" (nicht relevant für Textausgabe)
     
     def to_text(self) -> str:
-        """Formatiert als: <clue>. Antwort: <answer>"""
+        """Answer-free rendering: word length shown as placeholder,
+        matching how the crossword itself reveals it, without the solution."""
         clue_clean = strip_html(self.clue).strip()
-        return f"Frage: {clue_clean}. Antwort: {self.answer}"
+        placeholder = "_" * len(self.answer.strip())
+        return f"Frage: {clue_clean}. Antwort: {placeholder}"
 
 
 @dataclass

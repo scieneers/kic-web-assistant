@@ -1,11 +1,14 @@
 import logging
 import os
+import time
 import unicodedata
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import List
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 from llama_index.core import Document
 
@@ -29,6 +32,19 @@ class PageTypes(Enum):
 
 DRUPAL_API_BASE_URL = "https://ki-campus.org/jsonapi/node/"
 
+# HTTP robustness settings (overridable via env)
+# ki-campus.org drops connections intermittently; without timeout + retries a single
+# ConnectTimeout kills the whole ingest run.
+HTTP_CONNECT_TIMEOUT = float(os.getenv("DRUPAL_HTTP_CONNECT_TIMEOUT", "15"))
+HTTP_READ_TIMEOUT = float(os.getenv("DRUPAL_HTTP_READ_TIMEOUT", "120"))
+HTTP_MAX_ATTEMPTS = int(os.getenv("DRUPAL_HTTP_MAX_ATTEMPTS", "4"))
+HTTP_BACKOFF_SECONDS = float(os.getenv("DRUPAL_HTTP_BACKOFF_SECONDS", "10"))
+# Small pause before every outgoing request to avoid hammering ki-campus.org with
+# bursts of parallel-feeling requests (paging, paragraphs, related entities all
+# go through _get). Ingest runtime isn't time-critical, so we trade a bit of
+# extra duration for fewer connection errors in the first place.
+HTTP_REQUEST_DELAY_SECONDS = float(os.getenv("DRUPAL_HTTP_REQUEST_DELAY_SECONDS", "1"))
+
 
 class Drupal:
     def __init__(
@@ -46,13 +62,93 @@ class Drupal:
         # https://stackoverflow.com/questions/62599036/python-requests-is-slow-and-takes-very-long-to-complete-http-or-https-request
         requests.packages.urllib3.util.connection.HAS_IPV6 = False
 
+        self.session = self._build_session()
         self.important_courses = self._load_important_courses()
-        self.oauth_token = self.get_oauth_token("https://ki-campus.org")
         self.header = {
-            "Authorization": f"Bearer {self.oauth_token}",
             "Accept": "application/vnd.api+json",
             "Accept-Language": "de",
         }
+        credentials_set = (
+            hasattr(env, "DRUPAL_CLIENT_ID")
+            and hasattr(env, "DRUPAL_CLIENT_SECRET")
+            and hasattr(env, "DRUPAL_USERNAME")
+            and hasattr(env, "DRUPAL_PASSWORD")
+        )
+        authenticated = False
+        if credentials_set:
+            oauth_token = self.get_oauth_token("https://ki-campus.org")
+            if oauth_token:
+                self.header["Authorization"] = f"Bearer {oauth_token}"
+                authenticated = True
+
+        if not authenticated:
+            if env.DRUPAL_AUTH_REQUIRED:
+                raise RuntimeError(
+                    "Drupal: DRUPAL_AUTH_REQUIRED is set but no valid credentials/token "
+                    "are available — refusing to run unauthenticated, since that would "
+                    "only see public content and could stale-delete protected courses."
+                )
+            self.logger.info("Drupal: no credentials configured, running without authentication")
+
+    def _build_session(self) -> requests.Session:
+        """Session with connection-pool-level retries for transient network errors
+        and retryable HTTP status codes (429/5xx)."""
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            status=3,
+            backoff_factor=2,  # 0s, 2s, 4s between pool-level retries
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"],
+            respect_retry_after_header=True,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
+
+    def _get(self, url: str) -> requests.Response:
+        """GET with timeout and an outer retry loop on top of the session retries.
+
+        The session-level Retry handles short blips; this loop adds long backoff
+        (HTTP_BACKOFF_SECONDS * 2^n) so a multi-minute outage of ki-campus.org
+        doesn't kill the whole ingest run. Raises the last exception once
+        HTTP_MAX_ATTEMPTS is exhausted.
+        """
+        if HTTP_REQUEST_DELAY_SECONDS > 0:
+            time.sleep(HTTP_REQUEST_DELAY_SECONDS)
+
+        last_exc: Exception | None = None
+        for attempt in range(1, HTTP_MAX_ATTEMPTS + 1):
+            try:
+                return self.session.get(
+                    url,
+                    headers=self.header,
+                    timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
+                )
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                last_exc = exc
+                if attempt == HTTP_MAX_ATTEMPTS:
+                    break
+                wait = HTTP_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                self.logger.warning(
+                    "Drupal request failed (attempt %s/%s), retrying in %ss %s ERROR=%s",
+                    attempt,
+                    HTTP_MAX_ATTEMPTS,
+                    wait,
+                    format_kv(STAGE="DRUPAL", EVENT="HTTP_RETRY", URL=url),
+                    exc,
+                )
+                time.sleep(wait)
+        self.logger.error(
+            "Drupal request failed after %s attempts %s ERROR=%s",
+            HTTP_MAX_ATTEMPTS,
+            format_kv(STAGE="DRUPAL", EVENT="HTTP_GIVE_UP", URL=url),
+            last_exc,
+        )
+        raise last_exc
 
     def _load_important_courses(self) -> set[int]:
         """Load important course IDs from IMPORTANT_COURSES.txt"""
@@ -67,25 +163,35 @@ class Drupal:
             return set()
 
     def get_oauth_token(self, base_url: str):
-        response = requests.post(
-            f"{base_url}/oauth2/token",
-            data={
-                "client_id": env.DRUPAL_CLIENT_ID,
-                "client_secret": env.DRUPAL_CLIENT_SECRET,
-                "username": env.DRUPAL_USERNAME,
-                "password": env.DRUPAL_PASSWORD,
-                "grant_type": env.DRUPAL_GRANT_TYPE,
-            },
-        )
+        try:
+            response = self.session.post(
+                f"{base_url}/oauth2/token",
+                data={
+                    "client_id": env.DRUPAL_CLIENT_ID,
+                    "client_secret": env.DRUPAL_CLIENT_SECRET,
+                    "username": env.DRUPAL_USERNAME,
+                    "password": env.DRUPAL_PASSWORD,
+                    "grant_type": env.DRUPAL_GRANT_TYPE,
+                },
+                timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
+            )
+        except requests.exceptions.RequestException as exc:
+            self.logger.warning(
+                "Drupal OAuth request failed %s ERROR=%s",
+                format_kv(STAGE="DRUPAL", EVENT="OAUTH_FAILED"),
+                exc,
+            )
+            return
 
         if response.status_code != 200:
             self.logger.warning(
-                "Drupal OAuth failed %s",
+                "Drupal OAuth failed %s RESPONSE=%s",
                 format_kv(
                     STAGE="DRUPAL",
                     EVENT="OAUTH_FAILED",
                     STATUS_CODE=response.status_code,
                 ),
+                response.text[:500],
             )
             return
 
@@ -169,11 +275,16 @@ class Drupal:
             if self.run_ctx:
                 self.run_ctx.set_last(url=url)
                 self.run_ctx.checkpoint()
-            response = requests.get(url, headers=self.header)
-            
+            response = self._get(url)
+
             if response.status_code != 200:
-                self.logger.warning(f"API request failed with status {response.status_code} for URL: {url}")
-                return data  # Return whatever data we have so far
+                self.logger.warning(
+                    "API request failed STATUS=%s URL=%s RESPONSE=%s",
+                    response.status_code,
+                    url,
+                    response.text[:500],
+                )
+                return data
             
             result = response.json()
             data.extend(result["data"])
@@ -193,15 +304,21 @@ class Drupal:
 
     def get_page_paragraphs(self, page_id: str, page_type: PageTypes | str):
         if type(page_type) is PageTypes:
-            response = requests.get(
-                f"{DRUPAL_API_BASE_URL}{page_type.value[0]}/{page_id}/field_paragraphs", headers=self.header
-            )
+            url = f"{DRUPAL_API_BASE_URL}{page_type.value[0]}/{page_id}/field_paragraphs"
         elif type(page_type) is str:
-            response = requests.get(
-                f"{DRUPAL_API_BASE_URL}{page_type}/{page_id}/field_content_paragraphs", headers=self.header
-            )
+            url = f"{DRUPAL_API_BASE_URL}{page_type}/{page_id}/field_content_paragraphs"
         else:
             raise Exception('Bad type: "page_type"')
+
+        response = self._get(url)
+        if response.status_code != 200:
+            self.logger.warning(
+                "Drupal paragraphs request failed STATUS=%s URL=%s RESPONSE=%s",
+                response.status_code,
+                url,
+                response.text[:500],
+            )
+            return ""
         paragraphs = response.json()
 
         _result = ""
@@ -218,7 +335,25 @@ class Drupal:
         return _result
 
     def fetch_data(self, url):
-        response = requests.get(url, headers=self.header)
+        """Fetch a single related entity (lecturer, institution, taxonomy term, ...).
+
+        Returns {} on persistent network failure or non-200 status so that a single
+        broken/unreachable related node degrades to a missing attribute instead of
+        failing the whole ingest run (callers all use .get("data")).
+        """
+        try:
+            response = self._get(url)
+        except requests.exceptions.RequestException:
+            # _get already logged the give-up; degrade gracefully.
+            return {}
+        if response.status_code != 200:
+            self.logger.warning(
+                "Drupal related-entity request failed STATUS=%s URL=%s RESPONSE=%s",
+                response.status_code,
+                url,
+                response.text[:500],
+            )
+            return {}
         return response.json()
 
     def process_lecture_books(self, page) -> str:
@@ -234,7 +369,10 @@ class Drupal:
         return books_text
 
     def process_chapters(self, chapter_data) -> str:
-        chapters = chapter_data["data"]["relationships"]["field_lecture_chapters"]["data"]
+        chapters = (
+            (chapter_data.get("data") or {}).get("relationships", {}).get("field_lecture_chapters", {}).get("data")
+            or []
+        )
         chapters_text = ""
 
         for single_chapter in chapters:
@@ -247,7 +385,9 @@ class Drupal:
         return chapters_text
 
     def process_lectures(self, lecture_data) -> str:
-        lectures = lecture_data["data"]["relationships"]["field_lectures"]["data"]
+        lectures = (
+            (lecture_data.get("data") or {}).get("relationships", {}).get("field_lectures", {}).get("data") or []
+        )
         lectures_text = ""
 
         for lecture in lectures:

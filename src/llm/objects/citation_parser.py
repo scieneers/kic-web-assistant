@@ -4,7 +4,32 @@ from urllib.parse import urlparse
 from langfuse.decorators import observe
 from llama_index.core.schema import TextNode
 
-CITATION_TEXT = '[<a href="{url}">{title}</a>]'
+CITATION_TEXT = '[<a href="{url}">{title}</a>]{suffix}'
+
+
+def _format_video_timestamp(seconds: float) -> str:
+    """Seconds → 'M:SS' (or 'H:MM:SS' for videos over an hour)."""
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def citation_suffix(doc: TextNode) -> str:
+    """Deterministic ' (ab Minute M:SS)' suffix for video-transcript sources.
+
+    The citation link always points at the KI-Campus module page, never the
+    external video — so the exact video position can't be conveyed via the
+    link itself. Attaching it here (at render time) guarantees it always
+    appears, rather than relying on an LLM instruction to mention it in
+    prose, which smaller models don't follow reliably.
+    """
+    start = doc.metadata.get("start_seconds")
+    if isinstance(start, (int, float)) and start >= 0:
+        return f" (ab Minute {_format_video_timestamp(start)})"
+    return ""
 
 
 def _get_display_title(doc: TextNode) -> str:
@@ -85,11 +110,12 @@ class CitationParser:
             idx = i - 1
             try:
                 doc = source_documents[idx]
-                if doc.metadata.get("url") not in seen_urls:
+                url = doc.metadata.get("url") or ""
+                if url not in seen_urls:
                     title = _get_display_title(doc)
-                    replacement_text = CITATION_TEXT.format(url=doc.metadata.get("url"), title=title)
-                    seen_urls.add(doc.metadata.get("url"))
-                    answer = re.sub(rf"[, ]*\[doc{i}\]", rf"{replacement_text}", answer)
+                    replacement_text = CITATION_TEXT.format(url=url, title=title, suffix=citation_suffix(doc))
+                    seen_urls.add(url)
+                    answer = re.sub(rf"[, ]*\[doc{i}\]", lambda m: replacement_text, answer)
                 else:
                     answer = re.sub(rf"[, ]*\[doc{i}\]", "", answer)
             except IndexError:

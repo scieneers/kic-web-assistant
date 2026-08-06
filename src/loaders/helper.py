@@ -37,6 +37,45 @@ def convert_vtt_to_text(vtt_buffer: StringIO) -> str:
     return transcript
 
 
+def _vtt_timestamp_to_seconds(timestamp: str) -> float:
+    """'HH:MM:SS.mmm' (or 'MM:SS.mmm') → seconds."""
+    parts = timestamp.split(":")
+    parts = ["0"] * (3 - len(parts)) + parts
+    hours, minutes, seconds = parts
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def convert_vtt_to_segments(vtt_buffer: StringIO) -> list[dict]:
+    """Parse WebVTT into timed segments: [{"start_seconds": float, "text": str}].
+
+    Companion to convert_vtt_to_text that PRESERVES the cue start times —
+    Transcript documents carry them per chunk so citations can deep-link into
+    the video ("#t=..."). Consecutive duplicate caption lines are dropped the
+    same way as in the flat conversion.
+    """
+    vtt = webvtt.read_buffer(vtt_buffer)
+    segments: list[dict] = []
+    previous_line = None
+    last_start = 0.0
+    for cue in vtt:
+        kept_lines = []
+        for line in cue.text.strip().splitlines():
+            line = line.strip()
+            if not line or line == previous_line:
+                continue
+            kept_lines.append(line)
+            previous_line = line
+        if not kept_lines:
+            continue
+        try:
+            start = _vtt_timestamp_to_seconds(cue.start)
+            last_start = start
+        except (ValueError, AttributeError):
+            start = last_start
+        segments.append({"start_seconds": start, "text": " ".join(kept_lines)})
+    return segments
+
+
 def process_html_summaries(text: str) -> str:
     """remove html tags from summaries, beautify poorly formatted texts"""
     if "<" not in text:
@@ -308,6 +347,53 @@ def build_nodes_from_documents_hierarchical(
     return nodes
 
 
+def _iter_transcript_nodes(doc, *, chunk_size_tokens: int) -> Iterable[TextNode]:
+    """Cue-aware chunking for Transcript documents.
+
+    Chunk boundaries fall on cue boundaries (no mid-sentence overlap needed —
+    cues are already speech-aligned), and every chunk carries the
+    ``start_seconds`` of its first cue so citations can deep-link into the
+    video. The bulky ``segments`` list is dropped from the chunk metadata —
+    only the per-chunk start time survives into the index.
+    """
+    md = getattr(doc, "metadata", None) or {}
+    segments = md.get("segments") or []
+
+    chunks: list[tuple[str, float]] = []  # (text, start_seconds)
+    current_texts: list[str] = []
+    current_start = 0.0
+    for segment in segments:
+        text = (segment.get("text") or "").strip()
+        if not text:
+            continue
+        if not current_texts:
+            current_start = segment.get("start_seconds") or 0.0
+        candidate = " ".join(current_texts + [text])
+        if current_texts and count_tokens(candidate) > chunk_size_tokens:
+            chunks.append((" ".join(current_texts), current_start))
+            current_texts = [text]
+            current_start = segment.get("start_seconds") or 0.0
+        else:
+            current_texts.append(text)
+    if current_texts:
+        chunks.append((" ".join(current_texts), current_start))
+
+    base_md = {k: v for k, v in md.items() if k != "segments"}
+    chunk_count = len(chunks)
+    for idx, (chunk_text, start_seconds) in enumerate(chunks):
+        node_md = dict(base_md)
+        node_md.update(
+            {
+                "chunk_index": idx,
+                "chunk_count": chunk_count,
+                "chunk_method": "transcript_cues_v1",
+                "chunk_size_tokens": chunk_size_tokens,
+                "start_seconds": round(start_seconds, 1),
+            }
+        )
+        yield TextNode(text=normalize_text_for_rag(chunk_text), metadata=node_md)
+
+
 def iter_nodes_from_document_hierarchical(
     doc,
     *,
@@ -320,10 +406,19 @@ def iter_nodes_from_document_hierarchical(
     This is the bounded-memory alternative to `build_nodes_from_documents_hierarchical`.
     It keeps payload metadata consistent and is designed for huge module documents
     (PDFs, books).
+
+    Transcript documents with timed segments take a cue-aware path instead of
+    the generic paragraph/sentence chunking (see _iter_transcript_nodes).
     """
 
     raw_text = getattr(doc, "text", None) or ""
     md = getattr(doc, "metadata", None) or {}
+
+    from src.vectordb.doc_types import TRANSCRIPT
+
+    if md.get("type") == TRANSCRIPT and md.get("segments"):
+        yield from _iter_transcript_nodes(doc, chunk_size_tokens=chunk_size_tokens)
+        return
 
     chunks = chunk_text_hierarchical(
         raw_text,

@@ -1,6 +1,7 @@
 from typing import Annotated
 
 import json
+import logging
 import queue
 import threading
 import uuid
@@ -21,6 +22,27 @@ from src.llm.objects.LLMs import Models
 from src.vectordb.azure_search import VectorDBAzureSearch
 from src.llm.streaming import TokenCallbackContext
 
+# Set DEBUG level for all src.llm.* loggers when DEBUG_MODE is enabled.
+# Third-party libraries stay at WARNING to avoid noise.
+if env.DEBUG_MODE:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s - %(levelname)-8s - %(name)s - %(message)s",
+    )
+    logging.getLogger("src.llm").setLevel(logging.DEBUG)
+    # The langfuse SDK only logs actual send failures at WARNING/ERROR by
+    # default; bump to DEBUG under DEBUG_MODE so its own batch-upload /
+    # retry traces (task manager, ingestion consumer) become visible too —
+    # that's the SDK's own view of whether events are being sent at all.
+    logging.getLogger("langfuse").setLevel(logging.DEBUG)
+else:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s - %(levelname)-8s - %(name)s - %(message)s",
+    )
+
+logger = logging.getLogger(__name__)
+
 # Lazy singletons - initialized on first request to avoid blocking app startup
 _vector_db: VectorDBAzureSearch | None = None
 _assistant: KICampusAssistant | None = None
@@ -36,7 +58,14 @@ def get_vector_db() -> VectorDBAzureSearch:
 def get_assistant() -> KICampusAssistant:
     global _assistant
     if _assistant is None:
-        _assistant = KICampusAssistant()
+        # Reranker backend + relevance cutoff are deployment configuration
+        # (env vars RERANKER_TYPE / MIN_RERANKER_SCORE), not per-request options.
+        _assistant = KICampusAssistant(
+            reranker_type=env.RERANKER_TYPE,
+            min_reranker_score=env.MIN_RERANKER_SCORE,
+            enable_socratic=env.ENABLE_SOCRATIC,
+            enable_socratic_v2=env.ENABLE_SOCRATIC_V2,
+        )
     return _assistant
 
 
@@ -61,6 +90,21 @@ async def api_key_auth(api_key: Annotated[str, Depends(api_key_header)]):
 
     if api_key not in ALLOWED_API_KEYS:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
+
+
+@app.on_event("startup")
+def check_langfuse_connectivity() -> None:
+    """One-off diagnostic at boot: verify the resolved Langfuse credentials
+    can actually reach LANGFUSE_HOST and authenticate. This is the one gap
+    the SDK's own logging doesn't cover — an invalid/rotated key fails inside
+    the background upload thread and is dropped without ever logging
+    anything (see langfuse's ingestion_consumer error handling), so traces
+    can silently never arrive even though the app runs fine otherwise."""
+    try:
+        ok = Langfuse().auth_check()
+        logger.warning("Langfuse auth_check succeeded (host=%s): %s", env.LANGFUSE_HOST, ok)
+    except Exception:
+        logger.error("Langfuse auth_check FAILED (host=%s) — traces will not reach Langfuse", env.LANGFUSE_HOST, exc_info=True)
 
 
 # APIs
@@ -116,20 +160,43 @@ class ChatRequest(BaseModel):
         description="The course identifier to restrict the search on.",
         examples=[79, 102, 91],
     )
-    module_id: int | None = Field(
+    module_id: int | list[int] | None = Field(
         default=None,
-        description="The course module / topic / unit to restrict the search on. course_id is required when module_id is set.",
-        examples=[1, 102, 33],
+        description="The course module / topic / unit(s) to restrict the search on: "
+        "omit or pass an empty list for no module filter, a single ID, or a list of "
+        "IDs. All given module IDs are assumed to belong to course_id. course_id is "
+        "required whenever module_id is set.",
+        examples=[1, [1, 33, 102]],
     )
     model: Models = Field(
-        default=Models.AZURE_FALLBACK,
+        default=Models.GEMMA4_31B,
         description="The LLM to use for the conversation.",
-        examples=[Models.AZURE_FALLBACK, Models.GEMMA4_31B],
+        examples=[Models.GEMMA4_31B, Models.AZURE_FALLBACK],
+    )
+    start_socratic: bool = Field(
+        default=False,
+        description="Explicitly enter the socratic learning mode with this message. "
+        "Only takes effect if no socratic session is active and ENABLE_SOCRATIC is set.",
+    )
+    start_socratic_v2: bool = Field(
+        default=False,
+        description="Explicitly enter the redesigned socratic learning mode (Lernmodus v2) "
+        "with this message. Only takes effect if no socratic session is active and "
+        "ENABLE_SOCRATIC_V2 is set. Requires a course/module scope to start.",
     )
 
     def get_user_query(self) -> str:
         """Extract the query string from user_query SerializableChatMessage."""
         return self.user_query.content
+
+    @field_validator("module_id", mode="after")
+    @classmethod
+    def normalize_module_id(cls, module_id: int | list[int] | None) -> int | list[int] | None:
+        """An empty list means the same as "not set" — normalize so the rest
+        of the code only has to distinguish "given" from "absent"."""
+        if isinstance(module_id, list) and len(module_id) == 0:
+            return None
+        return module_id
 
     @model_validator(mode="after")
     def validate_module_id(self):
@@ -139,10 +206,12 @@ class ChatRequest(BaseModel):
                 detail="module_id is required when course_id is set.",
             )
         if self.module_id is not None:
-            if not get_vector_db().check_if_module_exists(self.module_id):
+            ids = self.module_id if isinstance(self.module_id, list) else [self.module_id]
+            missing = [m for m in ids if not get_vector_db().check_if_module_exists(m)]
+            if missing:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"no module found with the given id: {self.module_id}.",
+                    detail=f"no module found with the given id(s): {missing}.",
                 )
         return self
 
@@ -183,6 +252,8 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             course_id=chat_request.course_id,
             module_id=chat_request.module_id,  # Can be None
             thread_id=chat_request.thread_id,
+            start_socratic=chat_request.start_socratic,
+            start_socratic_v2=chat_request.start_socratic_v2,
         )
     else:
         # General chat (Drupal content)
@@ -190,10 +261,13 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             query=chat_request.get_user_query(),
             model=chat_request.model,
             thread_id=chat_request.thread_id,
+            start_socratic=chat_request.start_socratic,
+            start_socratic_v2=chat_request.start_socratic_v2,
         )
 
     trace_id = langfuse_context.get_current_trace_id()
     if not trace_id:
+        logger.warning("No Langfuse trace_id available for this request — tracing is not active.")
         trace_id = "TRACING_UNAVAILABLE"
     
     # llm_response is SerializableChatMessage, extract content string
@@ -243,12 +317,16 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                         course_id=chat_request.course_id,
                         module_id=chat_request.module_id,
                         thread_id=thread_id,
+                        start_socratic=chat_request.start_socratic,
+                        start_socratic_v2=chat_request.start_socratic_v2,
                     )
                 else:
                     llm_response, _thread_id = get_assistant().chat(
                         query=chat_request.get_user_query(),
                         model=chat_request.model,
                         thread_id=thread_id,
+                        start_socratic=chat_request.start_socratic,
+                        start_socratic_v2=chat_request.start_socratic_v2,
                     )
 
             q.put(
@@ -260,6 +338,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                 }
             )
         except Exception as e:
+            logger.exception("chat_stream worker failed (trace_id=%s, thread_id=%s)", trace_id, thread_id)
             q.put({"type": "error", "message": str(e), "response_id": trace_id, "thread_id": thread_id})
         finally:
             q.put(DONE)
@@ -278,6 +357,19 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
             yield (json.dumps(item, ensure_ascii=False) + "\n").encode("utf-8")
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+class ChatHistoryResponse(BaseModel):
+    thread_id: str = Field(description="Die Thread-ID der Konversation.")
+    messages: list[SerializableChatMessage] = Field(description="Alle gespeicherten Nachrichten der Konversation.")
+
+
+@app.get("/api/chat/history/{thread_id}", dependencies=[Depends(api_key_auth)])
+def get_chat_history(thread_id: str) -> ChatHistoryResponse:
+    """Gibt den gespeicherten Gesprächsverlauf zurück (z.B. nach Page-Reload in Moodle).
+    Gibt eine leere Liste zurück wenn die Session abgelaufen oder unbekannt ist."""
+    messages = get_assistant().get_chat_history(thread_id)
+    return ChatHistoryResponse(thread_id=thread_id, messages=messages)
 
 
 class FeedbackRequest(BaseModel):
@@ -299,9 +391,13 @@ class FeedbackRequest(BaseModel):
 @app.post("/api/feedback", dependencies=[Depends(api_key_auth)])
 def track_feedback(feedback_request: FeedbackRequest) -> None:
     """Update feedback in langfuse logs."""
-    Langfuse().score(
-        trace_id=feedback_request.response_id,
-        name="user-explicit-feedback",
-        value=feedback_request.score,
-        comment=feedback_request.feedback,
-    )
+    try:
+        Langfuse().score(
+            trace_id=feedback_request.response_id,
+            name="user-explicit-feedback",
+            value=feedback_request.score,
+            comment=feedback_request.feedback,
+        )
+    except Exception:
+        logger.exception("Failed to send feedback score to Langfuse (response_id=%s)", feedback_request.response_id)
+        raise

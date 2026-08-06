@@ -1,41 +1,58 @@
+# KI-Campus Web Assistant
+
+KI-gestützter Chat-Assistent für [ki-campus.org](https://ki-campus.org): beantwortet Fragen zu Plattform- und Kursinhalten per RAG (Azure AI Search + LLM via GWDG/Azure), mit Streaming-API, Chat-Persistenz und sokratischem Lernmodus.
+
+**Dokumentation:** [ARCHITECTURE.md](documentation/ARCHITECTURE.md) (Systemüberblick) · [SCRIPTS.md](documentation/SCRIPTS.md) (alle Kommandos & Ops-Skripte) · [CHAT_PERSISTENCE.md](documentation/CHAT_PERSISTENCE.md) (API-Schnittstelle für Frontends)
+
 # Dependencies
 - python 3.11
-- poetry 1.7.1 & `poetry install`
+- [uv](https://docs.astral.sh/uv/) & `uv sync`
 - task: `brew install go-task`
 - install pre-commit hooks: [`pre-commit`](https://github.com/pre-commit/pre-commit) `install`
 
 # Local development
 
+## Konfiguration
+Alle Umgebungsvariablen sind in [`src/env.py`](src/env.py) definiert und dokumentiert (Priorität: Env > `.env` > Azure Key Vault > Defaults); eine kommentierte Übersicht steht in [ARCHITECTURE.md, Abschnitt 14](documentation/ARCHITECTURE.md#14-konfiguration--umgebungsvariablen).
+
 ## VectorDB: Azure AI Search
 The vector store is [Azure AI Search](https://learn.microsoft.com/azure/search/). Auth is keyless via `DefaultAzureCredential`, so for local development run `az login` and make sure your IP is in the service's `allowed_ip_ranges`.
 
-Set the following environment variables:
+Minimal environment variables:
 - `AZURE_SEARCH_ENDPOINT`
 - `AZURE_SEARCH_INDEX`
 
-## Run frontent: streamlit
-Go into the src/frontend folder and run:
-`streamlit run frontend.py`
+## Backend (FastAPI) starten
+```bash
+uv run uvicorn src.api.rest:app --port 8000
+```
 
-## Docker
+## Test-Frontend (Streamlit) starten
+```bash
+uv run streamlit run src/frontend/frontend.py
+```
+Das Streamlit-Frontend ist ein reines Test-Frontend (optional passwortgeschützt via `FRONTEND_PASSWORD`); produktive Oberflächen sind die Moodle-/Drupal-Integrationen.
 
-## How to build and run Image
-`docker login` <br />
-`docker build -t fatemeh001/kicampus_chatbot:0.0.1 .` <br />
-`docker images` <br />
-`docker run -p 8501 fatemeh001/kicampus_chatbot:0.0.1` <br />
+## Tests
+```bash
+uv run pytest -m "not integration"   # schnell, ohne Credentials/Netz
+uv run pytest                        # inkl. Integrationstests (braucht az login + Env)
+```
 
-`docker login kicacrdev.azurecr.io` <br />
-`docker tag fatemeh001/kicamp_chatbot:0.0.1 kicacrdev.azurecr.io/fatemeh001/kicampus_chatbot:0.0.1` <br />
-`docker push kicacrdev.azurecr.io/fatemeh001/kicampus_chatbot:0.0.1` <br />
-
-## To run docker images locally, mount your credentials:
-`docker run -it --rm -p 80:80 -v ~/.azure:/home/appuser/.azure kicacrdev.azurecr.io/rest-api:latest`
-
-### Build and push Docker images locally
-Before pushing the docker image you need to be authenticated docker via `gcloud auth configure-docker europe-west3-docker.pkg.dev`.
-
-If you're working with a mac that is using an arm64 architecture, you specifically need to build a docker image based on an [amd architecture for cloud run](https://stackoverflow.com/questions/66920645/exec-format-error-when-running-containers-build-with-apple-m1-chip-arm-based).
+## Docker / Deployment
+Build & Deploy laufen über das [Taskfile](Taskfile.yml) gegen die Azure Container Registry:
+```bash
+task build-api              # REST API Image
+task build-frontend         # Streamlit Frontend
+task build-loader           # Data Loader
+task push-latest-images     # Push zur Azure Container Registry
+task deploy-loader ENV=dev  # Deploy zu Azure Functions
+```
+Lokal ein Image mit Azure-Credentials laufen lassen:
+```bash
+docker run -it --rm -p 80:80 -v ~/.azure:/home/appuser/.azure kicacrdev.azurecr.io/rest-api:latest
+```
+Hinweis für Apple-Silicon-Macs: Images für die Cloud mit `--platform linux/amd64` bauen.
 
 # Data Extraction
 
