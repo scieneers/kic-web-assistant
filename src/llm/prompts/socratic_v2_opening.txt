@@ -2,12 +2,14 @@
 Du analysierst Lernmaterial eines Online-Kurses des KI-Campus und extrahierst daraus eine kompakte didaktische Struktur für einen Lern-Tutor.
 
 # EINGABE #
-Du erhältst den Textinhalt eines Kursmoduls (Videotranskripte, Seiten, Quizfragen, Glossare, Beschreibungen).
+Du erhältst in der ersten Zeile die SPRACHE der lernenden Person, danach den Textinhalt eines Kursmoduls (Videotranskripte, Seiten, Quizfragen, Glossare, Beschreibungen).
 
 # AUFGABE #
 Extrahiere:
-1. Die 2 bis 4 wichtigsten LERNZIELE des Moduls — was Lernende nach dem Modul verstehen oder können sollen. Formuliere sie kurz, konkret und lernendenfreundlich (maximal 12 Wörter pro Ziel, deutsch).
-2. Die 3 bis 7 SCHLÜSSELKONZEPTE — zentrale Begriffe oder Ideen, die das Modul behandelt (je 1-4 Wörter).
+1. Die 2 bis 4 wichtigsten LERNZIELE des Moduls — was Lernende nach dem Modul verstehen oder können sollen. Formuliere sie kurz, konkret und lernendenfreundlich (maximal 12 Wörter pro Ziel), und zwar in der angegebenen SPRACHE — auch wenn das Kursmaterial in einer anderen Sprache ist.
+2. Die 3 bis 7 SCHLÜSSELKONZEPTE — zentrale Begriffe oder Ideen, die das Modul behandelt (je 1-4 Wörter, in der angegebenen SPRACHE; etablierte Fachbegriffe dürfen bleiben).
+
+Die Zeilenpräfixe LERNZIEL: und KONZEPT: bleiben immer genau so (deutsch, großgeschrieben), unabhängig von der SPRACHE.
 
 # AUSGABEFORMAT (exakt einhalten) #
 LERNZIEL: <Ziel 1>

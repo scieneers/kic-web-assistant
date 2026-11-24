@@ -8,6 +8,10 @@ First step of the v2 workflow ("Lernmodus v2"):
 3. Emit a deterministic welcome message that names the objectives and asks the
    learner what to work on and what they already know.
 
+Session language (v2_language) is resolved here first — from the conversation
+so far, else the frontend's ui_language hint, else German — and drives the
+objective extraction and the welcome text (see socratic_v2_language.py).
+
 Multi-module scope: module_id may be a list when the learner selects several
 modules of one course. ALL selected modules are treated equally — objectives,
 key concepts, the welcome scope title and the quiz pool are built from the
@@ -22,7 +26,14 @@ from langfuse.decorators import langfuse_context, observe
 
 from src.llm.objects.LLMs import LLM, Models
 from src.llm.prompts.prompt_loader import load_prompt
+from src.llm.objects.question_answerer import translate_fallback_text
 from src.llm.state.models import GraphState
+from src.llm.state.socratic_v2_language import (
+    DEFAULT_LANGUAGE,
+    canonical_language,
+    localize,
+    resolve_opening_language,
+)
 from src.llm.state.socratic_v2_routing import (
     GRADEABLE_QUIZ_KINDS,
     initial_learner_model,
@@ -46,29 +57,33 @@ _llm = LLM()
 # others out of the extraction entirely.
 MAX_EXTRACTION_CHARS = 60_000
 
-NO_SCOPE_MESSAGE = (
-    "Um den Lernmodus zu starten, wähle bitte zuerst einen Kurs oder ein Modul aus — "
-    "dann weiß ich, mit welchen Inhalten wir arbeiten."
-)
-NO_CONTENT_MESSAGE = (
-    "Zu diesem Modul habe ich leider keine Inhalte gefunden, mit denen wir im Lernmodus "
-    "arbeiten können. Wähle gern ein anderes Modul aus."
-)
+# German defaults; the node localizes them into the session language.
+NO_SCOPE_MESSAGE = localize("no_scope", DEFAULT_LANGUAGE)
+NO_CONTENT_MESSAGE = localize("no_content", DEFAULT_LANGUAGE)
+
+# Languages with hand-authored fixed texts — anything else is composed in
+# German and translated as a whole (one MINI call, see _compose_welcome).
+_AUTHORED_LANGUAGES = ("German", "English")
 
 
-def _compose_welcome(scope_title: str | None, objectives: list[str]) -> str:
-    """Deterministic German welcome — only the objectives inside come from the LLM."""
-    title_part = f" Wir arbeiten mit **{scope_title}**." if scope_title else ""
-    lines = [f"🎓 Willkommen im Lernmodus!{title_part}", "", "Darum geht es hier:"]
+def _compose_welcome(scope_title: str | None, objectives: list[str], language: str | None = None) -> str:
+    """Deterministic welcome in the session language — only the objectives
+    inside come from the LLM (already extracted in the session language)."""
+    lang = canonical_language(language)
+    text_lang = lang if lang in _AUTHORED_LANGUAGES else DEFAULT_LANGUAGE
+    title_part = localize("welcome_scope", text_lang, scope_title=scope_title) if scope_title else ""
+    lines = [localize("welcome_title", text_lang, title_part=title_part), "", localize("welcome_objectives", text_lang)]
     lines += [f"- {objective}" for objective in objectives]
     lines += [
         "",
-        "Womit möchtest du anfangen — eines dieser Themen oder eine eigene Frage aus dem Modul? "
-        "Erzähl mir gern auch kurz, was du dazu schon weißt.",
+        localize("welcome_question", text_lang),
         "",
-        "_(Du kannst den Lernmodus jederzeit beenden, z. B. mit „stopp“.)_",
+        localize("welcome_exit_hint", text_lang),
     ]
-    return "\n".join(lines)
+    welcome = "\n".join(lines)
+    if text_lang != lang:
+        welcome = translate_fallback_text(welcome, lang)
+    return welcome
 
 
 def _cap_content_per_module(content_nodes: list, max_chars: int) -> str:
@@ -131,9 +146,18 @@ def socratic_v2_opening(state: GraphState) -> dict:
     course_id = runtime_config.get("course_id")
     module_id = runtime_config.get("module_id")
 
+    # Session language: the conversation so far beats the (frontend-generated,
+    # German) start signal text; ui_language is the hint for a fresh chat.
+    language = resolve_opening_language(
+        user_query=state.get("user_query") or "",
+        chat_history=state.get("chat_history") or [],
+        ui_language=runtime_config.get("ui_language"),
+        started_via_flag=bool(runtime_config.get("start_socratic_v2")),
+    )
+
     if not course_id and not module_id:
         logger.debug("socratic_v2_opening: no course/module scope — not starting a session")
-        return {**reset_socratic_v2_state(), "answer": NO_SCOPE_MESSAGE, "citations_markdown": None}
+        return {**reset_socratic_v2_state(), "answer": localize("no_scope", language), "citations_markdown": None}
 
     # Multi-module scope: all selected modules are worked on equally. The
     # retriever accepts the whole list, so content/objectives/quiz span them.
@@ -145,7 +169,7 @@ def socratic_v2_opening(state: GraphState) -> dict:
         logger.debug(
             "socratic_v2_opening: no content in scope (course_id=%s, module_id=%s)", course_id, module_id
         )
-        return {**reset_socratic_v2_state(), "answer": NO_CONTENT_MESSAGE, "citations_markdown": None}
+        return {**reset_socratic_v2_state(), "answer": localize("no_content", language), "citations_markdown": None}
 
     # Scope title spans every selected module (dedup, keep order); cap the
     # length so the welcome line stays readable when many modules are picked.
@@ -167,7 +191,7 @@ def socratic_v2_opening(state: GraphState) -> dict:
     # model, because a large prompt through the GWDG path would routinely trip
     # the 7s timeout and mark GWDG unavailable for all other requests.
     response = _llm.chat(
-        query=content,
+        query=f"SPRACHE: {language}\n\n{content}",
         chat_history=[],
         model=Models.MINI,
         system_prompt=SOCRATIC_V2_OPENING_PROMPT,
@@ -177,7 +201,11 @@ def socratic_v2_opening(state: GraphState) -> dict:
     # Fallback if extraction fails: session still starts, just without a
     # pre-structured objective list.
     if not objectives:
-        objectives = [f"Die Inhalte von „{scope_title}“ verstehen" if scope_title else "Die Inhalte dieses Moduls verstehen"]
+        objectives = [
+            localize("objective_fallback_titled", language, scope_title=scope_title)
+            if scope_title
+            else localize("objective_fallback", language)
+        ]
 
     # Real course quiz items across all selected modules (structured QuizItem
     # docs with known solutions) → enable the deterministic QUIZ move. Best-
@@ -201,6 +229,7 @@ def socratic_v2_opening(state: GraphState) -> dict:
             "n_concepts": len(concepts),
             "n_quiz_items": len(quiz_items),
             "scope_title": scope_title,
+            "language": language,
         }
     )
 
@@ -219,6 +248,8 @@ def socratic_v2_opening(state: GraphState) -> dict:
         "v2_pending_quiz": None,
         "v2_last_policy_move": None,
         "v2_last_move": None,
-        "answer": _compose_welcome(scope_title, objectives),
+        "v2_language": language,
+        "v2_translate_last": False,
+        "answer": _compose_welcome(scope_title, objectives, language),
         "citations_markdown": None,
     }

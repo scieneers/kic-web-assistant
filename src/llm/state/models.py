@@ -22,7 +22,7 @@ class GraphState(TypedDict, total=False):
     mode: Optional[Scenario]
     
     # runtime configuration (from API/Frontend)
-    runtime_config: Dict[str, Any]  # model, course_id, module_id, thread_id
+    runtime_config: Dict[str, Any]  # model, course_id, module_id, thread_id, start flags, ui_language
     
     # system configuration (hardcoded defaults, not exposed to frontend)
     system_config: Dict[str, Any]  # rerank_top_n and retrieval_k
@@ -71,7 +71,14 @@ class GraphState(TypedDict, total=False):
     # QUIZ move: real course quiz items (structured QuizItem payloads with the
     # known solutions), loaded once at opening; answers graded deterministically.
     v2_quiz_items: Optional[List[Dict[str, Any]]]  # [{...payload, "asked": bool}]
-    v2_pending_quiz: Optional[Dict[str, Any]]  # question currently posed: {question, kind, concept, options: [{letter, text, correct}]}
+    v2_pending_quiz: Optional[Dict[str, Any]]  # question currently posed: {question, kind, concept, options: [{letter, text, correct}], unrecognized_count}
+    # Session language (English name, e.g. "German", "English") — resolved at
+    # opening, re-detected on substantial learner messages, injected into every
+    # v2 generation and used for the fixed texts (see socratic_v2_language.py).
+    v2_language: Optional[str]
+    # Per-turn flag: the learner asked to translate / switch language → the
+    # translate node re-renders the previous tutor message 1:1.
+    v2_translate_last: bool
     # Move tracking — write-only for the app (analysis/benchmark reads it via
     # get_state): what the policy wanted vs. what ran after the guards. EXIT
     # and CONSOLIDATION set these on top of the state reset so the final

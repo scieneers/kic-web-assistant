@@ -8,7 +8,13 @@ from langfuse.decorators import langfuse_context, observe
 
 from src.llm.state.models import GraphState
 from src.llm.state.socratic_routing import reset_socratic_state
-from src.llm.state.socratic_v2_routing import V2_EXIT_KEYWORDS, V2_EXIT_MESSAGE, reset_socratic_v2_state
+from src.llm.state.socratic_v2_language import (
+    classify_language_request,
+    last_assistant_message,
+    localize,
+    looks_like_language_request,
+)
+from src.llm.state.socratic_v2_routing import V2_EXIT_KEYWORDS, reset_socratic_v2_state
 
 logger = logging.getLogger(__name__)
 
@@ -155,15 +161,35 @@ def contextualize_and_route(state: GraphState) -> dict:
         # Socratic v2 session is active — deterministic keyword exit works as an
         # escape hatch; softer exit intents ("sag mir einfach die Antwort") are
         # handled by the v2 policy inside the core node itself.
-        if response_clean in V2_EXIT_KEYWORDS:
+        session_language = state.get("v2_language")
+        if response_clean.rstrip(".! ") in V2_EXIT_KEYWORDS:
             logger.debug("Socratic v2 exit keyword detected — resetting v2 state → mode=exit_complete")
             _trace_routing(mode="exit_complete", socratic_v2_exit=True)
             return {
                 **reset_socratic_v2_state(),
                 "mode": "exit_complete",
-                "answer": V2_EXIT_MESSAGE,
+                "answer": localize("exit", session_language),
             }
 
+        # Translation / language-switch request ("auf Englisch bitte",
+        # "translate that") → translate the previous tutor message 1:1 and
+        # continue the session in that language. Regex prefilter first, so
+        # the confirming MINI call only runs for plausible candidates.
+        if looks_like_language_request(user_query) and last_assistant_message(chat_history):
+            target_language = classify_language_request(user_query, chat_history)
+            if target_language:
+                logger.debug("Socratic v2 translation request → target=%s", target_language)
+                _trace_routing(mode="socratic_v2", socratic_v2_translate=True, target_language=target_language)
+                return {
+                    "mode": "socratic_v2",
+                    "contextualized_query": None,
+                    "v2_language": target_language,
+                    "v2_translate_last": True,
+                }
+
+        # The session language for this turn is detected inside the v2 graph
+        # (detect_language_socratic_v2, parallel to retrieval) — same logic
+        # as the normal chat path.
         logger.debug("Socratic v2 continuing: phase=%s", socratic_v2_phase)
 
         # Only the core loop retrieves course material and needs a

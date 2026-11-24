@@ -21,6 +21,7 @@ def client():
     """TestClient with mocked singletons and a valid API key in env."""
     mock_assistant = MagicMock()
     mock_assistant.get_chat_history.return_value = []
+    mock_assistant.is_learning_mode_active.return_value = False
     mock_assistant.chat.return_value = (
         SerializableChatMessage(role=MessageRole.ASSISTANT, content="Antwort"),
         "thread-abc",
@@ -130,6 +131,15 @@ class TestChatHistoryEndpoint:
         )
         assert response.status_code == 200
         assert response.json()["messages"] == []
+        assert response.json()["learning_mode_active"] is False
+
+    def test_history_reports_active_learning_mode(self, client):
+        # After a page reload the frontend sets its mode toggle from this.
+        c, mock_assistant = client
+        mock_assistant.is_learning_mode_active.return_value = True
+        response = c.get("/api/chat/history/thread-123", headers={"Api-Key": VALID_API_KEY})
+        assert response.json()["learning_mode_active"] is True
+        mock_assistant.is_learning_mode_active.assert_called_once_with("thread-123")
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +184,28 @@ class TestChatEndpoint:
         )
         call_kwargs = mock_assistant.chat.call_args
         assert call_kwargs.kwargs.get("thread_id") == "my-thread"
+
+    def test_learning_mode_status_in_response(self, client):
+        # Toggle bug (testing feedback 2026-11): the frontend can only keep its
+        # mode toggle in sync if the backend reports the real session state.
+        c, mock_assistant = client
+        mock_assistant.is_learning_mode_active.return_value = True
+        response = c.post(
+            "/api/chat",
+            json={"user_query": {"role": "user", "content": "Frage"}},
+            headers={"Api-Key": VALID_API_KEY},
+        )
+        assert response.json()["learning_mode_active"] is True
+        mock_assistant.is_learning_mode_active.assert_called_once_with("thread-abc")
+
+    def test_ui_language_passed_through(self, client):
+        c, mock_assistant = client
+        c.post(
+            "/api/chat",
+            json={"user_query": {"role": "user", "content": "Frage"}, "ui_language": "en-US"},
+            headers={"Api-Key": VALID_API_KEY},
+        )
+        assert mock_assistant.chat.call_args.kwargs.get("ui_language") == "en-US"
 
 
 class TestChatEndpointModuleIdList:
@@ -302,6 +334,7 @@ class TestChatStreamEndpoint:
         token_events = [e for e in events[1:-1] if e["type"] == "token"]
         assert [e["token"] for e in token_events] == ["Hallo ", "Welt"]
         assert events[-1]["message"] == "Hallo Welt"
+        assert events[-1]["learning_mode_active"] is False
 
     def test_meta_and_final_share_thread_and_response_id(self, client):
         c, mock_assistant = client

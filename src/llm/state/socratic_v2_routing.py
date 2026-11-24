@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.objects.LLMs import LLM, Models
 from src.llm.prompts.prompt_loader import load_prompt
+from src.llm.state.socratic_v2_language import DEFAULT_LANGUAGE, is_german, localize
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,22 @@ POLICY_PROMPT = load_prompt("socratic_v2_policy")
 # Same deterministic escape hatch as the v1 keyword exit in contextualize.py —
 # works even if the policy LLM misbehaves. The policy additionally handles
 # softer exit intents ("lass gut sein", "sag mir einfach die Antwort") itself.
-V2_EXIT_KEYWORDS = ["exit", "quit", "stop", "stopp", "beende den lernmodus", "ich möchte aufhören"]
+V2_EXIT_KEYWORDS = [
+    "exit",
+    "quit",
+    "stop",
+    "stopp",
+    "beende den lernmodus",  # pre-rename wording, still accepted
+    "beende den tutor",
+    "beende den sokratischen tutor",
+    "tutor beenden",
+    "end tutor",
+    "stop tutor",
+    "ich möchte aufhören",
+]
 
-V2_EXIT_MESSAGE = "Du hast den Lernmodus verlassen. Wenn du weitere Fragen hast, stehe ich dir gerne zur Verfügung!"
+# German default; the router localizes it with localize("exit", v2_language).
+V2_EXIT_MESSAGE = localize("exit", DEFAULT_LANGUAGE)
 
 V2_MOVES = {
     "FRAGE",
@@ -74,6 +88,8 @@ def reset_socratic_v2_state() -> Dict[str, Any]:
         "v2_pending_quiz": None,
         "v2_last_policy_move": None,
         "v2_last_move": None,
+        "v2_language": None,
+        "v2_translate_last": False,
     }
 
 
@@ -219,8 +235,50 @@ LETZTE ANTWORT DER LERNENDEN PERSON: {user_query}"""
 GRADEABLE_QUIZ_KINDS = ("multichoice", "singlechoice", "truefalse")
 
 # German synonyms for grading free-text answers to Wahr/Falsch questions.
-_TRUTHY = {"wahr", "richtig", "true", "ja", "stimmt", "korrekt"}
-_FALSY = {"falsch", "false", "nein", "stimmt nicht", "nicht korrekt", "unwahr"}
+_TRUTHY = {"wahr", "richtig", "true", "ja", "stimmt", "korrekt", "yes", "correct", "right"}
+_FALSY = {"falsch", "false", "nein", "stimmt nicht", "nicht korrekt", "unwahr", "no", "wrong", "incorrect"}
+
+# Learner explicitly gives up on a posed quiz question → resolve it. Matched
+# as substrings of the lowercased reply (multi-word phrases) or exactly
+# (single words that would be too ambiguous as substrings).
+_GIVE_UP_PHRASES = (
+    "keine ahnung",
+    "weiß nicht",
+    "weiss nicht",
+    "weiß ich nicht",
+    "weiss ich nicht",
+    "sag mir die lösung",
+    "sag mir die antwort",
+    "zeig mir die lösung",
+    "löse auf",
+    "lös auf",
+    "auflösen",
+    "auflösung",
+    "ich gebe auf",
+    "überspringen",
+    "no idea",
+    "don't know",
+    "dont know",
+    "tell me the answer",
+    "show me the answer",
+    "give up",
+)
+_GIVE_UP_EXACT = {"lösung", "die lösung", "weiter", "skip", "pass", "idk", "?"}
+
+# Prefixes stripped before parsing a letter answer ("Antwort: A, C",
+# "ich nehme b", "I think a and c").
+_ANSWER_PREFIX_RE = re.compile(
+    r"^(?:(?:die\s+)?(?:antwort(?:en)?|answers?|option(?:en|s)?|buchstaben?|letters?)\s*:?\s*"
+    r"|ich\s+(?:denke|glaube|nehme|wähle|würde\s+sagen)\s*:?\s*"
+    r"|i\s+(?:think|choose|pick|would\s+say)\s*:?\s*)",
+)
+# Suffixes stripped likewise ("A ist richtig", "b und d sind korrekt", "c is correct").
+_ANSWER_SUFFIX_RE = re.compile(
+    r"\s+(?:(?:ist|sind|is|are)\s+(?:richtig|korrekt|correct|right)|stimmt|stimmen)$",
+)
+# Separators between letters. "oder"/"or" is deliberately NOT one — "A oder C"
+# is undecided, not a multi-select, and goes to the clarification path.
+_LETTER_SPLIT_RE = re.compile(r"\s*(?:,|;|/|&|\+|\bund\b|\band\b|\bsowie\b)\s*|\s+")
 
 
 def select_quiz_item(quiz_items: List[Dict[str, Any]], target_concept: Optional[str]) -> Optional[int]:
@@ -274,49 +332,120 @@ def build_pending_quiz(payload: Dict[str, Any], concept: Optional[str] = None) -
             for i, (text, correct) in enumerate(pairs)
         ]
 
-    return {"question": question, "kind": kind, "concept": concept, "options": options}
+    return {
+        "question": question,
+        "kind": kind,
+        "concept": concept,
+        "options": options,
+        # Replies that matched no option so far — the first one gets a
+        # clarification without the solution, the second resolves the quiz.
+        "unrecognized_count": 0,
+    }
 
 
-def render_quiz_message(pending: Dict[str, Any]) -> str:
-    """Deterministic quiz rendering — no LLM involved, nothing can leak."""
-    lines = ["📝 Quizfrage aus dem Kurs:", "", pending["question"], ""]
-    lines += [f"{option['letter']}) {option['text']}" for option in pending["options"]]
-    lines += ["", "Antworte mit dem Buchstaben oder deiner Antwort."]
+def quiz_has_multiple_correct(pending: Dict[str, Any]) -> bool:
+    return sum(1 for o in pending.get("options") or [] if o.get("correct")) > 1
+
+
+def _quiz_option_label(option: Dict[str, Any], kind: str | None, language: str | None) -> str:
+    """Display text of an option. True/false labels follow the session
+    language; course option texts are shown as authored (course language)."""
+    if kind == "truefalse" and not is_german(language):
+        return localize("quiz_true" if option["text"] == "Wahr" else "quiz_false", language)
+    return option["text"]
+
+
+def render_quiz_message(pending: Dict[str, Any], language: str | None = None) -> str:
+    """Deterministic quiz rendering — no LLM involved, nothing can leak.
+
+    The instruction line tells up front whether one or several answers are
+    correct (testing feedback 2026-11: learners asked exactly that, and the
+    reply used to be graded as an unrecognized answer that revealed the
+    solution).
+    """
+    kind = pending.get("kind")
+    if kind == "truefalse":
+        instruction = localize("quiz_instruction_truefalse", language)
+    elif quiz_has_multiple_correct(pending):
+        instruction = localize("quiz_instruction_multi", language)
+    else:
+        instruction = localize("quiz_instruction_single", language)
+
+    lines = [localize("quiz_header", language), "", pending["question"], ""]
+    lines += [f"{option['letter']}) {_quiz_option_label(option, kind, language)}" for option in pending["options"]]
+    lines += ["", instruction]
     return "\n".join(lines)
+
+
+def is_quiz_give_up(user_answer: str) -> bool:
+    """True if the learner explicitly gives up / asks for the solution."""
+    answer = (user_answer or "").strip().lower().rstrip(".!")
+    if answer in _GIVE_UP_EXACT:
+        return True
+    return any(phrase in answer for phrase in _GIVE_UP_PHRASES)
+
+
+def _parse_letters(answer: str, options: List[Dict[str, Any]]) -> Optional[List[str]]:
+    """Letters from a reply that consists ONLY of option letters ("b", "B)",
+    "Antwort: A, C", "a und c", "A & D"); None for anything else."""
+    text = _ANSWER_SUFFIX_RE.sub("", _ANSWER_PREFIX_RE.sub("", answer)).strip()
+    tokens = [token.strip(" ).:") for token in _LETTER_SPLIT_RE.split(text)]
+    tokens = [token for token in tokens if token]
+    if not tokens or not all(len(token) == 1 and token.isalpha() for token in tokens):
+        return None
+    valid = {o["letter"] for o in options}
+    letters = sorted({token.upper() for token in tokens})
+    if not set(letters) <= valid:
+        return None
+    return letters
 
 
 def grade_quiz_answer(pending: Dict[str, Any], user_answer: str) -> Dict[str, Any]:
     """Deterministic grading against the known solution — no LLM, no hallucination.
 
-    Matches a bare letter ("b", "B)", "Antwort b"), the option text itself, or
-    Wahr/Falsch synonyms. An unrecognized reply is reported as such so the
-    feedback LLM can react gracefully instead of grading small talk as wrong.
+    Recognizes one or several option letters ("b", "Antwort: A, C", "a und
+    c"), the option text(s) themselves, or true/false synonyms. With several
+    correct options the selection must match the correct set exactly to count
+    as correct; a selection containing some correct options is reported as
+    partially correct. An unrecognized reply (e.g. a question about the quiz)
+    is reported as such — the caller then clarifies instead of revealing.
     """
     answer = (user_answer or "").strip().lower().rstrip(".!?")
     options = pending.get("options") or []
-    matched = None
+    kind = pending.get("kind")
+    selected: List[Dict[str, Any]] = []
 
-    letter_match = re.fullmatch(r"(?:antwort\s+)?([a-z])[).]?", answer)
-    if letter_match:
-        letter = letter_match.group(1).upper()
-        matched = next((o for o in options if o["letter"] == letter), None)
+    letters = _parse_letters(answer, options)
+    if letters:
+        selected = [o for o in options if o["letter"] in letters]
 
-    if matched is None:
-        for option in options:
-            normalized = option["text"].strip().lower()
-            if answer == normalized or (len(normalized) > 3 and normalized in answer):
-                matched = option
-                break
-
-    if matched is None and pending.get("kind") == "truefalse":
+    # True/false synonyms before text matching — "unwahr" contains "wahr".
+    if not selected and kind == "truefalse":
         if answer in _FALSY:  # check FALSY first — "stimmt nicht" contains "stimmt"
-            matched = next((o for o in options if o["text"] == "Falsch"), None)
+            selected = [o for o in options if o["text"] == "Falsch"]
         elif answer in _TRUTHY:
-            matched = next((o for o in options if o["text"] == "Wahr"), None)
+            selected = [o for o in options if o["text"] == "Wahr"]
+
+    if not selected:
+        exact = [o for o in options if answer == o["text"].strip().lower()]
+        if exact:
+            selected = exact
+        else:
+            selected = [o for o in options if len(o["text"].strip()) > 3 and o["text"].strip().lower() in answer]
+            if kind == "truefalse":
+                selected = selected[:1]
+
+    selected_letters = {o["letter"] for o in selected}
+    correct_letters = {o["letter"] for o in options if o.get("correct")}
+    recognized = bool(selected)
+    correct = recognized and selected_letters == correct_letters
+    partially_correct = recognized and not correct and bool(selected_letters & correct_letters)
 
     return {
-        "recognized": matched is not None,
-        "correct": bool(matched and matched.get("correct")),
-        "matched_option": matched["text"] if matched else None,
+        "recognized": recognized,
+        "correct": correct,
+        "partially_correct": partially_correct,
+        "matched_options": [o["text"] for o in selected],
+        "matched_option": ", ".join(f"{o['letter']}) {o['text']}" for o in selected) or None,
         "correct_options": [o["text"] for o in options if o.get("correct")],
     }

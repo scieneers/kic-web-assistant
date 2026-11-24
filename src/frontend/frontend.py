@@ -459,13 +459,19 @@ if "_auto_restored" not in st.session_state:
 
 
 with st.sidebar:
-    st.caption("🎓 Sokratischer Lernmodus")
+    st.caption(
+        "🎓 Sokratischer Tutor",
+        help="Im Sokratischen Tutor führt dich der Assistent durch gezielte Fragen und Denkanstöße "
+        "zur Antwort, anstatt sie dir direkt zu geben.",
+    )
     if st.session_state.get("start_socratic"):
         st.info("v1 aktiviert für die nächste Nachricht.")
     if st.session_state.get("start_socratic_v2"):
         st.info("v2 aktiviert für die nächste Nachricht.")
-    st.button("Lernmodus starten (v1)", key="start_socratic_btn", on_click=_arm_socratic, args=("v1",))
-    st.button("✨ Lernmodus starten (v2)", key="start_socratic_v2_btn", on_click=_arm_socratic, args=("v2",))
+    st.button("Sokratischer Tutor starten (v1)", key="start_socratic_btn", on_click=_arm_socratic, args=("v1",))
+    st.button(
+        "✨ Sokratischer Tutor starten (v2)", key="start_socratic_v2_btn", on_click=_arm_socratic, args=("v2",)
+    )
 
     st.divider()
     st.caption("🧪 Moodle-Simulation")

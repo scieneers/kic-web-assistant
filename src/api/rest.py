@@ -180,9 +180,17 @@ class ChatRequest(BaseModel):
     )
     start_socratic_v2: bool = Field(
         default=False,
-        description="Explicitly enter the redesigned socratic learning mode (Lernmodus v2) "
+        description="Explicitly enter the Socratic Tutor (socratic learning mode v2) "
         "with this message. Only takes effect if no socratic session is active and "
         "ENABLE_SOCRATIC_V2 is set. Requires a course/module scope to start.",
+    )
+    ui_language: str | None = Field(
+        default=None,
+        description="Optional UI / device language of the frontend as a language code or name "
+        "(e.g. 'en', 'de-DE', 'English'). Used by the Socratic Tutor as the session language "
+        "when the conversation itself gives no language signal yet (fresh chat). "
+        "The language of the learner's own messages always takes precedence.",
+        examples=["en", "de"],
     )
 
     def get_user_query(self) -> str:
@@ -236,6 +244,13 @@ class ChatResponse(BaseModel):
         description="The thread ID. Use this for subsequent requests to continue the conversation.",
         examples=["550e8400-e29b-41d4-a716-446655440000"],
     )
+    learning_mode_active: bool = Field(
+        default=False,
+        description="Whether a Socratic Tutor session is active AFTER this response. The frontend "
+        "should set its mode toggle from this value: a session also ends via keyword ('stopp'), "
+        "by the tutor itself or after the closing summary, and does not start without a "
+        "course/module scope.",
+    )
 
 
 @app.post("/api/chat", dependencies=[Depends(api_key_auth)])
@@ -254,6 +269,7 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             thread_id=chat_request.thread_id,
             start_socratic=chat_request.start_socratic,
             start_socratic_v2=chat_request.start_socratic_v2,
+            ui_language=chat_request.ui_language,
         )
     else:
         # General chat (Drupal content)
@@ -263,6 +279,7 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             thread_id=chat_request.thread_id,
             start_socratic=chat_request.start_socratic,
             start_socratic_v2=chat_request.start_socratic_v2,
+            ui_language=chat_request.ui_language,
         )
 
     trace_id = langfuse_context.get_current_trace_id()
@@ -274,7 +291,8 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
     chat_response = ChatResponse(
         message=llm_response.content,
         response_id=trace_id,
-        thread_id=thread_id
+        thread_id=thread_id,
+        learning_mode_active=get_assistant().is_learning_mode_active(thread_id),
     )
     return chat_response
 
@@ -286,7 +304,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
     Response (application/x-ndjson):
       - {"type":"meta", "thread_id":..., "response_id":...}
       - {"type":"token", "token":...}  (many)
-      - {"type":"final", "message":..., "thread_id":..., "response_id":...}
+      - {"type":"final", "message":..., "thread_id":..., "response_id":..., "learning_mode_active":...}
       - {"type":"error", "message":...} (optional)
     """
 
@@ -319,6 +337,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                         thread_id=thread_id,
                         start_socratic=chat_request.start_socratic,
                         start_socratic_v2=chat_request.start_socratic_v2,
+                        ui_language=chat_request.ui_language,
                     )
                 else:
                     llm_response, _thread_id = get_assistant().chat(
@@ -327,6 +346,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                         thread_id=thread_id,
                         start_socratic=chat_request.start_socratic,
                         start_socratic_v2=chat_request.start_socratic_v2,
+                        ui_language=chat_request.ui_language,
                     )
 
             q.put(
@@ -335,6 +355,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                     "message": llm_response.content,
                     "response_id": trace_id,
                     "thread_id": _thread_id,
+                    "learning_mode_active": get_assistant().is_learning_mode_active(_thread_id),
                 }
             )
         except Exception as e:
@@ -362,14 +383,23 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
 class ChatHistoryResponse(BaseModel):
     thread_id: str = Field(description="Die Thread-ID der Konversation.")
     messages: list[SerializableChatMessage] = Field(description="Alle gespeicherten Nachrichten der Konversation.")
+    learning_mode_active: bool = Field(
+        default=False,
+        description="Ob gerade eine Sokratischer-Tutor-Session läuft — zum Setzen des Modus-Schalters nach Page-Reload.",
+    )
 
 
 @app.get("/api/chat/history/{thread_id}", dependencies=[Depends(api_key_auth)])
 def get_chat_history(thread_id: str) -> ChatHistoryResponse:
     """Gibt den gespeicherten Gesprächsverlauf zurück (z.B. nach Page-Reload in Moodle).
     Gibt eine leere Liste zurück wenn die Session abgelaufen oder unbekannt ist."""
-    messages = get_assistant().get_chat_history(thread_id)
-    return ChatHistoryResponse(thread_id=thread_id, messages=messages)
+    assistant = get_assistant()
+    messages = assistant.get_chat_history(thread_id)
+    return ChatHistoryResponse(
+        thread_id=thread_id,
+        messages=messages,
+        learning_mode_active=assistant.is_learning_mode_active(thread_id),
+    )
 
 
 class FeedbackRequest(BaseModel):

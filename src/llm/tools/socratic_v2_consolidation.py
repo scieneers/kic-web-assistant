@@ -7,7 +7,7 @@ learning status ("Sicher: … / Noch wackelig: …" from the learner model), one
 next-step recommendation, and a friendly goodbye.
 
 Afterwards ALL v2 state is reset — the session is complete, the next message
-is normal chat again (or a fresh Lernmodus start via the button).
+is normal chat again (or a fresh tutor start via the toggle/button).
 """
 
 import json
@@ -18,6 +18,7 @@ from langfuse.decorators import langfuse_context, observe
 from src.llm.objects.LLMs import LLM
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.state.models import GraphState
+from src.llm.state.socratic_v2_language import DEFAULT_LANGUAGE, canonical_language, localize
 from src.llm.state.socratic_v2_routing import initial_learner_model, reset_socratic_v2_state
 from src.llm.streaming import StreamPhaseContext
 
@@ -29,10 +30,8 @@ SOCRATIC_V2_CONSOLIDATION_PROMPT = load_prompt("socratic_v2_consolidation")
 # Initialize LLM instance at module level
 _llm = LLM()
 
-CONSOLIDATION_FALLBACK = (
-    "Danke für deine Zusammenfassung — damit ist die Lernsession abgeschlossen! "
-    "Du kannst jetzt normal weiterfragen oder den Lernmodus jederzeit erneut starten."
-)
+# German default; the node localizes it into the session language.
+CONSOLIDATION_FALLBACK = localize("consolidation_fallback", DEFAULT_LANGUAGE)
 
 
 @observe()
@@ -51,8 +50,10 @@ def socratic_v2_consolidation(state: GraphState) -> dict:
     session_goal = state.get("v2_session_goal")
     learner_model = state.get("v2_learner_model") or initial_learner_model()
     learning_objectives = state.get("v2_learning_objectives") or []
+    language = canonical_language(state.get("v2_language"))
 
-    query_for_llm = f"""SITZUNGS-LERNZIEL: {session_goal or "nicht explizit vereinbart"}
+    query_for_llm = f"""SPRACHE: {language}
+SITZUNGS-LERNZIEL: {session_goal or "nicht explizit vereinbart"}
 LERNENDEN-MODELL: {json.dumps(learner_model, ensure_ascii=False)}
 MODUL-LERNZIELE: {"; ".join(learning_objectives) or "unbekannt"}
 
@@ -67,7 +68,7 @@ ZUSAMMENFASSUNG DER LERNENDEN PERSON: {user_query}"""
             system_prompt=SOCRATIC_V2_CONSOLIDATION_PROMPT,
         )
 
-    answer = response.content.strip() if response.content else CONSOLIDATION_FALLBACK
+    answer = response.content.strip() if response.content else localize("consolidation_fallback", language)
 
     # Final learner state of the session — after this the checkpoint is reset,
     # so this observation is the last place the learner model is visible.

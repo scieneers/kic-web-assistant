@@ -25,15 +25,17 @@ from langfuse.decorators import langfuse_context, observe
 from src.llm.objects.LLMs import LLM, Models
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.state.models import GraphState
+from src.llm.state.socratic_v2_language import DEFAULT_LANGUAGE, canonical_language, localize
 from src.llm.state.socratic_v2_routing import (
-    V2_EXIT_MESSAGE,
     V2_QUESTION_MOVES,
     build_pending_quiz,
     grade_quiz_answer,
     initial_learner_model,
     format_learner_model,
+    is_quiz_give_up,
     mastery_reached,
     merge_learner_update,
+    quiz_has_multiple_correct,
     render_quiz_message,
     reset_socratic_v2_state,
     run_policy,
@@ -58,7 +60,8 @@ MIN_CORE_TURNS_BEFORE_CONSOLIDATE = 4  # core exchanges before CONSOLIDATE is al
 # as a safety net against a policy that consolidates after a single exchange.
 MIN_CORE_TURNS_WHEN_MASTERED = 2
 
-GENERATION_FALLBACK = "Kannst du deine Überlegung genauer erklären?"
+# German default; _generate_validated localizes it into the session language.
+GENERATION_FALLBACK = localize("generation_fallback", DEFAULT_LANGUAGE)
 
 # Tell-tale field labels from the engineered generation query / system prompt.
 # Smaller models occasionally echo their instructions or the query template
@@ -71,6 +74,8 @@ _LEAK_MARKERS = (
     "LERNSTAND:",
     "KURSMATERIAL:",
     "ZUG:",
+    "SPRACHE:",
+    "ANZAHL RICHTIGER ANTWORTEN:",
     "STRIKTE REGELN",
     "SO FÜHRST DU DEN ZUG AUS",
     "# ROLLE #",
@@ -157,22 +162,80 @@ def _generate(query_for_llm: str, chat_history: list, model, *, stream: bool) ->
     return text, leaked
 
 
-def _generate_validated(query_for_llm: str, chat_history: list, model) -> str:
+def _generate_validated(query_for_llm: str, chat_history: list, model, language: str | None = None) -> str:
     """Generate the tutor message with a streamed peek-guard; on a detected
     leak, retry once (buffered, no live streaming) against the more reliable
-    Azure fallback model; if that also leaks, use the safe static fallback.
-    A genuinely empty response (not a leak) goes straight to the static
-    fallback without a retry. A leaked response never reaches the learner."""
+    Azure fallback model; if that also leaks, use the safe static fallback
+    (in the session language). A genuinely empty response (not a leak) goes
+    straight to the static fallback without a retry. A leaked response never
+    reaches the learner."""
     text, leaked = _generate(query_for_llm, chat_history, model, stream=True)
     if not leaked:
-        return text if text is not None else GENERATION_FALLBACK
+        return text if text is not None else localize("generation_fallback", language)
 
     logger.warning("socratic_v2 generation looked like a leaked prompt — retrying with Azure fallback")
     retry_text, retry_leaked = _generate(query_for_llm, chat_history, Models.AZURE_FALLBACK, stream=False)
     if retry_text is None or retry_leaked:
         logger.warning("socratic_v2 generation still leaked after retry — using static fallback")
-        return GENERATION_FALLBACK
+        return localize("generation_fallback", language)
     return retry_text
+
+
+def _format_quiz_options(pending_quiz: dict) -> str:
+    """Option list WITHOUT correctness flags — safe to show the generation LLM."""
+    return "\n".join(f"{o['letter']}) {o['text']}" for o in pending_quiz.get("options") or [])
+
+
+def _clarify_pending_quiz(
+    *,
+    pending_quiz: dict,
+    user_query: str,
+    chat_history: list,
+    model,
+    language: str,
+    hint_count: int,
+    question_streak: int,
+    core_turns: int,
+) -> dict:
+    """The reply to a posed quiz matched no option (e.g. "ist eine
+    Mehrfachantwort möglich?") — answer that meta-question WITHOUT the
+    solution and keep the quiz open.
+
+    Testing feedback 2026-11: such a question used to be graded "NICHT
+    ERKANNT" and the feedback revealed the correct answers. The generation
+    LLM here never sees which options are correct (only the count category,
+    which the quiz instruction already states) and gets no course material,
+    so it cannot leak the solution.
+    """
+    multiple = quiz_has_multiple_correct(pending_quiz)
+    query_for_llm = f"""ZUG: QUIZ_RUECKFRAGE
+SPRACHE: {language}
+QUIZFRAGE: {pending_quiz.get('question')}
+OPTIONEN:
+{_format_quiz_options(pending_quiz)}
+ANZAHL RICHTIGER ANTWORTEN: {"mehrere" if multiple else "genau eine"}
+
+NACHRICHT DER LERNENDEN PERSON: {user_query}"""
+
+    answer = _generate_validated(query_for_llm, chat_history, model, language)
+    updated_quiz = {**pending_quiz, "unrecognized_count": pending_quiz.get("unrecognized_count", 0) + 1}
+
+    langfuse_context.update_current_observation(
+        metadata={"executed_move": "QUIZ_RUECKFRAGE", "quiz_multiple_correct": multiple, "language": language}
+    )
+
+    # No exchange on the concept happened — counters and learner model stay.
+    return {
+        "socratic_v2_phase": "core",
+        "v2_pending_quiz": updated_quiz,
+        "v2_hint_count": hint_count,
+        "v2_question_streak": question_streak,
+        "v2_core_turns": core_turns,
+        "v2_last_policy_move": None,
+        "v2_last_move": "QUIZ_RUECKFRAGE",
+        "answer": answer,
+        "citations_markdown": None,
+    }
 
 
 def _grade_pending_quiz(
@@ -185,27 +248,61 @@ def _grade_pending_quiz(
     session_goal: str | None,
     reranked: list,
     hint_count: int,
+    question_streak: int,
     target_concept: str | None,
     core_turns: int,
+    language: str,
 ) -> dict:
     """Resolve a posed quiz question: deterministic grading, evidence-based
-    learner-model update, LLM only phrases the feedback."""
+    learner-model update, LLM only phrases the feedback.
+
+    A reply that matches no option is first answered as a clarification with
+    the quiz kept open (_clarify_pending_quiz). The solution is revealed only
+    for a recognized answer, an explicit give-up ("keine Ahnung", "Lösung"),
+    or a second unrecognized reply in a row.
+    """
     verdict = grade_quiz_answer(pending_quiz, user_query)
+    gave_up = not verdict["recognized"] and is_quiz_give_up(user_query)
+
+    if not verdict["recognized"] and not gave_up and pending_quiz.get("unrecognized_count", 0) < 1:
+        return _clarify_pending_quiz(
+            pending_quiz=pending_quiz,
+            user_query=user_query,
+            chat_history=chat_history,
+            model=model,
+            language=language,
+            hint_count=hint_count,
+            question_streak=question_streak,
+            core_turns=core_turns,
+        )
 
     # Evidence-based learner-model update — a graded answer is a stronger
-    # signal than any LLM assessment.
+    # signal than any LLM assessment. Giving up on the question counts as
+    # "wackelig" too.
     concept = pending_quiz.get("concept") or target_concept
-    if concept and verdict["recognized"]:
+    if concept and (verdict["recognized"] or gave_up):
         learner_model = merge_learner_update(
             learner_model, {"konzepte": {concept: "sicher" if verdict["correct"] else "wackelig"}}
         )
 
+    if verdict["correct"]:
+        rating = "RICHTIG"
+    elif verdict["partially_correct"]:
+        rating = "TEILWEISE RICHTIG"
+    elif verdict["recognized"]:
+        rating = "FALSCH"
+    elif gave_up:
+        rating = "AUFGEGEBEN"
+    else:
+        rating = "NICHT ERKANNT"
+
     grading_summary = (
         f"ERKANNTE ANTWORT: {verdict['matched_option'] or 'keine der Optionen erkannt'}\n"
-        f"BEWERTUNG: {'RICHTIG' if verdict['correct'] else 'FALSCH' if verdict['recognized'] else 'NICHT ERKANNT'}\n"
+        f"BEWERTUNG: {rating}\n"
         f"KORREKTE ANTWORT(EN): {', '.join(verdict['correct_options'])}"
     )
     query_for_llm = f"""ZUG: QUIZ_FEEDBACK
+SPRACHE: {language}
 QUIZFRAGE: {pending_quiz.get('question')}
 {grading_summary}
 SITZUNGS-LERNZIEL: {session_goal or "noch nicht vereinbart"}
@@ -216,15 +313,17 @@ KURSMATERIAL:
 
 ANTWORT DER LERNENDEN PERSON: {user_query}"""
 
-    answer = _generate_validated(query_for_llm, chat_history, model)
+    answer = _generate_validated(query_for_llm, chat_history, model, language)
 
     langfuse_context.update_current_observation(
         metadata={
             "executed_move": "QUIZ_FEEDBACK",
+            "quiz_rating": rating,
             "quiz_correct": verdict["correct"],
             "quiz_recognized": verdict["recognized"],
             "target_concept": concept,
             "learner_model": learner_model,
+            "language": language,
         }
     )
 
@@ -251,6 +350,7 @@ def _generate_move_response(
     user_query: str,
     chat_history: list,
     model,
+    language: str = DEFAULT_LANGUAGE,
 ) -> str:
     """Second LLM call: produce the tutor message for the chosen move."""
     materials = (
@@ -260,6 +360,7 @@ def _generate_move_response(
     )
 
     query_for_llm = f"""ZUG: {move}
+SPRACHE: {language}
 ZIELKONZEPT: {target_concept or "noch offen"}
 SITZUNGS-LERNZIEL: {session_goal or "noch nicht vereinbart — gerade in Klärung"}
 LERNSTAND: {format_learner_model(learner_model)}
@@ -269,7 +370,7 @@ KURSMATERIAL:
 
 LETZTE ANTWORT DER LERNENDEN PERSON: {user_query}"""
 
-    return _generate_validated(query_for_llm, chat_history, model)
+    return _generate_validated(query_for_llm, chat_history, model, language)
 
 
 @observe(name="socratic_v2_core")
@@ -306,6 +407,7 @@ def socratic_v2_core(state: GraphState) -> dict:
     quiz_items = state.get("v2_quiz_items") or []
     pending_quiz = state.get("v2_pending_quiz")
     core_turns = state.get("v2_core_turns", 0)
+    language = canonical_language(state.get("v2_language"))
 
     # 0) A posed quiz question is graded DETERMINISTICALLY against the known
     #    solution — no policy call, no LLM judgement on correctness. Only the
@@ -320,8 +422,10 @@ def socratic_v2_core(state: GraphState) -> dict:
             session_goal=session_goal,
             reranked=reranked,
             hint_count=hint_count,
+            question_streak=question_streak,
             target_concept=previous_concept,
             core_turns=core_turns,
+            language=language,
         )
 
     unasked_quiz_items = sum(1 for item in quiz_items if not item.get("asked"))
@@ -359,7 +463,7 @@ def socratic_v2_core(state: GraphState) -> dict:
             **reset_socratic_v2_state(),
             "v2_last_policy_move": "EXIT",
             "v2_last_move": "EXIT",
-            "answer": V2_EXIT_MESSAGE,
+            "answer": localize("exit", language),
             "citations_markdown": None,
         }
 
@@ -403,7 +507,7 @@ def socratic_v2_core(state: GraphState) -> dict:
                 "v2_core_turns": core_turns + 1,
                 "v2_last_policy_move": "QUIZ",
                 "v2_last_move": "QUIZ",
-                "answer": render_quiz_message(pending),
+                "answer": render_quiz_message(pending, language),
                 "citations_markdown": None,
             }
         logger.debug("socratic_v2_core: QUIZ chosen but no usable item — falling back to FRAGE")
@@ -443,6 +547,7 @@ def socratic_v2_core(state: GraphState) -> dict:
         user_query=user_query,
         chat_history=chat_history,
         model=model,
+        language=language,
     )
 
     # 4) Update the counters for the next turn.

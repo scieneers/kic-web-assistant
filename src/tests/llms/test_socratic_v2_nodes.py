@@ -42,6 +42,16 @@ from src.llm.tools.socratic_v2_opening import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_language_detection():
+    """Routing/opening re-detect the session language with an LLM call —
+    stubbed to "German" unless a test patches it explicitly."""
+    detector = MagicMock()
+    detector.detect.return_value = "German"
+    with patch("src.llm.tools.language.get_language_detector", return_value=detector):
+        yield detector
+
+
 def _base_state(**overrides) -> dict:
     state = {
         "user_query": "Was ist Overfitting?",
@@ -215,7 +225,8 @@ class TestSocraticV2Opening:
         assert result["v2_key_concepts"] == ["Overfitting", "Regularisierung"]
         assert result["v2_scope_title"] == "ML Modul"
         assert "Overfitting erkennen" in result["answer"]
-        assert "Lernmodus" in result["answer"]
+        assert "Sokratischen Tutor" in result["answer"]
+        assert "Lernmodus" not in result["answer"]  # renamed (testing feedback 2026-11)
 
     def test_initializes_learner_model_and_counters(self):
         result, _ = self._run(_base_state(), [_make_chunk("Inhalt")])
@@ -501,8 +512,33 @@ class TestQuizMove:
         assert result["v2_learner_model"]["konzepte"]["Overfitting"] == "wackelig"
         assert "BEWERTUNG: FALSCH" in mock_generate.call_args.kwargs["query"]
 
-    def test_grading_unrecognized_answer_does_not_touch_learner_model(self):
-        state, _ = self._pending_state()
+    def test_first_unrecognized_reply_clarifies_without_revealing(self):
+        # Testing feedback 2026-11: "ist eine Mehrfachantwort möglich?" was
+        # graded NICHT ERKANNT and the feedback revealed the solution.
+        state, pending = self._pending_state()
+        state["user_query"] = "ist eine mehrfachantwort möglich oder ist nur eine lösung korrekt?"
+        with patch("src.llm.tools.socratic_v2_core.run_policy") as mock_policy, patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Genau eine ist richtig.")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        mock_policy.assert_not_called()
+        query = mock_generate.call_args.kwargs["query"]
+        assert "ZUG: QUIZ_RUECKFRAGE" in query
+        assert "ANZAHL RICHTIGER ANTWORTEN: genau eine" in query
+        # The generation LLM never sees which option is correct.
+        assert "KORREKTE ANTWORT" not in query
+        assert "BEWERTUNG" not in query
+        assert "KURSMATERIAL" not in query
+        # Quiz stays open, nothing graded, no turn counted.
+        assert result["v2_pending_quiz"]["question"] == pending["question"]
+        assert result["v2_pending_quiz"]["unrecognized_count"] == 1
+        assert "v2_learner_model" not in result  # learner model untouched
+        assert result["v2_last_move"] == "QUIZ_RUECKFRAGE"
+        assert result["v2_core_turns"] == state.get("v2_core_turns", 0)
+
+    def test_second_unrecognized_reply_resolves_quiz(self):
+        state, pending = self._pending_state()
+        state["v2_pending_quiz"] = {**pending, "unrecognized_count": 1}
         state["user_query"] = "warum fragst du mich das?"
         with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
             "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Kein Problem!")
@@ -510,6 +546,57 @@ class TestQuizMove:
             result = socratic_v2_core(state)
         assert "Overfitting" not in result["v2_learner_model"]["konzepte"]
         assert "BEWERTUNG: NICHT ERKANNT" in mock_generate.call_args.kwargs["query"]
+        assert result["v2_pending_quiz"] is None
+
+    def test_give_up_resolves_quiz_immediately(self):
+        state, _ = self._pending_state()
+        state["user_query"] = "Keine Ahnung, sag mir die Lösung"
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Die Lösung ist ...")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        assert "BEWERTUNG: AUFGEGEBEN" in mock_generate.call_args.kwargs["query"]
+        assert result["v2_pending_quiz"] is None
+        assert result["v2_learner_model"]["konzepte"]["Overfitting"] == "wackelig"
+
+    def _multi_pending_state(self):
+        payload = _quiz_payload(
+            correct_answers=["Vorurteile fließen ein", "Diverser Blick geht verloren"],
+            incorrect_answers=["Systeme werden autonom", "Daten werden archiviert"],
+        )
+        pending = build_pending_quiz(payload, concept="Bias")
+        return _base_state(v2_pending_quiz=pending), pending
+
+    def test_multi_select_all_correct_letters_graded_correct(self):
+        state, pending = self._multi_pending_state()
+        letters = [o["letter"] for o in pending["options"] if o["correct"]]
+        state["user_query"] = f"{letters[0].lower()} und {letters[1].lower()}"
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Richtig!")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        assert "BEWERTUNG: RICHTIG" in mock_generate.call_args.kwargs["query"]
+        assert result["v2_learner_model"]["konzepte"]["Bias"] == "sicher"
+
+    def test_multi_select_subset_graded_partially_correct(self):
+        state, pending = self._multi_pending_state()
+        one_correct = next(o["letter"] for o in pending["options"] if o["correct"])
+        state["user_query"] = one_correct
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Fast!")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        assert "BEWERTUNG: TEILWEISE RICHTIG" in mock_generate.call_args.kwargs["query"]
+        assert result["v2_learner_model"]["konzepte"]["Bias"] == "wackelig"
+
+    def test_multi_select_clarification_says_multiple(self):
+        state, _ = self._multi_pending_state()
+        state["user_query"] = "Kann man hier mehrere Antworten auswählen?"
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Ja, mehrere.")
+        ) as mock_generate:
+            socratic_v2_core(state)
+        assert "ANZAHL RICHTIGER ANTWORTEN: mehrere" in mock_generate.call_args.kwargs["query"]
 
 
 class TestQuizHelpers:

@@ -14,7 +14,7 @@ Du erhältst: die Lernziele des Moduls, das Sitzungs-Lernziel (ggf. noch offen),
 - ZWISCHENFAZIT: erreichten Fortschritt zusammenfassen + weiche Anschlussfrage (nach mehreren Wechseln als Gegenwert)
 - ENCOURAGE: ermutigen + deutlich leichtere Einstiegsfrage (bei Frustsignalen: sehr kurze Antworten, "keine Ahnung", Resignation)
 - CONSOLIDATE: Abschlussphase einleiten — die Person soll selbst zusammenfassen (wenn das Sitzungs-Lernziel erreicht wirkt oder die Person abschließen möchte)
-- EXIT: Lernmodus beenden (wenn die Person klar aufhören will oder nur eine schnelle Antwort ohne Lernabsicht sucht)
+- EXIT: den Sokratischen Tutor beenden (wenn die Person klar aufhören will oder nur eine schnelle Antwort ohne Lernabsicht sucht)
 
 # REGELN #
 1. "Sag mir einfach die Antwort" u. Ä.: wähle MICRO_EXPLAIN, wenn die Person im Lernkontext bleibt; EXIT nur bei klarem Ausstiegswunsch.

@@ -254,6 +254,7 @@ class KICampusAssistant:
         module_id: int | list[int] | None = None,
         start_socratic: bool = False,
         start_socratic_v2: bool = False,
+        ui_language: str | None = None,
     ) -> tuple[GraphState, dict, str]:
         """
         Lädt bestehenden State aus Checkpoint oder erstellt neuen Initial State.
@@ -266,6 +267,9 @@ class KICampusAssistant:
             module_id: Optional module ID filter — a single ID or a list of IDs
             start_socratic: Explicit request-level trigger to enter the socratic mode
             start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
+            ui_language: Optional UI/device language hint of the frontend (e.g. "en",
+                "de-DE") — used by the v2 tutor when the conversation itself gives no
+                language signal yet
 
         Returns:
             tuple: (state_update, config, thread_id)
@@ -309,6 +313,7 @@ class KICampusAssistant:
                         "thread_id": thread_id,
                         "start_socratic": start_socratic,
                         "start_socratic_v2": start_socratic_v2,
+                        "ui_language": ui_language,
                     },
                     # Reset per-turn intermediate artifacts so stale checkpoint
                     # values never bleed into the new graph run.
@@ -324,6 +329,9 @@ class KICampusAssistant:
                     "citations_markdown": None,
                     "detected_language": None,
                     "contextualized_query": None,
+                    # Per-turn routing flag of the v2 tutor (translation
+                    # request) — must never survive into the next turn.
+                    "v2_translate_last": False,
                 }
                 return state_update, config, thread_id
 
@@ -342,6 +350,7 @@ class KICampusAssistant:
                 "thread_id": thread_id,
                 "start_socratic": start_socratic,
                 "start_socratic_v2": start_socratic_v2,
+                "ui_language": ui_language,
             },
             "system_config": self.system_config
         }
@@ -451,6 +460,7 @@ class KICampusAssistant:
         thread_id: str | None = None,
         start_socratic: bool = False,
         start_socratic_v2: bool = False,
+        ui_language: str | None = None,
     ) -> tuple[SerializableChatMessage, str]:
         """
         Chat with general bot about drupal and functions of ki-campus.
@@ -475,6 +485,7 @@ class KICampusAssistant:
             thread_id=thread_id,
             start_socratic=start_socratic,
             start_socratic_v2=start_socratic_v2,
+            ui_language=ui_language,
         )
 
         # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)
@@ -522,6 +533,7 @@ class KICampusAssistant:
         thread_id: str | None = None,
         start_socratic: bool = False,
         start_socratic_v2: bool = False,
+        ui_language: str | None = None,
     ) -> tuple[SerializableChatMessage, str]:
         """
         Chat with the contents of a specific course and optionally submodule(s).
@@ -551,6 +563,7 @@ class KICampusAssistant:
             module_id=module_id,
             start_socratic=start_socratic,
             start_socratic_v2=start_socratic_v2,
+            ui_language=ui_language,
         )
 
         # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)
@@ -599,6 +612,27 @@ class KICampusAssistant:
         except Exception:
             pass
         return []
+
+    def is_learning_mode_active(self, thread_id: str | None) -> bool:
+        """Ob in diesem Thread gerade eine Sokratischer-Tutor-Session läuft (v1 oder v2).
+
+        Für den Modus-Schalter im Frontend: Eine Session endet nicht nur über
+        den Schalter, sondern auch per Stichwort ("stopp"), per Policy-EXIT,
+        nach der Konsolidierung — oder startet gar nicht erst (kein
+        Kurs/Modul gewählt). Nur das Backend kennt den echten Zustand.
+        """
+        if not thread_id:
+            return False
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            checkpoint = self.graph.get_state(config)
+            values = checkpoint.values if checkpoint else None
+        except Exception:
+            logger.warning("Lernmodus-Status für Thread %s nicht lesbar", thread_id, exc_info=True)
+            return False
+        if not values:
+            return False
+        return values.get("socratic_v2_phase") is not None or values.get("socratic_mode") is not None
 
 
 if __name__ == "__main__":
