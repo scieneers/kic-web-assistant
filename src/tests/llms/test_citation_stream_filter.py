@@ -155,3 +155,23 @@ class TestCitationStreamResolver:
         full = "".join(emitted)
         assert "[Quelle 1](https://example.com)" in full
         assert "[doc1]" not in full
+
+
+class TestCitationStreamResolverMarkerRuns:
+    """Adjacent markers that resolve to the same link (two chunks of one page)
+    render once; a later citation of the same page after text renders again."""
+
+    def test_duplicate_in_one_run_collapsed(self):
+        emitted: list[str] = []
+        resolver = CitationStreamResolver(resolve=lambda m: "<1>", callback=emitted.append)
+        resolver.feed("Satz.[doc1][doc2] Weiter.[doc1]")
+        resolver.flush()
+        assert "".join(emitted) == "Satz.<1> Weiter.<1>"
+
+    def test_whitespace_between_markers_keeps_run(self):
+        emitted: list[str] = []
+        resolver = CitationStreamResolver(resolve=lambda m: "<1>", callback=emitted.append)
+        for chunk in ["Satz.[do", "c1] [doc", "2]"]:
+            resolver.feed(chunk)
+        resolver.flush()
+        assert "".join(emitted) == "Satz.<1> "

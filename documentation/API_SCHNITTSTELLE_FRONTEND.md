@@ -119,7 +119,7 @@ Content-Type: application/json
 {"type":"token","token":"Gradient"}
 {"type":"token","token":" Descent"}
 {"type":"token","token":" ist ein Optimierungsverfahren"}
-{"type":"final","message":"Gradient Descent ist ein Optimierungsverfahren ... [<a href=\"https://moodle.ki-campus.org/mod/page/view.php?id=1234\">Optimierung</a>]","thread_id":"abc-123","response_id":"xyz-456","learning_mode_active":false}
+{"type":"final","message":"Gradient Descent ist ein Optimierungsverfahren ... [<a href=\"https://moodle.ki-campus.org/mod/page/view.php?id=1234\">1</a>]\n\n**Zum Weiterlesen:**\n1. <a href=\"https://moodle.ki-campus.org/mod/page/view.php?id=1234\">Optimierung</a>","thread_id":"abc-123","response_id":"xyz-456","learning_mode_active":false}
 ```
 
 | Event | Felder | Wann |
@@ -169,7 +169,7 @@ Identischer Request-Body wie `/api/chat/stream`. Liefert die vollständige Antwo
 
 ```json
 {
-  "message": "Gradient Descent ist ein Optimierungsverfahren ... [<a href=\"https://moodle.ki-campus.org/mod/page/view.php?id=1234\">Optimierung</a>]",
+  "message": "Gradient Descent ist ein Optimierungsverfahren ... [<a href=\"https://moodle.ki-campus.org/mod/page/view.php?id=1234\">1</a>]\n\n**Zum Weiterlesen:**\n1. <a href=\"https://moodle.ki-campus.org/mod/page/view.php?id=1234\">Optimierung</a>",
   "response_id": "xyz-456",
   "thread_id": "abc-123",
   "learning_mode_active": false
@@ -287,23 +287,26 @@ Ein unbekannter Wert führt zu **422**.
 
 ### Quellenangaben sind HTML
 
-Belegte Aussagen bekommen am Satzende eine Quellenangabe in diesem Format:
+Belegte Aussagen bekommen im Text eine kurze, klickbare Nummer. Die Quellen stehen gesammelt als nummerierte Liste unter der Antwort (Feedback S. 17):
 
 ```html
-[<a href="https://moodle.ki-campus.org/mod/page/view.php?id=1234">Optimierungsverfahren</a>]
+Gradient Descent ist ein Optimierungsverfahren …[<a href="https://moodle.ki-campus.org/mod/page/view.php?id=1234">1</a>] Die Lernrate bestimmt …[<a href="https://moodle.ki-campus.org/mod/hvp/view.php?id=987">2</a>]
+
+**Zum Weiterlesen:**
+1. <a href="https://moodle.ki-campus.org/mod/page/view.php?id=1234">Optimierungsverfahren</a>
+2. <a href="https://moodle.ki-campus.org/mod/hvp/view.php?id=987">Einführung Deep Learning</a> (ab Minute 4:12)
 ```
 
-Bei Video-Transkripten kommt ein Zeitstempel dazu:
-
-```html
-[<a href="https://moodle.ki-campus.org/mod/hvp/view.php?id=987">Einführung Deep Learning</a>] (ab Minute 4:12)
-```
+- Die Nummern verlinken auf dieselbe Seite wie der Listeneintrag. Wird dieselbe Seite mehrfach zitiert, bekommt sie überall dieselbe Nummer und steht nur einmal in der Liste.
+- Bei Video-Transkripten steht der Zeitstempel hinter dem Listeneintrag.
+- Die Überschrift kommt in der Antwortsprache („Zum Weiterlesen:“, „Further reading:“).
+- Antworten ohne Quellen (Smalltalk, Fallback-Texte, Sokratischer Tutor) haben keine Liste.
 
 Konsequenzen für das Frontend:
 
 - Der Antworttext muss **als HTML gerendert** werden. Bei Sanitizing bitte `<a href>` erlauben. Die Links zeigen auf die Quellseite im KI-Campus — je nach Inhalt auf die Website (`ki-campus.org`) oder auf die Moodle-Instanz.
-- Die Links entstehen bereits **während des Streamings** — sie kommen also schon in den `token`-Events als HTML-Fragmente an und können über mehrere Tokens verteilt sein. Deshalb: gepufferten Gesamttext rendern, nicht einzelne Tokens isoliert.
-- Der übrige Text ist leichtes Markdown (Absätze, gelegentlich Listen/Fett).
+- Der übrige Text ist **Markdown** — mindestens Absätze, Fett (`**…**`) und nummerierte Listen müssen dargestellt werden, sonst erscheint die Quellenliste als Fließtext mit Sternchen.
+- Die Links entstehen bereits **während des Streamings** — sie kommen also schon in den `token`-Events als HTML-Fragmente an und können über mehrere Tokens verteilt sein. Die Quellenliste kommt als letzter Token-Block nach dem Antworttext. Deshalb: gepufferten Gesamttext rendern, nicht einzelne Tokens isoliert.
 
 ### Fallback-Antworten
 

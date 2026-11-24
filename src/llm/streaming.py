@@ -103,6 +103,14 @@ class CitationStreamResolver:
         self._callback = callback
         self._buffer = ""
         self._emitted = ""
+        # Resolved texts of the current marker run ("[doc1][doc2]"): two markers
+        # pointing at the same page must not render the same link twice.
+        self._run: set[str] = set()
+
+    def _text(self, text: str) -> str:
+        if text.strip():
+            self._run.clear()
+        return text
 
     def feed(self, delta: str) -> None:
         self._buffer += delta
@@ -110,19 +118,22 @@ class CitationStreamResolver:
         while self._buffer:
             bracket = self._buffer.find("[")
             if bracket == -1:
-                out += self._buffer
+                out += self._text(self._buffer)
                 self._buffer = ""
                 break
-            out += self._buffer[:bracket]
+            out += self._text(self._buffer[:bracket])
             self._buffer = self._buffer[bracket:]
             match = _COMPLETE_CITATION_RE.match(self._buffer)
             if match:
-                out += self._resolve(match.group())
+                resolved = self._resolve(match.group())
+                if resolved and resolved not in self._run:
+                    self._run.add(resolved)
+                    out += resolved
                 self._buffer = self._buffer[match.end():]
                 continue
             if _is_partial_citation(self._buffer):
                 break
-            out += "["
+            out += self._text("[")
             self._buffer = self._buffer[1:]
         if out:
             self._emitted += out

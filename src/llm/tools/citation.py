@@ -44,7 +44,8 @@ def parse_citations(state: GraphState) -> dict:
     # Parse citations in answer (convert SerializableTextNode to TextNode)
     parsed_answer = parser.parse(
         answer=answer,
-        source_documents=sources
+        source_documents=sources,
+        language=state.get("detected_language"),
     )
     
     return {"citations_markdown": parsed_answer}

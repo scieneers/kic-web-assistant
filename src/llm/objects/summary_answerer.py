@@ -1,17 +1,16 @@
-import re
-
 from langfuse.decorators import observe
 from llama_index.core.llms import MessageRole
 from llama_index.core.schema import TextNode
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.objects.LLMs import LLM, Models
-from src.llm.objects.citation_parser import CITATION_TEXT, _get_display_title, citation_suffix
+from src.llm.objects.citation_parser import SourceList
 from src.llm.objects.question_answerer import (
     NO_CONTENT_IN_MODULE,
     NO_CONTENT_UNSUPPORTED_TYPE,
     SOURCES_MAX_LENGTH,
     format_sources_full_scope,
+    _stream_source_footer,
     get_fallback_type,
     translate_fallback_text,
 )
@@ -129,28 +128,13 @@ class SummaryAnswerer:
         # same wiring as QuestionAnswerer.answer_question (see there for details).
         outer_callback = token_callback_var.get()
         resolver = None
+        source_list = None
         smart_cb = None
         resolver_ctx = None
 
         if outer_callback is not None:
-            seen_urls: set[str] = set()
-
-            def _resolve(marker: str) -> str:
-                m = re.match(r"\[doc(\d+)\]", marker)
-                if not m:
-                    return ""
-                idx = int(m.group(1)) - 1
-                try:
-                    doc = sources[idx]
-                except IndexError:
-                    return ""
-                url = doc.metadata.get("url", "")
-                if url in seen_urls:
-                    return ""
-                seen_urls.add(url)
-                return CITATION_TEXT.format(url=url, title=_get_display_title(doc), suffix=citation_suffix(doc))
-
-            resolver = CitationStreamResolver(resolve=_resolve, callback=outer_callback)
+            source_list = SourceList(sources)
+            resolver = CitationStreamResolver(resolve=source_list.resolve, callback=outer_callback)
             smart_cb = SmartStreamCallback(resolver=resolver, outer_callback=outer_callback)
             resolver_ctx = citation_resolver_var.set(smart_cb)
 
@@ -175,7 +159,7 @@ class SummaryAnswerer:
         # Use exactly what was streamed as the final response content (matches
         # QuestionAnswerer's "Bug 2 fix" — keeps citations_markdown in sync).
         if resolver is not None and resolver.emitted_text:
-            response.content = resolver.emitted_text
+            response.content = resolver.emitted_text + _stream_source_footer(source_list, language, outer_callback)
 
         if response is None:
             raise ValueError(f"LLM produced no response. Please check the LLM implementation. Response: {response}")

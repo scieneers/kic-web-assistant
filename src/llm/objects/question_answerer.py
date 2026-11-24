@@ -1,5 +1,4 @@
 import logging
-import re
 
 from langfuse.decorators import observe
 from llama_index.core.llms import MessageRole
@@ -7,7 +6,7 @@ from llama_index.core.schema import TextNode
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.llm.objects.LLMs import LLM, Models
-from src.llm.objects.citation_parser import CITATION_TEXT, _get_display_title, citation_suffix
+from src.llm.objects.citation_parser import SourceList
 from src.llm.prompts.prompt_loader import load_prompt
 from src.llm.streaming import CitationStreamResolver, SmartStreamCallback, StreamPhaseContext, citation_resolver_var, token_callback_var
 
@@ -88,6 +87,18 @@ _NO_ANSWER_FALLBACK_TYPES = {
 
 DEFAULT_FALLBACK_LANGUAGE = "German"
 FALLBACK_TRANSLATOR_PROMPT = load_prompt("fallback_translator_prompt")
+
+
+def _stream_source_footer(source_list: SourceList | None, language: str | None, callback) -> str:
+    """Streams the source list below a finished answer and returns it.
+
+    Inline markers were already streamed as short numbers; the descriptive
+    list follows once the answer text is complete (testing feedback p. 17).
+    """
+    footer = source_list.footer(language) if source_list is not None else ""
+    if footer and callback is not None:
+        callback(footer)
+    return footer
 
 
 def translate_fallback_text(text: str, language: str | None) -> str:
@@ -298,28 +309,13 @@ class QuestionAnswerer:
         # the streamed content already matches what the final event will send.
         outer_callback = token_callback_var.get()
         resolver = None
+        source_list = None
         smart_cb = None
         resolver_ctx = None
 
         if outer_callback is not None:
-            seen_urls: set[str] = set()
-
-            def _resolve(marker: str) -> str:
-                m = re.match(r"\[doc(\d+)\]", marker)
-                if not m:
-                    return ""
-                idx = int(m.group(1)) - 1
-                try:
-                    doc = sources[idx]
-                except IndexError:
-                    return ""
-                url = doc.metadata.get("url", "")
-                if url in seen_urls:
-                    return ""
-                seen_urls.add(url)
-                return CITATION_TEXT.format(url=url, title=_get_display_title(doc), suffix=citation_suffix(doc))
-
-            resolver = CitationStreamResolver(resolve=_resolve, callback=outer_callback)
+            source_list = SourceList(sources)
+            resolver = CitationStreamResolver(resolve=source_list.resolve, callback=outer_callback)
             smart_cb = SmartStreamCallback(resolver=resolver, outer_callback=outer_callback)
             resolver_ctx = citation_resolver_var.set(smart_cb)
 
@@ -375,7 +371,7 @@ class QuestionAnswerer:
         # This ensures citations_markdown from parse_citations matches the streamed
         # text, preventing the visual jump on the final event.
         if not is_no_answer and resolver is not None and resolver.emitted_text:
-            response.content = resolver.emitted_text
+            response.content = resolver.emitted_text + _stream_source_footer(source_list, language, outer_callback)
 
         if response is None:
             raise ValueError(f"LLM produced no response. Please check the LLM implementation. Response: {response}")
