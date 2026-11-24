@@ -154,3 +154,31 @@ def test_domain_term_in_global_scope_stays_out_of_scope(contextualizer):
         query="Was ist eine Dienstvereinbarung?", model=MODEL, scope="global"
     )
     assert result == "no_vectordb"
+
+
+# ---------------------------------------------------------------------------
+# Questions about the assistant itself (Testing-Feedback S. 11): the modes
+# are explained by the no_vectordb path, not searched in course content —
+# while the Socratic METHOD as a learning topic still goes to retrieval.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+@pytest.mark.parametrize("scope", ["global", "course", "module"])
+@pytest.mark.parametrize("query", [
+    pytest.param("Was ist der Sokratische Tutor?", id="was-ist-tutor"),
+    pytest.param("Wie starte ich den Tutor?", id="tutor-starten"),
+    pytest.param("Welche Modi gibt es hier?", id="modi"),
+    pytest.param("What is the Socratic Tutor mode?", id="en-tutor"),
+])
+def test_questions_about_assistant_modes_are_no_vectordb(contextualizer, query, scope):
+    result = contextualizer.classify_scenario(query=query, model=MODEL, has_prior_history=False, scope=scope)
+    assert result == "no_vectordb"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("scope", ["global", "course"])
+def test_socratic_method_as_topic_still_retrieves(contextualizer, scope):
+    result = contextualizer.classify_scenario(
+        query="Was ist die sokratische Methode?", model=MODEL, has_prior_history=False, scope=scope
+    )
+    assert result == "simple_hop"

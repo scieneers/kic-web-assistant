@@ -471,3 +471,71 @@ class TestFeedbackEndpoint:
             headers={"Api-Key": VALID_API_KEY},
         )
         assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Sokratischer Tutor per Toggle (start_socratic_v2 / stop_socratic_v2)
+# ---------------------------------------------------------------------------
+
+class TestTutorToggleFlags:
+    def _post(self, c, path="/api/chat", **body):
+        return c.post(path, json=body, headers={"Api-Key": VALID_API_KEY})
+
+    def test_start_without_user_query(self, client):
+        c, mock_assistant = client
+        response = self._post(c, course_id=42, start_socratic_v2=True)
+        assert response.status_code == 200
+        kwargs = mock_assistant.chat_with_course.call_args.kwargs
+        assert kwargs["query"] == ""
+        assert kwargs["start_socratic_v2"] is True
+        assert kwargs["stop_socratic_v2"] is False
+
+    def test_stop_without_user_query(self, client):
+        c, mock_assistant = client
+        mock_assistant.is_learning_mode_active.return_value = False
+        response = self._post(c, course_id=42, stop_socratic_v2=True, thread_id="t-1")
+        assert response.status_code == 200
+        assert response.json()["learning_mode_active"] is False
+        kwargs = mock_assistant.chat_with_course.call_args.kwargs
+        assert kwargs["stop_socratic_v2"] is True
+        assert kwargs["thread_id"] == "t-1"
+
+    def test_stop_flag_passed_on_general_chat(self, client):
+        c, mock_assistant = client
+        self._post(c, stop_socratic_v2=True)
+        assert mock_assistant.chat.call_args.kwargs["stop_socratic_v2"] is True
+
+    def test_signal_text_with_flag_still_accepted(self, client):
+        c, mock_assistant = client
+        response = self._post(
+            c, course_id=42, start_socratic_v2=True, user_query={"role": "user", "content": "Tutor starten"}
+        )
+        assert response.status_code == 200
+        assert mock_assistant.chat_with_course.call_args.kwargs["query"] == "Tutor starten"
+
+    def test_both_flags_rejected(self, client):
+        c, mock_assistant = client
+        response = self._post(c, course_id=42, start_socratic_v2=True, stop_socratic_v2=True)
+        assert response.status_code == 400
+        mock_assistant.chat_with_course.assert_not_called()
+
+    def test_user_query_still_required_without_flags(self, client):
+        c, mock_assistant = client
+        response = self._post(c, course_id=42)
+        assert response.status_code == 400
+        mock_assistant.chat_with_course.assert_not_called()
+
+    def test_empty_user_query_without_flags_unchanged(self, client):
+        """No new emptiness rule — existing frontends keep working as before."""
+        c, _ = client
+        response = self._post(c, user_query={"role": "user", "content": ""})
+        assert response.status_code == 200
+
+    def test_stream_stop_flag(self, client):
+        c, mock_assistant = client
+        mock_assistant.chat_with_course.side_effect = _make_streaming_chat([], "Du hast den Sokratischen Tutor beendet.")
+        response = self._post(c, "/api/chat/stream", course_id=42, stop_socratic_v2=True, thread_id="t-1")
+        events = _parse_ndjson(response.text)
+        assert events[-1]["type"] == "final"
+        assert events[-1]["learning_mode_active"] is False
+        assert mock_assistant.chat_with_course.call_args.kwargs["stop_socratic_v2"] is True

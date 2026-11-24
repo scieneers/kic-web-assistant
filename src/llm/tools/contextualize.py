@@ -161,14 +161,18 @@ def contextualize_and_route(state: GraphState) -> dict:
         # Socratic v2 session is active — deterministic keyword exit works as an
         # escape hatch; softer exit intents ("sag mir einfach die Antwort") are
         # handled by the v2 policy inside the core node itself.
+        # Exit via request flag (frontend toggle, no visible chat message) or
+        # via keyword typed by the learner.
         session_language = state.get("v2_language")
-        if response_clean.rstrip(".! ") in V2_EXIT_KEYWORDS:
-            logger.debug("Socratic v2 exit keyword detected — resetting v2 state → mode=exit_complete")
-            _trace_routing(mode="exit_complete", socratic_v2_exit=True)
+        stop_via_param = bool(state.get("runtime_config", {}).get("stop_socratic_v2", False))
+        if stop_via_param or response_clean.rstrip(".! ") in V2_EXIT_KEYWORDS:
+            logger.debug("Socratic v2 exit (flag=%s) — resetting v2 state → mode=exit_complete", stop_via_param)
+            _trace_routing(mode="exit_complete", socratic_v2_exit=True, socratic_v2_exit_flag=stop_via_param)
             return {
                 **reset_socratic_v2_state(),
                 "mode": "exit_complete",
                 "answer": localize("exit", session_language),
+                "signal_turn": stop_via_param,
             }
 
         # Translation / language-switch request ("auf Englisch bitte",
@@ -221,17 +225,36 @@ def contextualize_and_route(state: GraphState) -> dict:
         # Normal mode handling (no active socratic session)
         # Check if user wants to start the v2 learning mode first — explicit
         # request-level flag (Streamlit button) or trigger phrase.
-        start_v2_via_param = state.get("runtime_config", {}).get("start_socratic_v2", False)
+        runtime_flags = state.get("runtime_config", {})
+        start_v2_via_param = bool(runtime_flags.get("start_socratic_v2", False))
+
+        # Stop flag without an active session (toggle already off, session
+        # ended by the tutor itself, or expired): nothing to end — confirm
+        # idempotently instead of running the (empty) signal text as a chat
+        # question.
+        if enable_socratic_v2 and runtime_flags.get("stop_socratic_v2", False):
+            logger.debug("Socratic v2 stop flag without active session → mode=exit_complete (no-op)")
+            _trace_routing(mode="exit_complete", socratic_v2_exit=True, socratic_v2_exit_flag=True, no_session=True)
+            return {
+                **reset_socratic_v2_state(),
+                "mode": "exit_complete",
+                "answer": localize("exit", runtime_flags.get("ui_language")),
+                "signal_turn": True,
+            }
+
         if enable_socratic_v2 and (
             start_v2_via_param
             or response_clean in ["starte lernmodus v2", "start socratic v2"]
         ):
-            logger.debug("Socratic v2 triggered by user command → mode=socratic_v2, phase=opening")
+            logger.debug("Socratic v2 triggered (flag=%s) → mode=socratic_v2, phase=opening", start_v2_via_param)
             _trace_routing(mode="socratic_v2", socratic_v2_phase="opening", socratic_v2_entry=True)
             return {
                 "mode": "socratic_v2",
                 "socratic_v2_phase": "opening",
                 "pending_scope_escalation": None,
+                # Started via toggle → the message text is a frontend signal,
+                # not learner input; keep it out of the chat history.
+                "signal_turn": start_v2_via_param,
             }
 
         # Check if user wants to start socratic mode (only if enabled) — either via

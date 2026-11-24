@@ -87,7 +87,7 @@ Content-Type: application/json
 
 | Feld | Typ | Pflicht | Default | Beschreibung |
 |------|-----|---------|---------|--------------|
-| `user_query` | `object` | **ja** | — | Die neue Nutzernachricht. Genau **eine** Nachricht, kein Array — der bisherige Verlauf liegt serverseitig unter der `thread_id` |
+| `user_query` | `object` | **ja**¹ | — | Die neue Nutzernachricht. Genau **eine** Nachricht, kein Array — der bisherige Verlauf liegt serverseitig unter der `thread_id` |
 | `user_query.role` | `string` | ja | — | Immer `"user"` |
 | `user_query.content` | `string` | ja | — | Der Text der Nutzerfrage |
 | `thread_id` | `string \| null` | nein | `null` | Bestehende Session-ID. `null` → Backend erzeugt eine neue (UUID4) und liefert sie im `meta`-Event zurück |
@@ -95,8 +95,11 @@ Content-Type: application/json
 | `module_id` | `integer \| integer[] \| null` | nein | `null` | Modul-/Themen-ID oder **Liste** mehrerer Module desselben Kurses (ODER-Filter, z. B. „alle bisher bearbeiteten Module"). Leere Liste `[]` = kein Filter. **Erfordert `course_id`** |
 | `model` | `string` | nein | `"Gemma4"` | **Bitte weglassen.** Die Modellwahl trifft das Backend, s. [Abschnitt 8](#8-modellwahl-feld-model) |
 | `start_socratic` | `boolean` | nein | `false` | Startet den Lernmodus v1 mit dieser Nachricht, s. [Abschnitt 10](#10-lernmodus-sokratischer-tutor) |
-| `start_socratic_v2` | `boolean` | nein | `false` | Startet den Sokratischen Tutor (v2) mit dieser Nachricht |
+| `start_socratic_v2` | `boolean` | nein | `false` | Startet den Sokratischen Tutor (v2), z. B. über den Modus-Schalter. `user_query` kann dabei entfallen, s. [Abschnitt 10](#10-lernmodus-sokratischer-tutor) |
+| `stop_socratic_v2` | `boolean` | nein | `false` | Beendet den Sokratischen Tutor (v2) ohne Schlüsselwort-Nachricht, z. B. über den Modus-Schalter. `user_query` kann dabei entfallen. Nicht zusammen mit `start_socratic_v2` setzen (→ 400) |
 | `ui_language` | `string \| null` | nein | `null` | Oberflächen-/Gerätesprache als Code oder Name (`"en"`, `"de-DE"`, `"English"`). Der Sokratische Tutor nutzt sie als Startsprache, wenn der Chat noch keine eigene Nachricht enthält. Die Sprache der Nachrichten selbst hat immer Vorrang. Kann bei jedem Request mitgeschickt werden |
+
+¹ Ausnahme: Bei reinen Schalter-Requests (`start_socratic_v2` oder `stop_socratic_v2`) darf `user_query` fehlen. Wird trotzdem ein Text mitgeschickt, gilt er als Signal und landet **nicht** im Gesprächsverlauf.
 
 **Scope-Regeln in Kurzform:**
 
@@ -322,6 +325,7 @@ Der Assistent kann statt direkter Antworten in einen geführten Lernmodus wechse
 
 **Start:** Im Request `start_socratic: true` (v1) bzw. `start_socratic_v2: true` (v2) setzen.
 
+- **Empfohlen für den Modus-Schalter (v2):** einen eigenen Request nur mit dem Flag schicken, **ohne** `user_query` (Beispiel unten). Im Chat erscheint dann keine Nutzernachricht, nur die Begrüßung des Tutors — auch nicht nach einem Page-Reload über `/api/chat/history`. Ein trotzdem mitgeschickter Text wird ebenfalls nicht gespeichert.
 - Das Flag nur bei **genau dieser einen** Nachricht senden. Danach hält das Backend den Modus über die `thread_id` fest; erneutes Setzen ist unnötig.
 - Immer nur eines der beiden Flags setzen.
 - Lernmodus v2 braucht einen Kurs-/Modul-Scope. Ohne `course_id` startet keine Session; der Assistent antwortet stattdessen mit der Bitte, zuerst einen Kurs oder ein Modul auszuwählen. Dasselbe gilt, wenn im gewählten Modul keine nutzbaren Inhalte liegen.
@@ -336,7 +340,21 @@ exit · quit · stop · stopp · beende den tutor · beende den sokratischen tut
 end tutor · stop tutor · ich möchte aufhören · beende den lernmodus (alt, weiterhin gültig)
 ```
 
-Der Assistent bestätigt dann mit „Du hast den Sokratischen Tutor beendet. …“ (in der Session-Sprache). Ein Schalter bzw. Button zum Beenden wird am einfachsten so umgesetzt, dass er `exit` als Nachricht schickt.
+Der Assistent bestätigt dann mit „Du hast den Sokratischen Tutor beendet. …“ (in der Session-Sprache).
+
+**Beenden über den Schalter:** einen Request nur mit `stop_socratic_v2: true` schicken, **ohne** `user_query`. Die Session endet sofort, im Verlauf steht nur die Bestätigung des Tutors, keine Nutzernachricht. Das Flag ist idempotent: Läuft gerade keine Session (z. B. weil der Tutor schon selbst beendet hat), kommt nur die Bestätigung, ohne Fehler und ohne dass eine leere Chatfrage beantwortet wird.
+
+**Beispiel Modus-Schalter (Moodle):**
+
+```json
+// Schalter an
+{"thread_id": "550e8400-…", "course_id": 79, "module_id": [1234], "start_socratic_v2": true, "ui_language": "de"}
+
+// Schalter aus
+{"thread_id": "550e8400-…", "course_id": 79, "stop_socratic_v2": true, "ui_language": "de"}
+```
+
+Die Antwort (Begrüßung bzw. Bestätigung) kommt wie jede andere Antwort, inkl. `learning_mode_active` im `final`-Event. Ob das Frontend sie anzeigt, entscheidet ihr; im Verlauf (`/api/chat/history`) steht sie.
 
 **Status (`learning_mode_active`):** Jede Antwort meldet, ob danach eine Tutor-Session läuft: `final`-Event im Stream, Feld in `/api/chat` und in `/api/chat/history/{thread_id}`. **Der Modus-Schalter sollte immer diesem Wert folgen**, nicht dem lokalen Klickzustand. Eine Session endet nämlich auch ohne Schalter:
 
@@ -379,7 +397,7 @@ In beiden Fällen liefert `GET /api/chat/history/{id}` einfach eine leere Liste,
 | Status | Bedeutung | Typischer Auslöser |
 |--------|-----------|--------------------|
 | **200** | OK | — |
-| **400** | Fachliche Validierung fehlgeschlagen | `module_id` ohne `course_id`; unbekannte `course_id`/`module_id`; `score` außerhalb 0–1 |
+| **400** | Fachliche Validierung fehlgeschlagen | `module_id` ohne `course_id`; unbekannte `course_id`/`module_id`; `score` außerhalb 0–1; `user_query` fehlt (ohne Schalter-Flag); `start_socratic_v2` und `stop_socratic_v2` gleichzeitig |
 | **401** | Ungültiger API-Key | Falscher `Api-Key`-Header |
 | **403** | Kein API-Key | `Api-Key`-Header fehlt |
 | **422** | Schema-Validierung fehlgeschlagen | Pflichtfeld fehlt, falscher Typ, unbekannter `model`-Wert |
@@ -398,6 +416,8 @@ Bekannte 400-Meldungen:
 | `module_id is required when course_id is set.` | Wird — trotz des irreführenden Wortlauts — ausgelöst, wenn `module_id` **ohne** `course_id` gesendet wird |
 | `no course found with the given id: <id>.` | Die `course_id` ist im Suchindex nicht vorhanden (Kurs nicht ingestiert oder falsche ID) |
 | `no module found with the given id(s): [<ids>].` | Mindestens eine `module_id` ist im Suchindex nicht vorhanden |
+| `user_query is required (only start_socratic_v2 / stop_socratic_v2 requests may omit it).` | `user_query` fehlt bei einem normalen Chat-Request |
+| `start_socratic_v2 and stop_socratic_v2 cannot both be set.` | Beide Schalter-Flags im selben Request |
 
 Die beiden „not found"-Fälle sind ein häufiger Stolperstein bei der Erstintegration: Gültig sind nur Kurse und Module, die ins Backend eingelesen wurden. Wird eine ID abgewiesen, obwohl sie in Moodle existiert, ist der Kurs im Assistenten schlicht noch nicht verfügbar — neue und geänderte Inhalte zieht der nächtliche Ingest nach, danach also noch einmal probieren.
 
@@ -415,5 +435,5 @@ Die beiden „not found"-Fälle sind ein häufiger Stolperstein bei der Erstinte
 | Darstellung | Antworten enthalten HTML-Quellenlinks; `final.message` ist die verbindliche Fassung der Antwort ([9](#9-antwortformat-quellen-fallbacks-sprache)) |
 | Feedback | `response_id` der Antwort plus `score` 0 oder 1 ([6](#6-post-apifeedback)) |
 | Fehler | Vor dem Stream als HTTP-Status, innerhalb des Streams als `error`-Event ([12](#12-fehlercodes)) |
-| Sokratischer Tutor | Start über ein Flag, Beenden über ein Schlüsselwort im Chat; `learning_mode_active` in jeder Antwort steuert den Modus-Schalter ([10](#10-lernmodus-sokratischer-tutor)) |
+| Sokratischer Tutor | Start und Ende über die Flags `start_socratic_v2` / `stop_socratic_v2` ohne sichtbare Nachricht (oder Beenden per Schlüsselwort im Chat); `learning_mode_active` in jeder Antwort steuert den Modus-Schalter ([10](#10-lernmodus-sokratischer-tutor)) |
 | `model` | Kann entfallen — die Modellwahl liegt im Backend ([8](#8-modellwahl-feld-model)) |

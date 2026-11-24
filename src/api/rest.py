@@ -144,8 +144,12 @@ class RetrievalRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    user_query: SerializableChatMessage = Field(
-        description="The new user message. Should contain exactly one USER message.",
+    user_query: SerializableChatMessage | None = Field(
+        default=None,
+        description="The new user message. Should contain exactly one USER message. "
+        "Required, except for pure toggle requests (start_socratic_v2 / stop_socratic_v2), "
+        "where it may be omitted — a text sent along with these flags is treated as a "
+        "frontend signal and is not stored in the chat history.",
         examples=[
             SerializableChatMessage(content="I need help with my assignment", role=MessageRole.USER)
         ],
@@ -182,7 +186,14 @@ class ChatRequest(BaseModel):
         default=False,
         description="Explicitly enter the Socratic Tutor (socratic learning mode v2) "
         "with this message. Only takes effect if no socratic session is active and "
-        "ENABLE_SOCRATIC_V2 is set. Requires a course/module scope to start.",
+        "ENABLE_SOCRATIC_V2 is set. Requires a course/module scope to start. "
+        "user_query may be omitted; it is not stored in the chat history.",
+    )
+    stop_socratic_v2: bool = Field(
+        default=False,
+        description="End an active Socratic Tutor session (frontend toggle) without a keyword "
+        "message. Idempotent: without an active session the response just confirms the exit. "
+        "user_query may be omitted; it is not stored in the chat history.",
     )
     ui_language: str | None = Field(
         default=None,
@@ -194,8 +205,26 @@ class ChatRequest(BaseModel):
     )
 
     def get_user_query(self) -> str:
-        """Extract the query string from user_query SerializableChatMessage."""
-        return self.user_query.content
+        """Extract the query string from user_query SerializableChatMessage
+        ("" for a pure toggle request without message)."""
+        return self.user_query.content if self.user_query is not None else ""
+
+    @model_validator(mode="after")
+    def validate_user_query_and_toggle_flags(self):
+        if self.start_socratic_v2 and self.stop_socratic_v2:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="start_socratic_v2 and stop_socratic_v2 cannot both be set.",
+            )
+        is_toggle = self.start_socratic_v2 or self.stop_socratic_v2
+        # Only presence is checked (as before, when the field was mandatory) —
+        # no new emptiness rule that could break existing frontends.
+        if not is_toggle and self.user_query is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="user_query is required (only start_socratic_v2 / stop_socratic_v2 requests may omit it).",
+            )
+        return self
 
     @field_validator("module_id", mode="after")
     @classmethod
@@ -269,6 +298,7 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             thread_id=chat_request.thread_id,
             start_socratic=chat_request.start_socratic,
             start_socratic_v2=chat_request.start_socratic_v2,
+            stop_socratic_v2=chat_request.stop_socratic_v2,
             ui_language=chat_request.ui_language,
         )
     else:
@@ -279,6 +309,7 @@ def chat(chat_request: ChatRequest) -> ChatResponse:
             thread_id=chat_request.thread_id,
             start_socratic=chat_request.start_socratic,
             start_socratic_v2=chat_request.start_socratic_v2,
+            stop_socratic_v2=chat_request.stop_socratic_v2,
             ui_language=chat_request.ui_language,
         )
 
@@ -337,6 +368,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                         thread_id=thread_id,
                         start_socratic=chat_request.start_socratic,
                         start_socratic_v2=chat_request.start_socratic_v2,
+                        stop_socratic_v2=chat_request.stop_socratic_v2,
                         ui_language=chat_request.ui_language,
                     )
                 else:
@@ -346,6 +378,7 @@ def chat_stream(chat_request: ChatRequest) -> StreamingResponse:
                         thread_id=thread_id,
                         start_socratic=chat_request.start_socratic,
                         start_socratic_v2=chat_request.start_socratic_v2,
+                        stop_socratic_v2=chat_request.stop_socratic_v2,
                         ui_language=chat_request.ui_language,
                     )
 

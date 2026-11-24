@@ -237,6 +237,20 @@ class KICampusAssistant:
 
         return graph.compile(checkpointer=self.checkpointer)
 
+    @staticmethod
+    def _append_turn_to_history(
+        result: GraphState, query: str, assistant_message: SerializableChatMessage
+    ) -> list[SerializableChatMessage]:
+        """History after this turn: user + assistant message — except for a
+        pure toggle signal (start/stop flag took effect), whose message text is
+        frontend-generated and must not show up in the history (e.g. after a
+        page reload). The tutor's reply (welcome / exit confirmation) is kept.
+        """
+        if result.get("signal_turn"):
+            return result["chat_history"] + [assistant_message]
+        user_message = SerializableChatMessage(role="user", content=query)
+        return result["chat_history"] + [user_message, assistant_message]
+
     @observe()
     def limit_chat_history(self, chat_history: list[SerializableChatMessage], limit: int) -> list[SerializableChatMessage]:
         """Limit chat history to last N messages to save context window."""
@@ -254,6 +268,7 @@ class KICampusAssistant:
         module_id: int | list[int] | None = None,
         start_socratic: bool = False,
         start_socratic_v2: bool = False,
+        stop_socratic_v2: bool = False,
         ui_language: str | None = None,
     ) -> tuple[GraphState, dict, str]:
         """
@@ -267,6 +282,8 @@ class KICampusAssistant:
             module_id: Optional module ID filter — a single ID or a list of IDs
             start_socratic: Explicit request-level trigger to enter the socratic mode
             start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
+            stop_socratic_v2: Explicit request-level trigger to end an active socratic v2
+                session (frontend toggle) — no keyword message needed
             ui_language: Optional UI/device language hint of the frontend (e.g. "en",
                 "de-DE") — used by the v2 tutor when the conversation itself gives no
                 language signal yet
@@ -313,6 +330,7 @@ class KICampusAssistant:
                         "thread_id": thread_id,
                         "start_socratic": start_socratic,
                         "start_socratic_v2": start_socratic_v2,
+                        "stop_socratic_v2": stop_socratic_v2,
                         "ui_language": ui_language,
                     },
                     # Reset per-turn intermediate artifacts so stale checkpoint
@@ -332,6 +350,8 @@ class KICampusAssistant:
                     # Per-turn routing flag of the v2 tutor (translation
                     # request) — must never survive into the next turn.
                     "v2_translate_last": False,
+                    # Per-turn: was this request a pure toggle signal?
+                    "signal_turn": False,
                 }
                 return state_update, config, thread_id
 
@@ -350,6 +370,7 @@ class KICampusAssistant:
                 "thread_id": thread_id,
                 "start_socratic": start_socratic,
                 "start_socratic_v2": start_socratic_v2,
+                "stop_socratic_v2": stop_socratic_v2,
                 "ui_language": ui_language,
             },
             "system_config": self.system_config
@@ -460,6 +481,7 @@ class KICampusAssistant:
         thread_id: str | None = None,
         start_socratic: bool = False,
         start_socratic_v2: bool = False,
+        stop_socratic_v2: bool = False,
         ui_language: str | None = None,
     ) -> tuple[SerializableChatMessage, str]:
         """
@@ -474,6 +496,8 @@ class KICampusAssistant:
                 - If None: Creates new conversation with generated ID
             start_socratic: Explicit request-level trigger to enter the socratic mode
             start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
+            stop_socratic_v2: Explicit request-level trigger to end an active socratic v2
+                session (frontend toggle) — no keyword message needed
 
         Returns:
             tuple: (SerializableChatMessage with answer, thread_id)
@@ -485,6 +509,7 @@ class KICampusAssistant:
             thread_id=thread_id,
             start_socratic=start_socratic,
             start_socratic_v2=start_socratic_v2,
+            stop_socratic_v2=stop_socratic_v2,
             ui_language=ui_language,
         )
 
@@ -510,9 +535,7 @@ class KICampusAssistant:
             assistant_content=assistant_content,
         )
 
-        # Füge User-Message und Assistant-Message zur History hinzu
-        user_message = SerializableChatMessage(role="user", content=query)
-        updated_history = result["chat_history"] + [user_message, assistant_message]
+        updated_history = self._append_turn_to_history(result, query, assistant_message)
 
         # Update State mit finaler chat_history
         self.graph.update_state(
@@ -533,6 +556,7 @@ class KICampusAssistant:
         thread_id: str | None = None,
         start_socratic: bool = False,
         start_socratic_v2: bool = False,
+        stop_socratic_v2: bool = False,
         ui_language: str | None = None,
     ) -> tuple[SerializableChatMessage, str]:
         """
@@ -550,6 +574,8 @@ class KICampusAssistant:
                 - If None: Creates new conversation with generated ID
             start_socratic: Explicit request-level trigger to enter the socratic mode
             start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
+            stop_socratic_v2: Explicit request-level trigger to end an active socratic v2
+                session (frontend toggle) — no keyword message needed
 
         Returns:
             tuple: (SerializableChatMessage with answer, thread_id)
@@ -563,6 +589,7 @@ class KICampusAssistant:
             module_id=module_id,
             start_socratic=start_socratic,
             start_socratic_v2=start_socratic_v2,
+            stop_socratic_v2=stop_socratic_v2,
             ui_language=ui_language,
         )
 
@@ -588,9 +615,7 @@ class KICampusAssistant:
             assistant_content=assistant_content,
         )
 
-        # Füge User-Message und Assistant-Message zur History hinzu
-        user_message = SerializableChatMessage(role="user", content=query)
-        updated_history = result["chat_history"] + [user_message, assistant_message]
+        updated_history = self._append_turn_to_history(result, query, assistant_message)
         
         # Update State mit finaler chat_history
         self.graph.update_state(

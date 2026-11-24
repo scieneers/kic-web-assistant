@@ -109,6 +109,13 @@ def _cap_content_per_module(content_nodes: list, max_chars: int) -> str:
     return "\n\n".join("\n\n".join(modules[key])[:per_module_budget] for key in order)
 
 
+def _output_language_reminder(language: str) -> str:
+    return (
+        f"AUSGABESPRACHE: {language} — schreibe alle LERNZIEL- und KONZEPT-Inhalte auf {language}, "
+        "auch wenn das Material oben in einer anderen Sprache ist (nur die Präfixe LERNZIEL:/KONZEPT: bleiben)."
+    )
+
+
 def _parse_extraction(content: str | None) -> tuple[list[str], list[str]]:
     """Parse LERNZIEL:/KONZEPT: lines from the extraction response."""
     objectives: list[str] = []
@@ -191,7 +198,10 @@ def socratic_v2_opening(state: GraphState) -> dict:
     # model, because a large prompt through the GWDG path would routinely trip
     # the 7s timeout and mark GWDG unavailable for all other requests.
     response = _llm.chat(
-        query=f"SPRACHE: {language}\n\n{content}",
+        # The language is repeated AFTER the (often long, German) material:
+        # with only the leading line, MINI followed the material's language
+        # (live: English session → German objectives in the welcome).
+        query=f"SPRACHE: {language}\n\n{content}\n\n{_output_language_reminder(language)}",
         chat_history=[],
         model=Models.MINI,
         system_prompt=SOCRATIC_V2_OPENING_PROMPT,

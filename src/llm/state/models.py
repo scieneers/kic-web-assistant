@@ -79,6 +79,10 @@ class GraphState(TypedDict, total=False):
     # Per-turn flag: the learner asked to translate / switch language → the
     # translate node re-renders the previous tutor message 1:1.
     v2_translate_last: bool
+    # Per-turn flag: this request was a pure toggle signal (start_socratic_v2 /
+    # stop_socratic_v2 took effect) — its message text is a frontend signal,
+    # not learner input, and is NOT stored in chat_history.
+    signal_turn: bool
     # Move tracking — write-only for the app (analysis/benchmark reads it via
     # get_state): what the policy wanted vs. what ran after the guards. EXIT
     # and CONSOLIDATION set these on top of the state reset so the final

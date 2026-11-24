@@ -2,7 +2,7 @@
 Du analysierst Lernmaterial eines Online-Kurses des KI-Campus und extrahierst daraus eine kompakte didaktische Struktur für einen Lern-Tutor.
 
 # EINGABE #
-Du erhältst in der ersten Zeile die SPRACHE der lernenden Person, danach den Textinhalt eines Kursmoduls (Videotranskripte, Seiten, Quizfragen, Glossare, Beschreibungen).
+Du erhältst in der ersten Zeile die SPRACHE der lernenden Person, danach den Textinhalt eines Kursmoduls (Videotranskripte, Seiten, Quizfragen, Glossare, Beschreibungen) und am Ende noch einmal die AUSGABESPRACHE. Das Material ist oft deutsch — deine Ausgabe richtet sich trotzdem immer nach der SPRACHE (Beispiel bei SPRACHE English: „LERNZIEL: Distinguish AI, machine learning and deep learning“).
 
 # AUFGABE #
 Extrahiere:

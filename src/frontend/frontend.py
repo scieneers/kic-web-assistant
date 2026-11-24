@@ -340,9 +340,11 @@ def reset_history(keep_socratic: bool = False, remount_tree: bool = True):
     if remount_tree:
         st.session_state.course_selection_indices = []
         _bump_tree()
+    # New thread → no tutor session on the server side, whatever was clicked.
+    st.session_state.pending_tutor_toggle = None
+    st.session_state.learning_mode_active = False
     if not keep_socratic:
         st.session_state.start_socratic = False
-        st.session_state.start_socratic_v2 = False
     st.experimental_set_query_params()
 
 
@@ -356,7 +358,13 @@ def _arm_socratic(version: str) -> None:
     dadurch ihren Widget-State und sprangen auf den Default zurück.
     """
     st.session_state.start_socratic = version == "v1"
-    st.session_state.start_socratic_v2 = version == "v2"
+
+
+def _toggle_tutor_v2(action: str) -> None:
+    """on_click-Callback für den v2-Schalter (Moodle-Toggle nachgestellt):
+    Start/Ende laufen als eigener Request NUR über das Flag
+    (start_socratic_v2 / stop_socratic_v2), ohne sichtbare Nachricht."""
+    st.session_state.pending_tutor_toggle = action
 
 
 SESSION_TTL = 30 * 60  # 30 Minuten – muss mit Backend-Wert übereinstimmen
@@ -388,6 +396,8 @@ def _load_session_from_backend(thread_id: str, auto_restored: bool = False) -> N
     st.session_state.messages = [
         {"role": msg["role"], "content": msg["content"]} for msg in messages
     ]
+    # Schalterzustand nach Reload aus dem Backend (nicht aus dem Klickzustand).
+    st.session_state.learning_mode_active = bool(data.get("learning_mode_active"))
 
 
 def _load_session_clicked() -> None:
@@ -466,12 +476,18 @@ with st.sidebar:
     )
     if st.session_state.get("start_socratic"):
         st.info("v1 aktiviert für die nächste Nachricht.")
-    if st.session_state.get("start_socratic_v2"):
-        st.info("v2 aktiviert für die nächste Nachricht.")
     st.button("Sokratischer Tutor starten (v1)", key="start_socratic_btn", on_click=_arm_socratic, args=("v1",))
-    st.button(
-        "✨ Sokratischer Tutor starten (v2)", key="start_socratic_v2_btn", on_click=_arm_socratic, args=("v2",)
-    )
+    # v2 als Toggle wie in Moodle: Zustand folgt learning_mode_active aus der
+    # letzten Backend-Antwort; Start/Ende ohne sichtbare Nachricht im Chat.
+    if st.session_state.get("learning_mode_active"):
+        st.success("Sokratischer Tutor läuft")
+        st.button(
+            "⏹ Sokratischen Tutor beenden (v2)", key="stop_socratic_v2_btn", on_click=_toggle_tutor_v2, args=("stop",)
+        )
+    else:
+        st.button(
+            "✨ Sokratischer Tutor starten (v2)", key="start_socratic_v2_btn", on_click=_toggle_tutor_v2, args=("start",)
+        )
 
     st.divider()
     st.caption("🧪 Moodle-Simulation")
@@ -546,8 +562,18 @@ for message in st.session_state.messages:
         st.markdown(escape_markdown_directives(message["content"]), unsafe_allow_html=True)
 
 
-# React to user input
-if query := st.chat_input("Wie lautet Ihre Frage?"):
+def _base_payload() -> dict:
+    return {
+        "model": st.session_state.llm_select.value
+        if isinstance(st.session_state.llm_select, Models)
+        else st.session_state.llm_select,
+        "course_id": st.session_state.course_id if hasattr(st.session_state, "course_id") else None,
+        "module_id": st.session_state.module_id if hasattr(st.session_state, "module_id") else None,
+        "thread_id": st.session_state.thread_id,
+    }
+
+
+def _check_session_ttl() -> None:
     # TTL-Check: Session nach 30 min Inaktivität zurücksetzen
     if (
         st.session_state.last_activity is not None
@@ -555,30 +581,12 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
     ):
         reset_history()
         st.info("Session abgelaufen – neue Konversation gestartet.")
-
     st.session_state.last_activity = time.time()
 
-    with st.chat_message("user"):
-        st.markdown(escape_markdown_directives(query))
 
-    # Store user message in UI history (for display only)
-    st.session_state.messages.append({"role": MessageRole.USER, "content": query})
-
-    payload = {
-        "user_query": {"role": MessageRole.USER, "content": query},  # Single message object (not array)
-        "model": st.session_state.llm_select.value
-        if isinstance(st.session_state.llm_select, Models)
-        else st.session_state.llm_select,
-        "course_id": st.session_state.course_id if hasattr(st.session_state, "course_id") else None,
-        "module_id": st.session_state.module_id if hasattr(st.session_state, "module_id") else None,
-        "thread_id": st.session_state.thread_id,
-        # pop: the trigger should only fire for this one message, the server
-        # persists socratic_mode / socratic_v2_phase via the checkpointer for
-        # subsequent turns.
-        "start_socratic": st.session_state.pop("start_socratic", False),
-        "start_socratic_v2": st.session_state.pop("start_socratic_v2", False),
-    }
-
+def _stream_and_render(payload: dict) -> None:
+    """Sendet den Request an /api/chat/stream, rendert die Antwort progressiv
+    und übernimmt thread_id / trace_id / learning_mode_active aus den Events."""
     # Stream tokens from backend and render progressively.
     with st.chat_message("assistant"):
         placeholder = st.empty()
@@ -621,6 +629,7 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
                     placeholder.markdown(escape_markdown_directives(final_message), unsafe_allow_html=True)
                     st.session_state.thread_id = event.get("thread_id")
                     st.session_state["trace_id"] = event.get("response_id")
+                    st.session_state.learning_mode_active = bool(event.get("learning_mode_active"))
                     streamed_text = final_message
                 elif event.get("type") == "error":
                     placeholder.empty()
@@ -632,8 +641,40 @@ if query := st.chat_input("Wie lautet Ihre Frage?"):
     # URL-Param setzen (Moodle-Analog: localStorage.setItem) → überlebt Browser-Reload
     if st.session_state.thread_id:
         st.experimental_set_query_params(thread_id=st.session_state.thread_id)
-    # Rerun so the sidebar shows the updated thread_id immediately.
+    # Rerun so the sidebar shows the updated thread_id / toggle state immediately.
     st.rerun()
+
+
+# Toggle-Request (v2): ohne Nachricht, nur Flag — keine User-Bubble im Chat.
+if toggle_action := st.session_state.pop("pending_tutor_toggle", None):
+    _check_session_ttl()
+    _stream_and_render(
+        {
+            **_base_payload(),
+            "start_socratic_v2": toggle_action == "start",
+            "stop_socratic_v2": toggle_action == "stop",
+        }
+    )
+
+# React to user input
+if query := st.chat_input("Wie lautet Ihre Frage?"):
+    _check_session_ttl()
+
+    with st.chat_message("user"):
+        st.markdown(escape_markdown_directives(query))
+
+    # Store user message in UI history (for display only)
+    st.session_state.messages.append({"role": MessageRole.USER, "content": query})
+
+    _stream_and_render(
+        {
+            **_base_payload(),
+            "user_query": {"role": MessageRole.USER, "content": query},  # Single message object (not array)
+            # pop: the v1 trigger only fires for this one message; the server
+            # persists the session state via the checkpointer.
+            "start_socratic": st.session_state.pop("start_socratic", False),
+        }
+    )
 
 if trace_id := st.session_state.get("trace_id"):
     streamlit_feedback(
