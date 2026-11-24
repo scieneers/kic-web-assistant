@@ -38,6 +38,11 @@ class LanguageDetector:
             Language name in English (e.g. 'German', 'English'). Falls back to
             'German' if the LLM call fails or returns something unusable.
         """
+        # A single-word message (e.g. "hi", "ok", "thanks") carries too little
+        # signal to detect reliably. Skip the LLM and fall back immediately.
+        if len(query.strip().split()) <= 1 and not chat_history:
+            return DEFAULT_LANGUAGE
+
         try:
             # The mini model is selected internally and is independent of the
             # conversation model, so detection latency never depends on GWDG.

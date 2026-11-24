@@ -10,6 +10,7 @@
 tmp
 .DS_Store
 db
+logs
 
 ## Failed Transcripts
 documentation/FailedTranscripts.xlsx
@@ -17,8 +18,20 @@ documentation/FailedTranscripts.xlsx
 ## Big models
 **/vosk_model/vosk-model-de-0.21
 
+## H5P zips (generated/downloaded, not to be committed)
+bad_h5p_zips/
+**/*.h5p
+
+## Evaluation datasets (generated, not to be committed)
+evaluation/dataset/*.jsonl
+evaluation/dataset/*.json
+
+## script/audit outputs (generated, not to be committed)
+/outputs/
+
 ## test outputs
 **/tests/**/*.json
+**/tests/**/*.jsonl
 **/tests/**/*.txt
 **/tests/**/*.html
 **/tests/**/*.pdf

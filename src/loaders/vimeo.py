@@ -6,7 +6,7 @@ import requests
 
 from src.env import env
 from src.loaders.APICaller import APICaller
-from src.loaders.helper import convert_vtt_to_text
+from src.loaders.helper import convert_vtt_to_segments, convert_vtt_to_text
 from src.loaders.models.texttrack import TextTrack
 
 
@@ -91,6 +91,13 @@ class Vimeo:
             
             try:
                 texttrack.transcript = convert_vtt_to_text(StringIO(transcript_text))
+                texttrack.video_url = f"https://vimeo.com/{video_id}"
+                try:
+                    # Timed segments are additive (per-chunk start_seconds) — a
+                    # parse failure must not lose the flat transcript.
+                    texttrack.segments = convert_vtt_to_segments(StringIO(transcript_text))
+                except Exception:
+                    texttrack.segments = None
                 return texttrack, None
             except Exception as err:
                 self.logger.warn(f"Reading Fallback Transcript failed: {fallback_transcript or 'content'}")

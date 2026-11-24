@@ -1,7 +1,7 @@
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                        Base - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -25,7 +25,7 @@ RUN apt-get install -y \
 
 WORKDIR $PYSETUP_PATH
 COPY uv.lock pyproject.toml ./
-RUN uv sync --extra api --no-dev --no-install-project
+RUN uv sync --extra api --extra reranker --no-dev --no-install-project
 
 USER appuser
 WORKDIR /home/appuser
@@ -38,7 +38,7 @@ COPY --chown=appuser:appuser . ./
 FROM base AS runtime
 
 # Install Azure CLI for defaultcredentials cli login in lockally hosted container
-RUN apt-get install -y curl
+RUN apt-get install -y curl gnupg
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
 USER appuser
@@ -52,4 +52,10 @@ ENV NLTK_DATA=nltk_data
 RUN python -m nltk.downloader stopwords punkt punkt_tab
 EXPOSE 80
 
-CMD ["gunicorn" , "-b", "0.0.0.0:80", "-c", "src/api/gunicorn.conf.py", "src.api.rest:app"]
+# Default: Redis läuft als Sidecar-Container neben der API (siehe IaC) und ist
+# unter localhost erreichbar — Azure App Service teilt den Network-Namespace
+# zwischen Haupt- und Sidecar-Container. Für Azure Managed Redis dieses
+# Setting in den App Settings überschreiben (rediss://-URL).
+ENV REDIS_URL="redis://localhost:6379"
+
+CMD ["bash", "src/api/entrypoint.sh"]

@@ -8,11 +8,6 @@ This is the standard RAG flow equivalent to the current system.
 from langgraph.graph import StateGraph, START, END
 
 from src.llm.state.models import GraphState
-from src.llm.tools.retrieve import retrieve_chunks
-from src.llm.tools.rerank import rerank_chunks
-from src.llm.tools.language import detect_language
-from src.llm.tools.answer import generate_answer
-from src.llm.tools.citation import parse_citations
 
 
 def build_simple_hop_graph() -> StateGraph:
@@ -29,6 +24,12 @@ def build_simple_hop_graph() -> StateGraph:
     both branches. detected_language and the retrieval keys are disjoint state
     fields, so the parallel writes never collide (no reducer needed).
     """
+    from src.llm.tools.retrieve import retrieve_chunks
+    from src.llm.tools.rerank import rerank_chunks
+    from src.llm.tools.language import detect_language
+    from src.llm.tools.answer import generate_answer
+    from src.llm.tools.citation import parse_citations
+
     graph = StateGraph(GraphState)
 
     # Add nodes
@@ -43,8 +44,15 @@ def build_simple_hop_graph() -> StateGraph:
     graph.add_edge(START, "detect_language_node")
     graph.add_edge("retrieve_node", "rerank_node")
     # Fan in: answer waits for both the reranked sources and the detected language.
-    graph.add_edge("rerank_node", "answer_node")
-    graph.add_edge("detect_language_node", "answer_node")
+    # Must be ONE join edge, not two separate edges: with separate edges the
+    # answer node fires as soon as the shorter branch (detect_language) is
+    # done — from the second turn on, `reranked` is reset to [] (not None), so
+    # the fan-in guard in generate_answer doesn't catch it and the node runs
+    # once with empty sources. In module scope that premature run produces the
+    # "search the whole course?" offer and leaves pending_scope_escalation set
+    # although the real answer succeeded — a following "ok"/"ja" then re-ran
+    # the previous question at course level.
+    graph.add_edge(["rerank_node", "detect_language_node"], "answer_node")
     graph.add_edge("answer_node", "citation_node")
     graph.add_edge("citation_node", END)
 

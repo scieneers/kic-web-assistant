@@ -42,7 +42,7 @@ class Video(BaseModel):
                 self.video_url = HttpUrl(response.url)
         except requests.exceptions.RequestException as e:
             logger.exception(f"An error occurred trying to validate video {self.video_url}: {e}")
-            return self
+        return self
 
     @computed_field  # type: ignore[misc]
     @property

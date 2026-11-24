@@ -42,14 +42,26 @@ class Reranker:
         return text[:self.max_chars_per_node] if len(text) > self.max_chars_per_node else text
     
     @observe(name="rerank")
-    def rerank(self, query: str, nodes: list[TextNode], model: Models) -> list[SerializableTextNode]:
+    def rerank(
+        self,
+        query: str,
+        nodes: list[TextNode],
+        model: Models,
+        raise_on_error: bool = False,
+    ) -> list[SerializableTextNode]:
         """Rerank nodes based on query relevance using LLM.
-        
+
         Args:
             query: The user's query
             nodes: List of retrieved nodes to rerank (SerializableTextNode or TextNode)
             model: Which LLM model to use for reranking (from LLM selection logic)
-            
+            raise_on_error: If True, LLM failures raise instead of silently
+                falling back to the original order. Production keeps the
+                fallback (a degraded answer beats a crashed request); the
+                benchmark uses strict mode so a failed rerank is counted as a
+                failure instead of polluting the metrics with passthrough
+                results.
+
         Returns:
             Reranked list of nodes (top_n best matches)
         """
@@ -94,6 +106,8 @@ class Reranker:
                 query_str=query
             )
         except Exception as e:
+            if raise_on_error:
+                raise
             # If reranking fails (network, Azure, parsing errors), return original nodes
             print(f"Reranking failed (model={model}, nodes={len(nodes)}): {e}")
             # Convert original nodes to SerializableTextNode

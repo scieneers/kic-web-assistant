@@ -14,7 +14,7 @@ from src.loaders.moochup import CourseAttributes, CourseInfo
     ],
 )
 def test_moochup_course_attributes(input: str, expected: str):
-    course_attributes = CourseAttributes(name="Test Title", description=input, languages=["de"])
+    course_attributes = CourseAttributes(name="Test Title", description=input, languages=["de"], url="https://ki-campus.org/test")
     assert course_attributes.description == expected
 
 
@@ -30,6 +30,7 @@ def test_moochup_payload_creation():
         "type": "courses",
         "attributes": {
             "name": "KI und Ethik II",
+            "description": "Die Entwicklung Künstlicher Intelligenz.",
             "courseCode": "KI_Ethik_II",
             "courseMode": "MOOC",
             "abstract": "Die Entwicklung Künstlicher Intelligenz erfolgt eingebettet in den größeren Kontext einer [...]",
@@ -73,4 +74,11 @@ def test_moochup_payload_creation():
     }
 
     course = CourseInfo(**course_example)
-    course.to_document()
+    doc = course.to_document()
+    assert doc is not None
+    assert len(doc.text) > 0
+    assert "KI und Ethik II" in doc.text
+    assert doc.metadata["source"] == "Moochup"
+    assert doc.metadata["type"] == "Kurs"
+    assert doc.metadata["url"] == "https://ki-campus.org/courses/KI_Ethik_II"
+    assert doc.metadata["course_id"] == "0cf46a4b-9022-4cd5-9815-92312b3a84dcc"

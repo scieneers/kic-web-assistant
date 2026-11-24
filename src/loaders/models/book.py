@@ -5,10 +5,43 @@ Ein Book-Modul repräsentiert ein mehrseitiges Dokument mit Kapiteln.
 Jedes Kapitel kann HTML-Inhalt, Videos und Dateianhänge (PDFs, ZIPs, etc.) enthalten.
 """
 
+import re
+
 from pydantic import BaseModel
 
 from src.loaders.models.resource import Resource
 from src.loaders.models.texttrack import TextTrack
+
+
+def chapter_order_from_structure(structure) -> dict[str, int]:
+    """Kapitel-ID → Position aus dem Moodle-structure-JSON (autoritative
+    Reihenfolge inkl. Unterkapitel-Hierarchie).
+
+    Die chapter_id ist Moodles interne DB-ID — weder ihre String- noch ihre
+    numerische Sortierung entspricht zwingend der pädagogischen Reihenfolge;
+    nur die structure-Datei kennt sie. Fehlt sie, bleibt als Fallback die
+    numerische Sortierung (siehe extract_book).
+    """
+    order: dict[str, int] = {}
+    counter = 0
+
+    def _walk(nodes) -> None:
+        nonlocal counter
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            match = re.search(r"(\d+)/index\.html", node.get("href") or "")
+            if match:
+                order[match.group(1)] = counter
+                counter += 1
+            _walk(node.get("subitems") or [])
+
+    if isinstance(structure, dict):
+        structure = [structure]
+    _walk(structure)
+    return order
 
 
 class BookChapter(BaseModel):
@@ -89,7 +122,9 @@ class Book(BaseModel):
     module_id: int
     intro: str | None = None  # Intro-Text aus mod_book_get_books_by_courses
     chapters: list[BookChapter] = []
-    structure: dict | None = None
+    # Rohes structure-JSON aus dem Moodle-Content — je nach Moodle-Version ein
+    # Objekt oder eine Liste von Kapitel-Knoten.
+    structure: dict | list | None = None
     
     def __str__(self) -> str:
         """

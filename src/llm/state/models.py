@@ -4,8 +4,13 @@ from llama_index.core.schema import TextNode
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.api.models.serializable_text_node import SerializableTextNode
 
-Scenario = Literal["no_vectordb", "simple_hop", "multi_hop", "socratic", "exit_complete"]
+Scenario = Literal["no_vectordb", "simple_hop", "socratic", "socratic_v2", "summarize", "exit_complete"]
 SocraticMode = Literal["contract", "diagnose", "core"]
+# Socratic v2 ("Lernmodus v2") phases: opening (load content, extract
+# objectives, welcome) → core (move-policy loop) → consolidation (learner
+# summarizes, session closes). See src/llm/graphs/socratic_v2.py.
+SocraticV2Phase = Literal["opening", "core", "consolidation"]
+RerankerType = Literal["llm", "azure_semantic", "bge"]
 # "core" routes to "hinting", "reflection", "explain" internally
 
 class GraphState(TypedDict, total=False):
@@ -17,7 +22,7 @@ class GraphState(TypedDict, total=False):
     mode: Optional[Scenario]
     
     # runtime configuration (from API/Frontend)
-    runtime_config: Dict[str, Any]  # model, course_id, module_id, thread_id
+    runtime_config: Dict[str, Any]  # model, course_id, module_id, thread_id, start flags, ui_language
     
     # system configuration (hardcoded defaults, not exposed to frontend)
     system_config: Dict[str, Any]  # rerank_top_n and retrieval_k
@@ -26,13 +31,21 @@ class GraphState(TypedDict, total=False):
     contextualized_query: Optional[str]
     detected_language: Optional[str]
 
+    # module→course scope escalation: when a module-scoped question finds no
+    # answer, the fallback offers to retry at course level.
+    # pending_scope_escalation is set by the answer node and survives exactly
+    # one turn (contextualize_and_route consumes or clears it on the next
+    # message); scope_escalated is per-turn and makes retrieval drop the
+    # module filter while keeping the course filter.
+    pending_scope_escalation: Optional[Dict[str, Any]]  # {"contextualized_query": str}
+    scope_escalated: bool
+
     # retrieval artifacts
     retrieved: List[SerializableTextNode]
+    # True when retrieval already ranked the results with Azure's semantic
+    # ranker (integrated mode) — the rerank node then only cuts/thresholds.
+    retrieval_semantic_ranked: bool
     reranked: List[SerializableTextNode]
-
-    # multi_hop specific artifacts
-    sub_queries: List[str]  # Decomposed sub-questions for multi-hop
-    multi_contexts: List[List[SerializableTextNode]]  # Retrieved contexts per sub-query (parallel)
 
     # socratic specific artifacts
     socratic_mode: Optional[SocraticMode]  # Internal routing: "contract" | "diagnose" | "core" ("hinting", "reflection" and "explain" handled in core)
@@ -42,8 +55,47 @@ class GraphState(TypedDict, total=False):
     attempt_count: int  # Total number of attempts student made at current question/concept
     number_given_hints: int  # Total number of hints given so far (for hint graduation)
 
+    # socratic v2 ("Lernmodus v2") artifacts — session-scoped, live only in the
+    # in-memory checkpoint. Independent of the v1 fields above so both variants
+    # can be compared side by side without touching each other.
+    socratic_v2_phase: Optional[SocraticV2Phase]
+    v2_learning_objectives: Optional[List[str]]  # extracted from module content at opening
+    v2_key_concepts: Optional[List[str]]  # key concepts of the module, extracted at opening
+    v2_session_goal: Optional[str]  # goal negotiated with the learner during the session
+    v2_learner_model: Optional[Dict[str, Any]]  # {"konzepte": {name: status}, "missverstaendnisse": [...], "affekt": str}
+    v2_target_concept: Optional[str]  # concept the current core exchange focuses on
+    v2_hint_count: int  # hints given for the CURRENT target concept (2 → forced micro-explain)
+    v2_question_streak: int  # consecutive question moves without giving anything back (3 → forced hint)
+    v2_core_turns: int  # core-phase exchanges so far — guards against a premature CONSOLIDATE
+    v2_scope_title: Optional[str]  # module/course display name for tutor messages
+    # QUIZ move: real course quiz items (structured QuizItem payloads with the
+    # known solutions), loaded once at opening; answers graded deterministically.
+    v2_quiz_items: Optional[List[Dict[str, Any]]]  # [{...payload, "asked": bool}]
+    v2_pending_quiz: Optional[Dict[str, Any]]  # question currently posed: {question, kind, concept, options: [{letter, text, correct}], unrecognized_count}
+    # Session language (English name, e.g. "German", "English") — resolved at
+    # opening, re-detected on substantial learner messages, injected into every
+    # v2 generation and used for the fixed texts (see socratic_v2_language.py).
+    v2_language: Optional[str]
+    # Per-turn flag: the learner asked to translate / switch language → the
+    # translate node re-renders the previous tutor message 1:1.
+    v2_translate_last: bool
+    # Per-turn flag: this request was a pure toggle signal (start_socratic_v2 /
+    # stop_socratic_v2 took effect) — its message text is a frontend signal,
+    # not learner input, and is NOT stored in chat_history.
+    signal_turn: bool
+    # Move tracking — write-only for the app (analysis/benchmark reads it via
+    # get_state): what the policy wanted vs. what ran after the guards. EXIT
+    # and CONSOLIDATION set these on top of the state reset so the final
+    # snapshot still shows how the session ended.
+    v2_last_policy_move: Optional[str]  # move the policy chose (before guards; None if no policy ran)
+    v2_last_move: Optional[str]  # move actually executed (after guards / quiz handling)
+
     # output
     answer: Optional[str]
+    # Set only when `answer` is a canned fallback message — identifies which
+    # one, for Langfuse tagging and cross-turn no-answer detection (see
+    # SerializableChatMessage.fallback_type).
+    fallback_type: Optional[str]
     citations_markdown: Optional[str]
 
 

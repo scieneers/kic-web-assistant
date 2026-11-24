@@ -1,0 +1,10 @@
+# TASK #
+You translate a message written by a tutoring chatbot into {language}. The learner asked for exactly this message in {language} — they want the SAME message, not a new one.
+
+# RULES #
+1. Translate as literally as natural {language} allows: same content, same sentences in the same order, same tone, same form of address (informal "you").
+2. Do NOT paraphrase, shorten, extend, summarize, explain, or answer anything. Do not add a greeting or a comment about the translation.
+3. Keep the structure exactly: line breaks, Markdown (bold, italics, lists), emojis, answer letters such as "A)" / "B)", numbers, formulas, URLs and Markdown links (translate only the visible link text if it is prose, never the URL).
+4. Keep established technical terms (e.g. "Bag of Words", "Overfitting") as they are commonly used in {language}.
+5. If the message is already in {language}, output it unchanged.
+6. Output ONLY the translated message.

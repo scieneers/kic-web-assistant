@@ -87,9 +87,21 @@ class APICaller:
         return self.response.text
 
     def getFile(self, filename, tmp_dir):
+        # Same reasoning as in get(): without a timeout a stalled download hangs
+        # the ingestion run forever — the stage watchdog only logs, it cannot
+        # interrupt. The read timeout applies per chunk, not to the whole
+        # download, so large H5P packages are unaffected.
+        timeout_connect = float(os.getenv("HTTP_TIMEOUT_CONNECT", "10"))
+        timeout_read = float(os.getenv("HTTP_TIMEOUT_READ", "60"))
+
         local_filename = Path(f"{tmp_dir}/{filename}")
-        # TEMPORARY: verify=False wegen abgelaufenem Server-Zertifikat
-        with requests.get(self.url, params=self.params, stream=True, verify=False) as r:
+        with requests.get(
+            self.url,
+            params=self.params,
+            stream=True,
+            verify=True,
+            timeout=(timeout_connect, timeout_read),
+        ) as r:
             r.raise_for_status()
             with open(local_filename, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):

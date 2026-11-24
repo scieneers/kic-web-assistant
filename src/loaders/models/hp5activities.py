@@ -4,7 +4,7 @@ import json
 import zipfile
 from typing import Optional
 
-from pydantic import BaseModel, HttpUrl, root_validator
+from pydantic import BaseModel, HttpUrl, model_validator
 
 
 def extract_library_from_h5p(h5p_zip_path: str) -> Optional[str]:
@@ -49,7 +49,8 @@ class H5PActivities(BaseModel):
     filename: Path
     intro: str = ""
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def validate_fileurl(cls, values):
         values["fileurl"] = values["package"][0]["fileurl"]
         values["filename"] = values["package"][0]["filename"]

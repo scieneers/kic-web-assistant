@@ -1,20 +1,21 @@
 from langfuse.decorators import observe
 
 @observe(name="socratic_reflection")
-def generate_reflection_text() -> str:
+def generate_reflection_text(learning_objective: str) -> str:
     """
     Helper function to generate reflection text after goal achievement.
-    
+
     Args:
         learning_objective: The learning goal that was achieved
-        
+
     Returns:
         str: Generated reflection text
     """
-    
+
     # Positive reinforcement
     encouragement = (
-            "🎓 **Ausgezeichnet!** Du hast das Konzept eigenständig erarbeitet. Das ist der beste Weg zum tiefen Verständnis!"
+            f"🎓 **Ausgezeichnet!** Du hast das Lernziel '{learning_objective}' eigenständig erarbeitet. "
+            "Das ist der beste Weg zum tiefen Verständnis!"
         )
     
     # Reflection prompts to consolidate learning

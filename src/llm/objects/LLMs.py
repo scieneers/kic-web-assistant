@@ -1,4 +1,5 @@
 import datetime
+import logging
 import threading
 from enum import Enum
 
@@ -15,10 +16,29 @@ from llama_index.llms.openai_like import OpenAILike
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
 from src.env import env
-from src.llm.streaming import CitationStreamFilter, stream_phase_var, token_callback_var
+from src.llm.streaming import CitationStreamFilter, citation_resolver_var, stream_phase_var, token_callback_var
 
-TIME_TO_WAIT_FOR_GWDG = 7  # in seconds
-TIME_TO_RESET_UNAVAILABLE_STATUS = 60 * 5  # in seconds
+logger = logging.getLogger(__name__)
+
+TIME_TO_WAIT_FOR_GWDG = env.GWDG_TIMEOUT_SECONDS
+TIME_TO_RESET_UNAVAILABLE_STATUS = env.GWDG_UNAVAILABLE_RESET_SECONDS
+
+
+def _log_thread_exception(args: threading.ExceptHookArgs) -> None:
+    # LlamaIndex runs streaming / write_response_to_history in background
+    # threads whose unhandled exceptions (e.g. GWDG 500 after the stream was
+    # already consumed) would otherwise be printed raw to stderr. Installed
+    # ONCE process-wide — swapping the hook per request races under
+    # concurrent requests (hooks overwrite/restore each other).
+    logger.warning(
+        "Unhandled exception in background thread %r — likely LlamaIndex "
+        "streaming / upstream API error (GWDG/Azure)",
+        args.thread.name if args.thread else "unknown",
+        exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+    )
+
+
+threading.excepthook = _log_thread_exception
 
 class Models(str, Enum):
     AZURE_FALLBACK = "Azure-Fallback"
@@ -31,6 +51,29 @@ class Models(str, Enum):
 class LLM:
     gwdg_unavailable = False
     gwdg_unavailable_since = None
+    # Guards the check-then-act accesses to the two class variables above —
+    # without it, concurrent requests can race between reading the timestamp
+    # and resetting/setting the status.
+    _gwdg_lock = threading.Lock()
+
+    @classmethod
+    def _gwdg_is_unavailable(cls) -> bool:
+        """Thread-safe read of the GWDG status; resets it once the window expired."""
+        with cls._gwdg_lock:
+            if cls.gwdg_unavailable and cls.gwdg_unavailable_since:
+                if datetime.datetime.now() - cls.gwdg_unavailable_since > datetime.timedelta(
+                    seconds=TIME_TO_RESET_UNAVAILABLE_STATUS
+                ):
+                    logger.debug("GWDG unavailability window expired — resetting to available")
+                    cls.gwdg_unavailable = False
+                    cls.gwdg_unavailable_since = None
+            return cls.gwdg_unavailable
+
+    @classmethod
+    def _mark_gwdg_unavailable(cls) -> None:
+        with cls._gwdg_lock:
+            cls.gwdg_unavailable = True
+            cls.gwdg_unavailable_since = datetime.datetime.now()
 
     def get_embedder(self) -> AzureOpenAIEmbedding:
         embedder = AzureOpenAIEmbedding(
@@ -45,24 +88,36 @@ class LLM:
     def get_model(self, model: Models) -> FunctionCallingLLM | llama_llm:
         match model:
             case Models.AZURE_FALLBACK:
+                # GPT-5-family reasoning model: do NOT set temperature/max_tokens
+                # directly (the API rejects temperature != 1, and llama_index only
+                # auto-converts max_tokens -> max_completion_tokens for models it
+                # recognizes as reasoning models by name, which this deployment's
+                # custom model string isn't). Pass max_completion_tokens directly
+                # via additional_kwargs instead, mirroring the GWDG models' hard
+                # max_tokens=400 cap — this is a fallback path, it should behave
+                # like the model it's standing in for, not get a bigger budget.
                 llm = AzureOpenAI(
                     model=env.AZURE_FALLBACK_MODEL,
                     deployment=env.AZURE_FALLBACK_DEPLOYMENT,
                     api_key=env.AZURE_OPENAI_API_KEY,
                     azure_endpoint=env.AZURE_OPENAI_URL,
                     api_version="2024-12-01-preview",
+                    additional_kwargs={"max_completion_tokens": 400},
                     callback_manager=Settings.callback_manager,
                 )
             case Models.MINI:
-                # GPT-5-family reasoning model: like AZURE_FALLBACK, do NOT set
-                # temperature/max_tokens (the API rejects temperature != 1 and
-                # uses max_completion_tokens). The prompt keeps the output short.
+                # Same reasoning-model constraints as AZURE_FALLBACK above.
+                # reasoning_effort="minimal" turns internal reasoning off — the
+                # aux tasks on this model (language detection) need a one-word
+                # answer, and reasoning tokens dominated latency (4-6s/call).
                 llm = AzureOpenAI(
                     model=env.AZURE_MINI_MODEL,
                     deployment=env.AZURE_MINI_DEPLOYMENT,
                     api_key=env.AZURE_OPENAI_API_KEY,
                     azure_endpoint=env.AZURE_OPENAI_URL,
                     api_version="2024-12-01-preview",
+                    reasoning_effort="minimal",
+                    additional_kwargs={"max_completion_tokens": 400},
                     callback_manager=Settings.callback_manager,
                 )
             case Models.LLAMA3:
@@ -102,22 +157,31 @@ class LLM:
         returning the final assembled message.
         """
         langfuse_handler = langfuse_context.get_current_llama_index_handler()
+        if langfuse_handler is None:
+            logger.warning(
+                "No Langfuse callback handler for this call — LLM generation span will not be traced "
+                "(no active trace context, e.g. missing/invalid credentials or called outside @observe)."
+            )
         Settings.callback_manager = CallbackManager([langfuse_handler] if langfuse_handler else [])
 
         token_callback = token_callback_var.get()
         stream_phase = stream_phase_var.get()
 
-        if LLM.gwdg_unavailable and LLM.gwdg_unavailable_since:
-            if datetime.datetime.now() - LLM.gwdg_unavailable_since > datetime.timedelta(
-                seconds=TIME_TO_RESET_UNAVAILABLE_STATUS
-            ):
-                LLM.gwdg_unavailable = False
-                LLM.gwdg_unavailable_since = None
+        logger.debug("LLM.chat() requested model=%s, query_preview=%r", model, query[:80])
 
-        # If GWDG is unavailable, use Azure fallback model instead
-        if LLM.gwdg_unavailable:
+        # If GWDG is unavailable (thread-safe check incl. window reset),
+        # use the Azure fallback model instead.
+        if LLM._gwdg_is_unavailable():
+            logger.debug(
+                "GWDG marked unavailable (since %s) — overriding model %s → %s",
+                LLM.gwdg_unavailable_since,
+                model,
+                Models.AZURE_FALLBACK,
+            )
             model = Models.AZURE_FALLBACK
 
+        logger.debug("Using model=%s", model)
+        is_gwdg_model = model in (Models.LLAMA3, Models.GEMMA4_31B)
         llm = self.get_model(model)
         # Convert SerializableChatMessage to ChatMessage for SimpleChatEngine
         chat_history_messages = [msg.to_chat_message() for msg in chat_history]
@@ -135,21 +199,29 @@ class LLM:
         # deltas. Instead we try streaming; if it fails, we fall back to a
         # single non-streaming completion and emit it as one chunk.
         if token_callback is not None and stream_phase == "final":
-            # Hide [docN] citation markers while streaming. The full answer
-            # returned below keeps the markers intact so the CitationParser can
-            # later turn them into clickable [title] links in the final message.
-            citation_filter = CitationStreamFilter()
+            resolver = citation_resolver_var.get()
+            if resolver is not None:
+                # question_answerer.py set up a CitationStreamResolver that resolves
+                # [docN] markers to links in real-time — use it directly.
+                _emit = resolver.feed
+                _emit_flush = resolver.flush
+            else:
+                # No resolver (e.g. no_vector_db path) — fall back to dropping markers.
+                citation_filter = CitationStreamFilter()
 
-            def _emit(text: str) -> None:
-                filtered = citation_filter.feed(text)
-                if filtered:
-                    token_callback(filtered)
+                def _emit(text: str) -> None:
+                    filtered = citation_filter.feed(text)
+                    if filtered:
+                        token_callback(filtered)
 
-            def _emit_flush() -> None:
-                tail = citation_filter.flush()
-                if tail:
-                    token_callback(tail)
+                def _emit_flush() -> None:
+                    tail = citation_filter.flush()
+                    if tail:
+                        token_callback(tail)
 
+            # Background-thread exceptions (e.g. GWDG 500 in LlamaIndex's
+            # write_response_to_history) are handled by the process-wide
+            # _log_thread_exception hook installed at module import.
             try:
                 streaming_resp = chat_engine.stream_chat(message=query)
                 full_text = ""
@@ -205,16 +277,44 @@ class LLM:
                 # Fall back to non-streaming and emit as a single chunk.
                 response = chat_engine.chat(message=query)
                 text = response.response if isinstance(response.response, str) else str(response.response)
-                _emit(text)
-                _emit_flush()
+                # Do NOT emit the text if:
+                # (a) real streaming already started (SmartStreamCallback
+                #     switched out of peeking mode) — would append noise, or
+                # (b) the fallback is the "NO ANSWER FOUND" sentinel — emitting
+                #     it would push the peek buffer over the threshold and leak
+                #     the sentinel into the stream even for short responses.
+                _cb = citation_resolver_var.get()
+                already_streamed = _cb is not None and not getattr(_cb, "_peeking", True)
+                is_sentinel = text.strip() == "NO ANSWER FOUND"
+                if not already_streamed and not is_sentinel:
+                    _emit(text)
+                    _emit_flush()
                 return SerializableChatMessage(role="assistant", content=text)
+
+        if not is_gwdg_model:
+            # Non-GWDG models (Azure) don't need the timeout/fallback dance below —
+            # it exists to detect a hung/unresponsive GWDG endpoint specifically.
+            # Reasoning models like gpt-5.4 can legitimately exceed
+            # TIME_TO_WAIT_FOR_GWDG, which previously caused this path to
+            # mislabel a slow Azure response as a GWDG failure and mark GWDG
+            # globally unavailable for other concurrent requests.
+            response = chat_engine.chat(message=query)
+            if type(response.response) is not str:
+                raise ValueError(f"Response is not a string. Please check the LLM implementation. Response: {response}")
+            return SerializableChatMessage(role="assistant", content=response.response)
 
         result = [None]  # Use a list to hold the result (mutable object to modify inside threads)
 
+        # Background-thread exceptions (e.g. GWDG 500 in the target thread below,
+        # surfacing after join() already timed out) are handled by the
+        # process-wide _log_thread_exception hook installed at module import —
+        # swapping threading.excepthook here would race with concurrent requests
+        # also hitting this GWDG path.
         def target():
             try:
                 result.append(chat_engine.chat(message=query))  # Execute the chat function
             except Exception as e:
+                logger.warning("GWDG target() thread raised exception", exc_info=True)
                 result.append(e)  # If error, store the exception in the result
 
         thread = threading.Thread(target=target)
@@ -223,8 +323,16 @@ class LLM:
 
         if thread.is_alive() or isinstance(result[-1], Exception) or result[-1] is None:
             # GWDG timeout or error - fallback to Azure model
-            LLM.gwdg_unavailable = True
-            LLM.gwdg_unavailable_since = datetime.datetime.now()
+            reason = "timeout" if thread.is_alive() else ("exception" if isinstance(result[-1], Exception) else "None response")
+            exc = result[-1] if isinstance(result[-1], Exception) else None
+            logger.warning(
+                "GWDG call failed (%s) after %ss — switching to Azure fallback and marking GWDG unavailable%s",
+                reason,
+                TIME_TO_WAIT_FOR_GWDG,
+                f": {exc}" if exc else "",
+                exc_info=exc,
+            )
+            LLM._mark_gwdg_unavailable()
             llm = self.get_model(Models.AZURE_FALLBACK)
             chat_engine = SimpleChatEngine.from_defaults(
                 llm=llm, system_prompt=system_prompt, chat_history=copy_chat_history

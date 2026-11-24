@@ -1,19 +1,17 @@
 import logging
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.integration
+
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 import os
 
 from src.loaders.moodle import Moodle
 
-# Setup logging
-logging.basicConfig(
-    level=logging.DEBUG, 
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    force=True
-)
 logger = logging.getLogger(__name__)
-logging.getLogger("loader").setLevel(logging.DEBUG)
 
 
 def get_production_moodle() -> Moodle:
@@ -55,9 +53,7 @@ def test_extract_embedded_h5p():
     
     # Call extract_page to process the page including embedded H5P content
     err_message = moodle.extract_page(page_module)
-    
-    if err_message:
-        logger.warning(f"extract_page returned error: {err_message}")
+    assert err_message is None, f"extract_page returned an error: {err_message}"
     
     # Verify extraction results
     logger.info(f"\n{'='*60}")

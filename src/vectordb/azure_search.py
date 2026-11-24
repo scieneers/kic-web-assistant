@@ -4,7 +4,7 @@ import re
 from types import SimpleNamespace
 from typing import Any, Iterator
 
-from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+from azure.core.exceptions import HttpResponseError, ResourceNotFoundError, ServiceRequestError
 from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
@@ -15,6 +15,10 @@ from azure.search.documents.indexes.models import (
     SearchField,
     SearchFieldDataType,
     SearchIndex,
+    SemanticConfiguration,
+    SemanticField,
+    SemanticPrioritizedFields,
+    SemanticSearch,
     SimpleField,
     VectorSearch,
     VectorSearchAlgorithmMetric,
@@ -36,6 +40,11 @@ _KEY_INVALID = re.compile(r"[^A-Za-z0-9_\-=]")
 
 _VECTOR_PROFILE = "hnsw-cosine"
 _HNSW_CONFIG = "hnsw-config"
+
+# Azure's semantic ranker rescores at most the top 50 of the initial results —
+# when semantic ranking is on, the dense leg should propose at least that many.
+# https://learn.microsoft.com/azure/search/semantic-search-overview
+_SEMANTIC_RERANK_WINDOW = 50
 
 
 def sanitize_key(raw: str) -> str:
@@ -78,24 +87,11 @@ class VectorDBAzureSearch:
     # Index management
     # ------------------------------------------------------------------
     def create_index(self, index_name: str, vector_size: int) -> None:
-        """Create the hybrid (vector + BM25) index if it does not already exist.
+        """Create or update the hybrid (vector + BM25) index.
 
-        The schema is fixed: explicit, typed fields for everything we filter or
-        display on, plus a ``metadata_json`` blob that preserves the full
-        original node metadata for lossless reconstruction at retrieval time.
+        Uses create_or_update_index so new fields (e.g. source_doc_key,
+        content_hash) are added to existing indexes without data loss.
         """
-        try:
-            self.index_client.get_index(index_name)
-            self.logger.info("Azure AI Search index '%s' already exists.", index_name)
-            return
-        except ResourceNotFoundError:
-            pass
-
-        self.logger.info(
-            "Azure AI Search create_index %s",
-            {"index": index_name, "vector_size": vector_size},
-        )
-
         fields = [
             SimpleField(name="id", type=SearchFieldDataType.String, key=True),
             # German analyzer: the corpus (KI-Campus) is predominantly German.
@@ -110,8 +106,19 @@ class VectorDBAzureSearch:
             SimpleField(name="url", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="is_important", type=SearchFieldDataType.Boolean, filterable=True),
             SimpleField(name="date_created", type=SearchFieldDataType.String, filterable=True),
+            # Content-type discriminators, promoted out of metadata_json so
+            # typed retrieval can filter/facet on them (e.g. all glossaries of
+            # a course). Null on documents ingested before this field existed —
+            # backfilled via scripts/vectordb/backfill_type_fields.py.
+            SimpleField(name="modname", type=SearchFieldDataType.String, filterable=True, facetable=True),
+            SimpleField(name="h5p_content_type", type=SearchFieldDataType.String, filterable=True),
             # Lossless metadata round-trip; retrieval-only, never searched/filtered.
             SimpleField(name="metadata_json", type=SearchFieldDataType.String),
+            # Change-detection fields: one stable key per source document, one hash
+            # per content+chunking-params. Stored on every chunk so the hash lives
+            # and dies with the chunks (self-healing on partial failures).
+            SimpleField(name="source_doc_key", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="content_hash", type=SearchFieldDataType.String),
             SearchField(
                 name="dense",
                 type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
@@ -131,10 +138,23 @@ class VectorDBAzureSearch:
             profiles=[VectorSearchProfile(name=_VECTOR_PROFILE, algorithm_configuration_name=_HNSW_CONFIG)],
         )
 
-        index = SearchIndex(name=index_name, fields=fields, vector_search=vector_search)
-        self.index_client.create_index(index)
+        semantic_search = SemanticSearch(
+            configurations=[
+                SemanticConfiguration(
+                    name="default",
+                    prioritized_fields=SemanticPrioritizedFields(
+                        title_field=SemanticField(field_name="title"),
+                        content_fields=[SemanticField(field_name="text")],
+                        keywords_fields=[SemanticField(field_name="fullname")],
+                    ),
+                )
+            ]
+        )
+
+        index = SearchIndex(name=index_name, fields=fields, vector_search=vector_search, semantic_search=semantic_search)
+        self.index_client.create_or_update_index(index)
         self.logger.info(
-            "Created Azure AI Search index '%s' (dense dim=%s, hybrid vector+BM25).",
+            "Azure AI Search index '%s' schema ensured (dense dim=%s, hybrid vector+BM25).",
             index_name,
             vector_size,
         )
@@ -170,18 +190,37 @@ class VectorDBAzureSearch:
         """
         if not documents:
             return 0
-        client = self._client(index_name)
         uploaded = 0
         for batch in self._batches(documents):
-            try:
-                results = client.merge_or_upload_documents(documents=batch)
-            except HttpResponseError as e:
-                self.logger.warning(
-                    "Azure AI Search upload failed: index=%s docs=%s exc=%s",
-                    index_name,
-                    len(batch),
-                    e,
-                )
+            results = None
+            for attempt in range(2):
+                try:
+                    results = self._client(index_name).merge_or_upload_documents(documents=batch)
+                    break
+                except ServiceRequestError as e:
+                    self._search_clients.pop(index_name, None)
+                    if attempt == 0:
+                        self.logger.warning(
+                            "Azure AI Search connection error (stale connection?), retrying with fresh client: index=%s exc=%s",
+                            index_name,
+                            e,
+                        )
+                        continue
+                    self.logger.error(
+                        "Azure AI Search connection error after retry, skipping batch: index=%s docs=%s exc=%s",
+                        index_name,
+                        len(batch),
+                        e,
+                    )
+                except HttpResponseError as e:
+                    self.logger.warning(
+                        "Azure AI Search upload failed: index=%s docs=%s exc=%s",
+                        index_name,
+                        len(batch),
+                        e,
+                    )
+                    break
+            if results is None:
                 continue
             failed = [r for r in results if not r.succeeded]
             if failed:
@@ -198,6 +237,49 @@ class VectorDBAzureSearch:
         self.logger.debug("Uploaded %s documents into '%s'.", uploaded, index_name)
         return uploaded
 
+    def merge_documents(self, index_name: str, documents: list[dict]) -> int:
+        """Merge fields into EXISTING documents; missing keys fail per-doc (404).
+
+        Deliberately merge-only (not merge_or_upload): a backfill racing a
+        concurrent deletion must not resurrect a "zombie" skeleton doc that
+        carries only the merged fields — such a doc would have a null `source`
+        and be invisible to every source-scoped cleanup path. Callers should
+        treat per-doc 404s as expected (the doc was deleted since the id list
+        was materialized).
+        """
+        if not documents:
+            return 0
+        merged = 0
+        for batch in self._batches(documents):
+            try:
+                results = self._client(index_name).merge_documents(documents=batch)
+            except HttpResponseError as e:
+                self.logger.warning(
+                    "Azure AI Search merge failed: index=%s docs=%s exc=%s", index_name, len(batch), e
+                )
+                continue
+            failed = [r for r in results if not r.succeeded]
+            not_found = [r for r in failed if r.status_code == 404]
+            other = [r for r in failed if r.status_code != 404]
+            if not_found:
+                self.logger.info(
+                    "Azure AI Search merge: %s docs no longer exist (deleted since scan), skipped.",
+                    len(not_found),
+                )
+            if other:
+                self.logger.warning(
+                    "Azure AI Search merge: %s/%s docs failed (index=%s). First error: key=%s status=%s msg=%s",
+                    len(other),
+                    len(batch),
+                    index_name,
+                    other[0].key,
+                    other[0].status_code,
+                    other[0].error_message,
+                )
+            merged += len(batch) - len(failed)
+        self.logger.debug("Merged fields into %s documents in '%s'.", merged, index_name)
+        return merged
+
     # ------------------------------------------------------------------
     # Deletion (delete-by-filter emulation)
     # ------------------------------------------------------------------
@@ -207,11 +289,28 @@ class VectorDBAzureSearch:
         Azure AI Search has no delete-by-query, so we page the matching keys
         (the SDK follows continuation links transparently) and the caller
         deletes them by key.
+
+        No `top` is passed: it caps the *total* results returned across the
+        whole iteration (not a page size), so any filter matching more than
+        the cap would silently yield only a partial key set.
         """
         client = self._client(index_name)
-        results = client.search(search_text="*", filter=odata_filter, select=["id"], top=1000)
+        results = client.search(search_text="*", filter=odata_filter, select=["id"])
         for item in results:
             yield item["id"]
+
+    def _true_count(self, index_name: str | None, odata_filter: str) -> int | None:
+        """Exact count of documents matching a filter (top=0, no documents transferred).
+
+        Used as a cheap cross-check that a full scan actually saw everything.
+        """
+        try:
+            results = self._client(index_name).search(
+                search_text="*", filter=odata_filter, top=0, include_total_count=True
+            )
+            return results.get_count()
+        except HttpResponseError:
+            return None
 
     def delete_by_filter(self, index_name: str, odata_filter: str) -> int:
         """Delete every document matching an OData filter.
@@ -228,6 +327,16 @@ class VectorDBAzureSearch:
             # search iterator is still paging would shift skip-based pagination
             # and could let some matching documents slip through undeleted.
             keys = list(self._iter_keys(index_name, odata_filter))
+            true_count = self._true_count(index_name, odata_filter)
+            if true_count is not None and len(keys) < true_count:
+                self.logger.error(
+                    "Azure AI Search delete_by_filter: scanned %s keys but %s documents match filter"
+                    " (index=%s filter=%s) — some matches were not collected for deletion.",
+                    len(keys),
+                    true_count,
+                    index_name,
+                    odata_filter,
+                )
             for start in range(0, len(keys), _MAX_DOCS_PER_BATCH):
                 batch = [{"id": k} for k in keys[start : start + _MAX_DOCS_PER_BATCH]]
                 client.delete_documents(documents=batch)
@@ -237,6 +346,49 @@ class VectorDBAzureSearch:
             return deleted
         self.logger.info("Azure AI Search delete_by_filter removed %s documents (index=%s).", deleted, index_name)
         return deleted
+
+    def load_content_hashes(self, source: str, index_name: str | None = None) -> dict[str, str]:
+        """Return {source_doc_key: content_hash} for all existing chunks of a source.
+
+        Multiple chunks share the same source_doc_key; only the first seen is kept
+        (they all carry an identical hash). Used by the loader to skip unchanged
+        documents and detect stale ones.
+        """
+        client = self._client(index_name)
+        existing: dict[str, str] = {}
+        odata_filter = f"source eq '{source}'"
+        try:
+            results = client.search(
+                search_text="*",
+                filter=odata_filter,
+                select=["source_doc_key", "content_hash"],
+            )
+            rows_seen = 0
+            for item in results:
+                rows_seen += 1
+                key = item.get("source_doc_key")
+                h = item.get("content_hash")
+                if key and h and key not in existing:
+                    existing[key] = h
+            true_count = self._true_count(index_name, odata_filter)
+            if true_count is not None and rows_seen < true_count:
+                self.logger.error(
+                    "load_content_hashes: scanned %s rows but %s documents match source=%s"
+                    " (index=%s) — existing-hash map is incomplete, change-detection will misfire.",
+                    rows_seen,
+                    true_count,
+                    source,
+                    index_name or self.index_name,
+                )
+        except HttpResponseError as e:
+            self.logger.warning("load_content_hashes failed (source=%s): %s", source, e)
+        self.logger.info(
+            "Loaded %s existing source keys (source=%s index=%s)",
+            len(existing),
+            source,
+            index_name or self.index_name,
+        )
+        return existing
 
     # ------------------------------------------------------------------
     # Search
@@ -250,27 +402,73 @@ class VectorDBAzureSearch:
         odata_filter: str | None = None,
         top: int = 10,
         candidate_factor: int = 3,
+        use_semantic: bool = False,
+        semantic_config_name: str = "default",
     ) -> list[dict]:
         """Hybrid search: BM25 over ``text`` + vector over ``dense``.
 
         Azure AI Search fuses the two result sets with Reciprocal Rank Fusion
         automatically when both ``search_text`` and a vector query are supplied.
-        Returns raw result dicts (each carries ``@search.score``).
+        Returns raw result dicts (each carries ``@search.score``, or
+        ``@search.reranker_score`` when use_semantic=True).
+
+        use_semantic: enable Azure AI Search semantic reranking (requires
+            Standard tier and a semantic configuration named ``semantic_config_name``
+            on the index).
         """
         client = self._client(index_name)
+        k_nearest = max(top * candidate_factor, top)
+        if use_semantic:
+            # Azure's semantic ranker rescores the top 50 of the initial result
+            # set. With a small `top` (e.g. 5) the dense leg would only propose
+            # top*factor candidates and starve the reranker — feed it the full
+            # rerank window instead.
+            k_nearest = max(k_nearest, _SEMANTIC_RERANK_WINDOW)
         vector_query = VectorizedQuery(
             vector=query_vector,
-            k_nearest_neighbors=max(top * candidate_factor, top),
+            k_nearest_neighbors=k_nearest,
             fields="dense",
         )
+        extra = {}
+        if use_semantic:
+            extra["query_type"] = "semantic"
+            extra["semantic_configuration_name"] = semantic_config_name
         results = client.search(
             search_text=query_text,
             vector_queries=[vector_query],
             filter=odata_filter,
             top=top,
             select=["id", "text", "metadata_json"],
+            **extra,
         )
         return list(results)
+
+    def fetch_all(self, odata_filter: str, *, index_name: str | None = None) -> list[dict]:
+        """Fetch every document matching an OData filter, unranked.
+
+        Used for "summarize this module/course" retrieval: there is no query to
+        rank chunks against, so this pulls the complete scope directly instead
+        of a top-k search. No `top`: see delete_by_filter/load_content_hashes
+        for why a cap here would silently truncate large modules/courses.
+        """
+        client = self._client(index_name)
+        results = client.search(
+            search_text="*",
+            filter=odata_filter,
+            select=["id", "text", "metadata_json"],
+        )
+        rows = list(results)
+        true_count = self._true_count(index_name, odata_filter)
+        if true_count is not None and len(rows) < true_count:
+            self.logger.error(
+                "fetch_all: scanned %s rows but %s documents match filter=%r (index=%s) —"
+                " result is incomplete.",
+                len(rows),
+                true_count,
+                odata_filter,
+                index_name or self.index_name,
+            )
+        return rows
 
     # ------------------------------------------------------------------
     # Read-back helpers
@@ -282,13 +480,20 @@ class VectorDBAzureSearch:
         Course records have a ``course_id`` but no ``module_id``; module records
         carry a ``module_id``.
         """
+        from src.vectordb.doc_types import ITEM_DOC_TYPES
+
         client = self._client(index_name)
-        # Only docs that participate in the tree carry a course_id.
+        # Only docs that participate in the tree carry a course_id. No `top`:
+        # every chunk of every module carries course_id/module_id, so this can
+        # easily exceed 1000 rows — see load_content_hashes for why a `top`
+        # cap here would silently truncate the result instead of paging.
+        # Structured item documents are skipped — they would only multiply the
+        # scan volume (their fullname is the module name anyway).
+        item_types = ",".join(ITEM_DOC_TYPES)
         results = client.search(
             search_text="*",
-            filter="course_id ne null",
+            filter=f"course_id ne null and not search.in(type, '{item_types}', ',')",
             select=["course_id", "module_id", "fullname"],
-            top=1000,
         )
 
         courses: list[SimpleNamespace] = []

@@ -1,0 +1,4 @@
+The assistant offers two modes:
+- Chatbot (default mode): answers general questions about courses, learning content and the KI-Campus — e.g. when you are looking for information or want to know where to find it, about learning objectives, course descriptions and covered topics, or about organisational matters and general conditions.
+- Sokratischer Tutor (Socratic Tutor): helps you deepen your knowledge and understand complex topics better. Instead of giving the answer directly, it guides you with targeted follow-up questions and prompts to think further — useful when you want to really understand a topic, consolidate your knowledge through practice and targeted questions, or have not yet understood something specific.
+- The Sokratischer Tutor works within a course: it uses the content of the selected course or module. It is started and ended with the switch in the chat window; it can also be ended at any time by typing "stopp" (or "stop").

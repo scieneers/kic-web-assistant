@@ -8,6 +8,16 @@ from src.llm.prompts.prompt_loader import load_prompt
 
 llm = LLM()
 NO_VECTORDB_PROMPT = load_prompt("no_vector_db_prompt")
+# Facts for "what can you do?" / "what is the Socratic Tutor?" — the tutor is
+# only advertised when it is actually enabled in this deployment.
+ASSISTANT_MODES_WITH_TUTOR = load_prompt("assistant_modes_with_tutor")
+ASSISTANT_MODES_CHAT_ONLY = load_prompt("assistant_modes_chat_only")
+
+
+def build_no_vectordb_prompt(language: str, system_config: dict | None) -> str:
+    tutor_enabled = bool((system_config or {}).get("enable_socratic_v2"))
+    modes = ASSISTANT_MODES_WITH_TUTOR if tutor_enabled else ASSISTANT_MODES_CHAT_ONLY
+    return NO_VECTORDB_PROMPT.replace("{assistant_modes}", modes.strip()).replace("{language}", language)
 
 def direct_answer_node(state: GraphState) -> dict:
     """
@@ -21,8 +31,8 @@ def direct_answer_node(state: GraphState) -> dict:
     chat_history = state["chat_history"]
     language = state["detected_language"]
 
-    # Insert language in system prmpt
-    language_enriched_prompt = NO_VECTORDB_PROMPT.replace("{language}", language)
+    # Insert language + assistant facts (mode list depends on enabled features)
+    language_enriched_prompt = build_no_vectordb_prompt(language, state.get("system_config"))
     
     # Simple conversational response (no sources)
     with StreamPhaseContext("final"):

@@ -1,16 +1,126 @@
+import logging
+import threading
+import time
 import uuid
+import urllib.parse
+from collections import OrderedDict
 from langfuse.decorators import observe, langfuse_context
-from langgraph.graph import StateGraph, START, END 
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.api.models.serializable_chat_message import SerializableChatMessage
+from src.env import env
 from src.llm.objects.LLMs import Models
-from src.llm.state.models import GraphState
+from src.llm.objects.question_answerer import get_fallback_type
+from src.llm.state.models import GraphState, RerankerType
 from src.llm.tools.contextualize import contextualize_and_route
 from src.llm.graphs.no_vector_db import build_no_vectordb_graph
 from src.llm.graphs.simple_hop import build_simple_hop_graph
-from src.llm.graphs.multi_hop import build_multi_hop_graph
+from src.llm.graphs.summarize import build_summarize_graph
 from src.llm.graphs.socratic import build_socratic_graph
+from src.llm.graphs.socratic_v2 import build_socratic_v2_graph
+
+logger = logging.getLogger(__name__)
+
+
+class BoundedMemorySaver(MemorySaver):
+    """MemorySaver mit maximalem Thread-Limit (FIFO-Verdrängung).
+
+    Verhindert unbegrenztes Speicherwachstum bei langer Backend-Laufzeit.
+    Sobald max_threads überschritten wird, fliegt der älteste Thread raus.
+    """
+
+    def __init__(self, max_threads: int = 500):
+        super().__init__()
+        self.max_threads = max_threads
+        self._thread_order: OrderedDict[str, None] = OrderedDict()
+        # Guards _thread_order and the eviction below — put()/aput() are called
+        # from concurrent request threads (and aput from the event loop), and
+        # OrderedDict's check-then-mutate sequence here is not atomic on its own.
+        self._lock = threading.Lock()
+
+    def _register_and_evict(self, thread_id: str) -> None:
+        with self._lock:
+            if thread_id in self._thread_order:
+                return
+            self._thread_order[thread_id] = None
+            if len(self._thread_order) > self.max_threads:
+                oldest_id, _ = self._thread_order.popitem(last=False)
+                # MemorySaver speichert intern unter self.storage und self.writes
+                try:
+                    self.storage.pop(oldest_id, None)
+                except AttributeError:
+                    pass
+                try:
+                    self.writes.pop(oldest_id, None)
+                except AttributeError:
+                    pass
+
+    def put(self, config, checkpoint, metadata, new_versions):
+        self._register_and_evict(config["configurable"]["thread_id"])
+        return super().put(config, checkpoint, metadata, new_versions)
+
+    async def aput(self, config, checkpoint, metadata, new_versions):
+        self._register_and_evict(config["configurable"]["thread_id"])
+        return await super().aput(config, checkpoint, metadata, new_versions)
+
+
+def build_checkpointer() -> BaseCheckpointSaver:
+    """Wählt den LangGraph-Checkpointer anhand von REDIS_URL.
+
+    Mit REDIS_URL: Redis-Checkpointer, den sich alle Gunicorn-Worker teilen —
+    ohne den verliert eine Konversation ihren State, sobald der Folgerequest
+    auf einem anderen Worker landet. Konversationen verfallen per TTL
+    (CHAT_TTL_MINUTES, bei Zugriff erneuert). Funktioniert unverändert gegen
+    den im API-Container mitlaufenden Redis wie gegen Azure Managed Redis
+    (rediss://-URL, siehe env.py).
+
+    Ohne REDIS_URL: in-memory BoundedMemorySaver (lokale Entwicklung, Tests).
+
+    Der Sidecar kann beim Cold-Start noch ein paar Sekunden brauchen (siehe
+    entrypoint.sh, das genau darauf schon vor dem Start dieses Prozesses
+    wartet) — hier zusätzlich mit Retries abgesichert, falls Redis zwischen
+    zwei Requests kurz durchstartet (z.B. Managed-Redis-Failover) oder der
+    Worker schneller hochkommt als der Sidecar.
+    """
+    # "UNSET" → AttributeError in EnvHelper.__getattribute__ → None
+    redis_url = getattr(env, "REDIS_URL", None)
+    if redis_url:
+        # Lazy Import: braucht das api-Extra; Redis 8 (JSON/Search-Module)
+        from langgraph.checkpoint.redis import RedisSaver
+        from redis.exceptions import ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
+# URL für das Logging sicher maskieren (Passwort entfernen)
+        parsed = urllib.parse.urlparse(redis_url)
+        safe_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}" if parsed.hostname else "Redis-Server"
+
+        max_retries = 10
+        retry_delay_seconds = 3
+        saver = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                saver = RedisSaver(
+                    redis_url=redis_url,
+                    ttl={"default_ttl": env.CHAT_TTL_MINUTES, "refresh_on_read": True},
+                )
+                saver.setup()
+                break
+            except (RedisConnectionError, RedisTimeoutError):
+                if attempt == max_retries:
+                    raise
+                logger.warning(
+                    "Redis unter %s nicht erreichbar (Versuch %d/%d), warte %ds...",
+                    safe_url,
+                    attempt,
+                    max_retries,
+                    retry_delay_seconds,
+                )
+                time.sleep(retry_delay_seconds)
+
+        logger.info("Chat-Checkpointer: Redis (TTL %d min)", env.CHAT_TTL_MINUTES)
+        return saver
+    logger.info("Chat-Checkpointer: in-memory (max %d Threads)", env.MAX_CHAT_THREADS)
+    return BoundedMemorySaver(max_threads=env.MAX_CHAT_THREADS)
 
 
 class KICampusAssistant:
@@ -20,25 +130,49 @@ class KICampusAssistant:
     Routes queries to appropriate subgraphs based on scenario classification.
     """
     
-    def __init__(self, rerank_top_n: int = 5, retrieve_top_n: int = 10, enable_socratic: bool = False):
+    def __init__(
+        self,
+        rerank_top_n: int = 5,
+        retrieve_top_n: int = 10,
+        enable_socratic: bool = False,
+        enable_socratic_v2: bool = False,
+        reranker_type: RerankerType = "llm",
+        min_reranker_score: float = 0.0,
+    ):
         """
         Initialize the assistant with system configuration.
 
         Args:
             rerank_top_n: Number of top chunks to keep after reranking
             retrieve_top_n: Number of chunks to retrieve from vector database
-            enable_socratic: Enable/disable the socratic learning mode
+            enable_socratic: Enable/disable the socratic learning mode (v1)
+            enable_socratic_v2: Enable/disable the redesigned socratic learning
+                mode ("Lernmodus v2") — independent of v1 so both can be
+                compared side by side
+            reranker_type: Which reranker to use — "llm" (default), "azure_semantic", "bge"
+            min_reranker_score: Relevance cutoff on a normalized 0-1 scale, applied by all
+                backends (0 = no filtering). If every chunk falls below the cutoff, the
+                answer node produces the no-answer fallback instead of a weak answer.
         """
+        if rerank_top_n >= retrieve_top_n:
+            raise ValueError(
+                f"rerank_top_n ({rerank_top_n}) must be less than retrieve_top_n ({retrieve_top_n})"
+            )
+
         # System configuration (hardcoded, not exposed to frontend)
         self.system_config = {
             "rerank_top_n": rerank_top_n,
             "retrieve_top_n": retrieve_top_n,
             "enable_socratic": enable_socratic,
+            "enable_socratic_v2": enable_socratic_v2,
+            "reranker_type": reranker_type,
+            "min_reranker_score": min_reranker_score,
         }
         
-        # Initialize checkpoint/persistence backend
-        # MemorySaver for development --> replace with PostgresSQL for production
-        self.checkpointer = MemorySaver()
+        # Redis (shared across workers, survives worker recycling) or
+        # in-memory fallback — see build_checkpointer(). Conversations are
+        # session-scoped either way: TTL respectively restart bounds them.
+        self.checkpointer = build_checkpointer()
 
         # Compile main router graph
         self.graph = self._build_main_graph()
@@ -52,31 +186,34 @@ class KICampusAssistant:
         
         Scenarios:
         - no_vectordb: Conversational queries
-        - simple_hop: Standard RAG
-        - multi_hop: Complex multi-retrieval (placeholder)
-        - socratic: Guided learning (placeholder)
+        - simple_hop: Single-hop RAG retrieval
+        - summarize: Full-scope content summary (course/module), no reranking
+        - socratic: Guided learning (v1)
+        - socratic_v2: Guided learning ("Lernmodus v2", redesigned tutor)
         """
         # Compile subgraphs
         no_vectordb_graph = build_no_vectordb_graph()
         simple_hop_graph = build_simple_hop_graph()
-        multi_hop_graph = build_multi_hop_graph()
+        summarize_graph = build_summarize_graph()
         socratic_graph = build_socratic_graph()
-        
+        socratic_v2_graph = build_socratic_v2_graph()
+
         # Main router graph
         graph = StateGraph(GraphState)
-        
+
         # Add contextualize/routing node
         graph.add_node("contextualize_and_route", contextualize_and_route)
-        
+
         # Add subgraph nodes
         graph.add_node("no_vectordb", no_vectordb_graph)
         graph.add_node("simple_hop", simple_hop_graph)
-        graph.add_node("multi_hop", multi_hop_graph)
+        graph.add_node("summarize", summarize_graph)
         graph.add_node("socratic", socratic_graph)
-        
+        graph.add_node("socratic_v2", socratic_v2_graph)
+
         # Start with contextualization and routing
         graph.add_edge(START, "contextualize_and_route")
-        
+
         # Conditional routing based on mode
         def route_by_mode(state: GraphState) -> str:
             """Route to appropriate subgraph based on classified scenario."""
@@ -84,20 +221,35 @@ class KICampusAssistant:
             # Special case: exit_complete skips directly to END --> used when exiting socratic mode
             if mode == "exit_complete":
                 return END
-            return mode  # Returns "no_vectordb", "simple_hop", "multi_hop" or "socratic"
-        
+            return mode  # Returns "no_vectordb", "simple_hop", "summarize" or "socratic"
+
         graph.add_conditional_edges(
             "contextualize_and_route",
             route_by_mode
         )
-        
+
         # All subgraphs end at END
         graph.add_edge("no_vectordb", END)
         graph.add_edge("simple_hop", END)
-        graph.add_edge("multi_hop", END)
+        graph.add_edge("summarize", END)
         graph.add_edge("socratic", END)
-        
+        graph.add_edge("socratic_v2", END)
+
         return graph.compile(checkpointer=self.checkpointer)
+
+    @staticmethod
+    def _append_turn_to_history(
+        result: GraphState, query: str, assistant_message: SerializableChatMessage
+    ) -> list[SerializableChatMessage]:
+        """History after this turn: user + assistant message — except for a
+        pure toggle signal (start/stop flag took effect), whose message text is
+        frontend-generated and must not show up in the history (e.g. after a
+        page reload). The tutor's reply (welcome / exit confirmation) is kept.
+        """
+        if result.get("signal_turn"):
+            return result["chat_history"] + [assistant_message]
+        user_message = SerializableChatMessage(role="user", content=query)
+        return result["chat_history"] + [user_message, assistant_message]
 
     @observe()
     def limit_chat_history(self, chat_history: list[SerializableChatMessage], limit: int) -> list[SerializableChatMessage]:
@@ -108,23 +260,34 @@ class KICampusAssistant:
 
     @observe()
     def _get_or_create_state(
-        self, 
-        query: str, 
+        self,
+        query: str,
         model: Models,
         thread_id: str | None,
         course_id: int | None = None,
-        module_id: int | None = None,
+        module_id: int | list[int] | None = None,
+        start_socratic: bool = False,
+        start_socratic_v2: bool = False,
+        stop_socratic_v2: bool = False,
+        ui_language: str | None = None,
     ) -> tuple[GraphState, dict, str]:
         """
         Lädt bestehenden State aus Checkpoint oder erstellt neuen Initial State.
-        
+
         Args:
             query: User's question
             model: LLM model to use
             thread_id: Optional thread ID for persistent conversations
             course_id: Optional course ID filter
-            module_id: Optional module ID filter
-        
+            module_id: Optional module ID filter — a single ID or a list of IDs
+            start_socratic: Explicit request-level trigger to enter the socratic mode
+            start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
+            stop_socratic_v2: Explicit request-level trigger to end an active socratic v2
+                session (frontend toggle) — no keyword message needed
+            ui_language: Optional UI/device language hint of the frontend (e.g. "en",
+                "de-DE") — used by the v2 tutor when the conversation itself gives no
+                language signal yet
+
         Returns:
             tuple: (state_update, config, thread_id)
         """
@@ -140,15 +303,23 @@ class KICampusAssistant:
         # Versuche, bestehenden State zu laden
         try:
             checkpoint = self.graph.get_state(config)
-            
+
             if checkpoint and checkpoint.values:
                 # State existiert → Nur neue Query + runtime_config updaten
                 # Lade bestehende chat_history (OHNE neue User-Message, die kommt später)
                 existing_history = checkpoint.values.get("chat_history", [])
-                
-                # Limitiere Chat-History auf letzte 6 Nachrichten
-                limited_existing_history = self.limit_chat_history(existing_history, limit=6)
-                
+
+                # Limitiere Chat-History auf letzte N Nachrichten. Aktive
+                # v2-Lernsessions brauchen den ganzen Sessionverlauf (Learner
+                # Model, keine Fragenwiederholung) — 6 Nachrichten reichen
+                # dort nicht.
+                history_limit = (
+                    env.CHAT_HISTORY_LIMIT_SOCRATIC_V2
+                    if checkpoint.values.get("socratic_v2_phase")
+                    else env.CHAT_HISTORY_LIMIT
+                )
+                limited_existing_history = self.limit_chat_history(existing_history, limit=history_limit)
+
                 state_update: GraphState = {
                     "user_query": query,
                     "chat_history": limited_existing_history,
@@ -157,10 +328,33 @@ class KICampusAssistant:
                         "course_id": course_id,
                         "module_id": module_id,
                         "thread_id": thread_id,
-                    }
+                        "start_socratic": start_socratic,
+                        "start_socratic_v2": start_socratic_v2,
+                        "stop_socratic_v2": stop_socratic_v2,
+                        "ui_language": ui_language,
+                    },
+                    # Reset per-turn intermediate artifacts so stale checkpoint
+                    # values never bleed into the new graph run.
+                    # (pending_scope_escalation is deliberately NOT reset — it
+                    # carries the module→course escalation offer into exactly
+                    # this next turn and is consumed/cleared by
+                    # contextualize_and_route.)
+                    "retrieved": [],
+                    "retrieval_semantic_ranked": False,
+                    "reranked": [],
+                    "scope_escalated": False,
+                    "answer": None,
+                    "citations_markdown": None,
+                    "detected_language": None,
+                    "contextualized_query": None,
+                    # Per-turn routing flag of the v2 tutor (translation
+                    # request) — must never survive into the next turn.
+                    "v2_translate_last": False,
+                    # Per-turn: was this request a pure toggle signal?
+                    "signal_turn": False,
                 }
                 return state_update, config, thread_id
-        
+
         except Exception:
             # Checkpoint existiert nicht oder Fehler beim Laden
             pass
@@ -174,25 +368,137 @@ class KICampusAssistant:
                 "course_id": course_id,
                 "module_id": module_id,
                 "thread_id": thread_id,
+                "start_socratic": start_socratic,
+                "start_socratic_v2": start_socratic_v2,
+                "stop_socratic_v2": stop_socratic_v2,
+                "ui_language": ui_language,
             },
             "system_config": self.system_config
         }
-        
+
         return initial_state, config, thread_id
 
+    def _update_langfuse_trace(
+        self,
+        *,
+        surface: str,
+        query: str,
+        thread_id: str,
+        result: GraphState,
+        assistant_content: str,
+    ) -> None:
+        """Reichert den aktuellen Langfuse-Trace mit Analyse-Daten an.
+
+        - session_id = thread_id → Konversationen erscheinen gruppiert in der
+          Langfuse Sessions-View.
+        - Name/Tags (mode, model, reranker, surface) → filterbar in der Trace-Liste.
+        - Metadaten (Chunk-Zahlen, Sprache, contextualized_query, Fallback-Typ)
+          → Diagnose einzelner Requests ohne Span-Deep-Dive.
+        - Score "no_answer_fallback" (0/1) → Fallback-Quote als Metrik/Dashboard.
+
+        Darf niemals den Chat-Pfad brechen — Fehler werden nur geloggt.
+        """
+        try:
+            mode = result.get("mode")
+            runtime_config = result.get("runtime_config", {})
+            model = runtime_config.get("model")
+            model_name = model.value if isinstance(model, Models) else str(model)
+            reranker_type = self.system_config.get("reranker_type")
+            # Fallback-Texte kommen nie mit Citations, daher gegen das rohe
+            # "answer"-Feld klassifizieren (nicht gegen citations_markdown).
+            # result["fallback_type"] is set by the answer/summarize nodes
+            # themselves and survives fallback-text translation; text-based
+            # classification is only a fallback for scenarios that don't set it.
+            fallback_type = result.get("fallback_type") or get_fallback_type(result.get("answer"))
+
+            # Anfrage-Scope: fragt das Frontend global, kursweit oder auf ein
+            # konkretes Modul eingeschränkt? Als Tag direkt filter-/zählbar.
+            course_id = runtime_config.get("course_id")
+            module_id = runtime_config.get("module_id")
+            # Truthy check, not `is not None`: an empty module_id list means
+            # "no module filter", same as None.
+            if module_id:
+                scope = "module"
+            elif course_id is not None:
+                scope = "course"
+            else:
+                scope = "global"
+
+            tags = [
+                f"surface:{surface}",
+                f"scope:{scope}",
+                f"model:{model_name}",
+                f"reranker:{reranker_type}",
+            ]
+            if mode:
+                tags.append(f"mode:{mode}")
+            if fallback_type:
+                tags.append("fallback")
+            if result.get("scope_escalated"):
+                tags.append("scope_escalated")
+
+            langfuse_context.update_current_trace(
+                name=f"chat:{mode}" if mode else "chat",
+                session_id=thread_id,
+                input=query,
+                output=assistant_content,
+                tags=tags,
+                metadata={
+                    "thread_id": thread_id,
+                    "surface": surface,
+                    "scope": scope,
+                    "mode": mode,
+                    "socratic_mode": result.get("socratic_mode"),
+                    "socratic_v2_phase": result.get("socratic_v2_phase"),
+                    "model": model_name,
+                    "course_id": course_id,
+                    "module_id": module_id,
+                    "detected_language": result.get("detected_language"),
+                    "contextualized_query": result.get("contextualized_query"),
+                    "history_len": len(result.get("chat_history") or []),
+                    "n_retrieved": len(result.get("retrieved") or []),
+                    "n_reranked": len(result.get("reranked") or []),
+                    "retrieval_semantic_ranked": result.get("retrieval_semantic_ranked"),
+                    "scope_escalated": bool(result.get("scope_escalated")),
+                    "fallback_type": fallback_type,
+                    "system_config": self.system_config,
+                },
+            )
+            langfuse_context.score_current_trace(
+                name="no_answer_fallback",
+                value=1 if fallback_type else 0,
+                data_type="BOOLEAN",
+                comment=fallback_type,
+            )
+        except Exception:
+            logger.warning("Langfuse trace enrichment failed", exc_info=True)
+
     @observe()
-    def chat(self, query: str, model: Models, thread_id: str | None = None) -> tuple[SerializableChatMessage, str]:
+    def chat(
+        self,
+        query: str,
+        model: Models,
+        thread_id: str | None = None,
+        start_socratic: bool = False,
+        start_socratic_v2: bool = False,
+        stop_socratic_v2: bool = False,
+        ui_language: str | None = None,
+    ) -> tuple[SerializableChatMessage, str]:
         """
         Chat with general bot about drupal and functions of ki-campus.
         For frontend integrated in Drupal.
-        
+
         Args:
             query: User's question
             model: LLM model to use
             thread_id: Optional thread ID for persistent conversations
                 - If provided: Loads state from checkpoint
                 - If None: Creates new conversation with generated ID
-            
+            start_socratic: Explicit request-level trigger to enter the socratic mode
+            start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
+            stop_socratic_v2: Explicit request-level trigger to end an active socratic v2
+                session (frontend toggle) — no keyword message needed
+
         Returns:
             tuple: (SerializableChatMessage with answer, thread_id)
         """
@@ -200,27 +506,37 @@ class KICampusAssistant:
         state, config, thread_id = self._get_or_create_state(
             query=query,
             model=model,
-            thread_id=thread_id
+            thread_id=thread_id,
+            start_socratic=start_socratic,
+            start_socratic_v2=start_socratic_v2,
+            stop_socratic_v2=stop_socratic_v2,
+            ui_language=ui_language,
         )
-        
-        # Allow easier tracing of conversations in Langfuse
-        langfuse_context.update_current_observation(
-            metadata={
-                "thread_id": thread_id
-            }
-        )
+
+        # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)
+        # bereits der Konversation zugeordnet sind. Die vollständige
+        # Anreicherung passiert nach dem Graph-Lauf.
+        langfuse_context.update_current_trace(session_id=thread_id, input=query)
 
         # Execute graph mit State (update oder initial)
         result = self.graph.invoke(state, config=config)
-        
+
         # Generiere Assistant-Response
         assistant_content = result.get("citations_markdown") or result.get("answer") or ""
-        assistant_message = SerializableChatMessage(role="assistant", content=assistant_content)
-        
-        # Füge User-Message und Assistant-Message zur History hinzu
-        user_message = SerializableChatMessage(role="user", content=query)
-        updated_history = result["chat_history"] + [user_message, assistant_message]
-        
+        assistant_message = SerializableChatMessage(
+            role="assistant", content=assistant_content, fallback_type=result.get("fallback_type")
+        )
+
+        self._update_langfuse_trace(
+            surface="drupal",
+            query=query,
+            thread_id=thread_id,
+            result=result,
+            assistant_content=assistant_content,
+        )
+
+        updated_history = self._append_turn_to_history(result, query, assistant_message)
+
         # Update State mit finaler chat_history
         self.graph.update_state(
             config=config,
@@ -236,22 +552,31 @@ class KICampusAssistant:
         query: str,
         model: Models,
         course_id: int | None = None,
-        module_id: int | None = None,
+        module_id: int | list[int] | None = None,
         thread_id: str | None = None,
+        start_socratic: bool = False,
+        start_socratic_v2: bool = False,
+        stop_socratic_v2: bool = False,
+        ui_language: str | None = None,
     ) -> tuple[SerializableChatMessage, str]:
         """
-        Chat with the contents of a specific course and optionally submodule.
+        Chat with the contents of a specific course and optionally submodule(s).
         For frontend hosted on Moodle.
-        
+
         Args:
             query: User's question
             model: LLM model to use
             course_id: Moodle course ID to filter by
-            module_id: Optional module/topic ID within course
+            module_id: Optional module/topic ID (or list of IDs) within the course.
+                All given module IDs are assumed to belong to course_id.
             thread_id: Optional thread ID for persistent conversations
                 - If provided: Loads state from checkpoint
                 - If None: Creates new conversation with generated ID
-            
+            start_socratic: Explicit request-level trigger to enter the socratic mode
+            start_socratic_v2: Explicit request-level trigger to enter the socratic v2 mode
+            stop_socratic_v2: Explicit request-level trigger to end an active socratic v2
+                session (frontend toggle) — no keyword message needed
+
         Returns:
             tuple: (SerializableChatMessage with answer, thread_id)
         """
@@ -261,26 +586,36 @@ class KICampusAssistant:
             model=model,
             thread_id=thread_id,
             course_id=course_id,
-            module_id=module_id
+            module_id=module_id,
+            start_socratic=start_socratic,
+            start_socratic_v2=start_socratic_v2,
+            stop_socratic_v2=stop_socratic_v2,
+            ui_language=ui_language,
         )
-        
-        # Allow easier tracing of conversations in Langfuse
-        langfuse_context.update_current_observation(
-            metadata={
-                "thread_id": thread_id
-            }
-        )
+
+        # Session früh setzen, damit auch Fehler-Traces (Exception im Graph)
+        # bereits der Konversation zugeordnet sind. Die vollständige
+        # Anreicherung passiert nach dem Graph-Lauf.
+        langfuse_context.update_current_trace(session_id=thread_id, input=query)
 
         # Execute graph mit State (update oder initial)
         result = self.graph.invoke(state, config=config)
-        
+
         # Generiere Assistant-Response
         assistant_content = result.get("citations_markdown") or result.get("answer") or ""
-        assistant_message = SerializableChatMessage(role="assistant", content=assistant_content)
-        
-        # Füge User-Message und Assistant-Message zur History hinzu
-        user_message = SerializableChatMessage(role="user", content=query)
-        updated_history = result["chat_history"] + [user_message, assistant_message]
+        assistant_message = SerializableChatMessage(
+            role="assistant", content=assistant_content, fallback_type=result.get("fallback_type")
+        )
+
+        self._update_langfuse_trace(
+            surface="moodle",
+            query=query,
+            thread_id=thread_id,
+            result=result,
+            assistant_content=assistant_content,
+        )
+
+        updated_history = self._append_turn_to_history(result, query, assistant_message)
         
         # Update State mit finaler chat_history
         self.graph.update_state(
@@ -290,6 +625,39 @@ class KICampusAssistant:
 
         # Return SerializableChatMessage and thread_id
         return (assistant_message, thread_id)
+
+
+    def get_chat_history(self, thread_id: str) -> list[SerializableChatMessage]:
+        """Gibt die gespeicherte Konversation zurück. Leer wenn thread_id unbekannt."""
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            checkpoint = self.graph.get_state(config)
+            if checkpoint and checkpoint.values:
+                return checkpoint.values.get("chat_history", [])
+        except Exception:
+            pass
+        return []
+
+    def is_learning_mode_active(self, thread_id: str | None) -> bool:
+        """Ob in diesem Thread gerade eine Sokratischer-Tutor-Session läuft (v1 oder v2).
+
+        Für den Modus-Schalter im Frontend: Eine Session endet nicht nur über
+        den Schalter, sondern auch per Stichwort ("stopp"), per Policy-EXIT,
+        nach der Konsolidierung — oder startet gar nicht erst (kein
+        Kurs/Modul gewählt). Nur das Backend kennt den echten Zustand.
+        """
+        if not thread_id:
+            return False
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            checkpoint = self.graph.get_state(config)
+            values = checkpoint.values if checkpoint else None
+        except Exception:
+            logger.warning("Lernmodus-Status für Thread %s nicht lesbar", thread_id, exc_info=True)
+            return False
+        if not values:
+            return False
+        return values.get("socratic_v2_phase") is not None or values.get("socratic_mode") is not None
 
 
 if __name__ == "__main__":

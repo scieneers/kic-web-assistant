@@ -1,0 +1,78 @@
+"""
+BGE Cross-Encoder Reranker (local, zero per-request cost).
+
+Model: BAAI/bge-reranker-v2-m3 (~568MB)
+  - Multilingual (100+ languages including German and English)
+  - 8192 token context window
+  - Runs on CPU, ~30-80ms for 10 chunks
+
+Prerequisites:
+  sentence-transformers>=3.0.0,<4  (already in pyproject.toml)
+  uv sync
+"""
+
+import time
+from typing import List, Optional
+
+from src.api.models.serializable_text_node import SerializableTextNode
+from src.llm.objects.LLMs import Models
+from src.llm.objects.rerankers.base import BaseReranker, RerankResult
+
+BGE_LARGE_MODEL = "BAAI/bge-reranker-v2-m3"   # 568MB, multilingual (100+ languages)
+BGE_SMALL_MODEL = "BAAI/bge-reranker-base"    # 280MB, faster, primarily English
+_DEFAULT_MODEL = BGE_LARGE_MODEL
+
+
+class BGEReranker(BaseReranker):
+    """Local cross-encoder reranker using sentence-transformers. Model is downloaded
+    on first use (~280MB) and cached by HuggingFace locally.
+
+    Scores are forced through a sigmoid so they land on a 0–1 scale regardless
+    of the model's default activation — this makes min_score directly usable
+    without per-model normalization.
+    """
+
+    def __init__(self, top_n: int, model_name: str = _DEFAULT_MODEL, min_score: float = 0.0):
+        super().__init__(top_n, min_score)
+        self.model_name = model_name
+        import torch
+        from sentence_transformers import CrossEncoder
+        self._model = CrossEncoder(model_name, default_activation_function=torch.nn.Sigmoid())
+
+    @property
+    def name(self) -> str:
+        return f"BGE ({self.model_name.split('/')[-1]})"
+
+    def rerank(
+        self,
+        query: str,
+        nodes: List[SerializableTextNode],
+        model: Optional[Models] = None,
+        *,
+        course_id: Optional[int] = None,
+        module_id: Optional[int] = None,
+        preranked: bool = False,
+    ) -> RerankResult:
+        # course_id/module_id/preranked are part of the shared interface and
+        # only used by index-querying backends (Azure Semantic).
+        pairs = [(query, node.text) for node in nodes]
+
+        t0 = time.perf_counter()
+        scores = self._model.predict(pairs)
+        latency_ms = (time.perf_counter() - t0) * 1000
+
+        # Copy nodes with the cross-encoder score so downstream consumers
+        # (min_score filter, no-answer logic) see the rerank relevance instead
+        # of the retrieval RRF score. Copies keep the shared state immutable.
+        scored = [node.model_copy(update={"score": float(s)}) for node, s in zip(nodes, scores)]
+        scored.sort(key=lambda n: n.score or 0.0, reverse=True)
+        top_nodes = scored[: self.top_n]
+
+        top_nodes, dropped = self.apply_min_score(top_nodes)
+
+        return RerankResult(
+            nodes=top_nodes,
+            latency_ms=latency_ms,
+            estimated_cost_eur=0.0,
+            metadata={"model": self.model_name, "input_chunks": len(nodes), "dropped_below_min_score": dropped},
+        )

@@ -80,6 +80,7 @@ class Moochup:
                     headers={
                         "Accept": "application/vnd.api+json; moochub-version=3.0, application/problem+json",
                     },
+                    timeout=(15, 120),
                 )
                 response.raise_for_status()
                 return response.json()
