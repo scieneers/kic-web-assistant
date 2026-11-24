@@ -549,6 +549,31 @@ class Fetch_Data:
                             moodle_courses_done += 1
                             self.ctx.set_counter("moodle_courses_done", moodle_courses_done)
 
+                        # Extraktion fehlgeschlagen, nur Name/Beschreibung übrig, und
+                        # das Modul steht schon im Index → bestehende Fassung behalten
+                        # statt sie durch das Rumpf-Dokument zu ersetzen. Der Key ist
+                        # oben bereits als "gesehen" markiert, also auch vor dem
+                        # Stale-Sweep sicher. Neue Module (Key nicht im Index) laufen
+                        # normal weiter und bekommen ihr Platzhalter-Dokument.
+                        if (
+                            module_id is not None
+                            and key == f"moodle:{course_id}:{module_id}"
+                            and key in moodle_existing
+                            and (course_id, module_id) in moodle.degraded_module_keys
+                        ):
+                            moodle_skipped += 1
+                            self.logger.warning(
+                                "MOODLE_DOC %s",
+                                format_kv(
+                                    RUN_ID=self.run_id,
+                                    COURSE_ID=course_id,
+                                    MODULE_ID=module_id,
+                                    EVENT="DOC_KEPT_EXISTING",
+                                    REASON="extraction failed",
+                                ),
+                            )
+                            continue
+
                         doc.metadata["source_doc_key"] = key
                         doc.metadata["content_hash"] = new_hash
 

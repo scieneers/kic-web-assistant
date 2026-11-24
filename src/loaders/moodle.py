@@ -73,6 +73,10 @@ class Moodle:
         # Der Loader nimmt deren bestehende Index-Keys vom Stale-Sweep aus —
         # "Extraktion fehlgeschlagen" heißt "behalten", nicht "löschen".
         self.failed_module_keys: set[tuple[int, int]] = set()
+        # Teilmenge davon: Extraktion fehlgeschlagen UND außer Name/Beschreibung
+        # nichts extrahiert. get_data.py überschreibt für diese Module keine
+        # bereits indizierte Fassung (s. iter_course_documents_stream).
+        self.degraded_module_keys: set[tuple[int, int]] = set()
 
     def get_courses(self) -> list[MoodleCourse]:
         """get all courses that are set to visible on moodle"""
@@ -321,6 +325,27 @@ class Moodle:
                                 module.h5p_content_type or "-", module.name, text_len,
                             )
 
+                        # Extraktion ist fehlgeschlagen UND hat außer Name/Beschreibung
+                        # nichts geliefert → als "degradiert" markieren. get_data.py
+                        # behält dann eine bereits indizierte Fassung, statt deren
+                        # gute Chunks durch dieses Rumpf-Dokument zu ersetzen
+                        # (Extraktionsfehler heißt "behalten", nicht "überschreiben").
+                        # Trotzdem yielden: Ist das Modul noch NICHT im Index, braucht
+                        # es das Platzhalter-Dokument — sonst lehnt die API Chats in
+                        # diesem Modul mit "no module found" ab. Die Entscheidung
+                        # fällt deshalb in get_data.py, wo der Index-Stand bekannt ist.
+                        if (course.id, module.id) in self.failed_module_keys and not module.has_extracted_content(doc):
+                            self.degraded_module_keys.add((course.id, module.id))
+                            self.logger.warning(
+                                "MODULE_DEGRADED %s",
+                                format_kv(
+                                    COURSE_ID=course.id,
+                                    MODULE_ID=module.id,
+                                    MODNAME=module.modname,
+                                    REASON="extraction failed, only name/intro left",
+                                ),
+                            )
+
                         yield course, doc
 
                         # Strukturierte Item-Dokumente (QuizItem/GlossaryEntry/
@@ -491,25 +516,52 @@ class Moodle:
                     url=getattr(module, "url", None),
                 )
                 self.run_ctx.checkpoint()
-            match module.type:
-                case ModuleTypes.VIDEOTIME:
-                    err_message = self.extract_videotime(module)
-                case ModuleTypes.PAGE:
-                    err_message = self.extract_page(module)
-                case ModuleTypes.H5P:
-                    for activity in h5p_activities:
-                        if activity.coursemodule == module.id:
-                            err_message = self.extract_h5p(module, activity)
-                case ModuleTypes.GLOSSARY:
-                    err_message = self.extract_glossary(module)
-                case ModuleTypes.RESOURCE:
-                    err_message = self.extract_resource(module)
-                case ModuleTypes.FOLDER:
-                    err_message = self.extract_folder(module)
-                case ModuleTypes.BOOK:
-                    err_message = self.extract_book(module)
-                case ModuleTypes.URL:
-                    err_message = self.extract_url(module)
+            try:
+                match module.type:
+                    case ModuleTypes.VIDEOTIME:
+                        err_message = self.extract_videotime(module)
+                    case ModuleTypes.PAGE:
+                        err_message = self.extract_page(module)
+                    case ModuleTypes.H5P:
+                        for activity in h5p_activities:
+                            if activity.coursemodule == module.id:
+                                err_message = self.extract_h5p(module, activity)
+                    case ModuleTypes.GLOSSARY:
+                        err_message = self.extract_glossary(module)
+                    case ModuleTypes.RESOURCE:
+                        err_message = self.extract_resource(module)
+                    case ModuleTypes.FOLDER:
+                        err_message = self.extract_folder(module)
+                    case ModuleTypes.BOOK:
+                        err_message = self.extract_book(module)
+                    case ModuleTypes.URL:
+                        err_message = self.extract_url(module)
+            except MoodleMaintenanceError:
+                # Whole site is down — every following module would fail too, so
+                # this must abort the run instead of being logged per module.
+                raise
+            except Exception as exc:
+                # Safety net: a single unparseable module must never abort the
+                # whole ingestion run. Most extract_* methods already catch their
+                # own errors and return a message, but the H5P path has gaps by
+                # construction (missing ZIP members, malformed content.json,
+                # handler errors on unexpected H5P field types, HTTP errors on
+                # the package download). Without this net those propagate up
+                # through get_data.extract(), which re-raises — the run dies at
+                # that module and the Drupal stage never even starts. Since
+                # extraction happens before the content-hash comparison, the
+                # next run would fail at the same module again.
+                err_message = f"Unerwarteter Fehler ({type(exc).__name__}): {exc}"
+                self.logger.exception(
+                    "MODULE_FAILED %s",
+                    format_kv(
+                        MODULE_ID=getattr(module, "id", None),
+                        MODULE_TYPE=getattr(
+                            getattr(module, "type", None), "value", getattr(module, "type", None)
+                        ),
+                        ERROR_TYPE=type(exc).__name__,
+                    ),
+                )
             if err_message:
                 failed_modules.append(FailedModule(modul=module, err_message=err_message))
                 if self.run_ctx:

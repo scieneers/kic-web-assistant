@@ -96,19 +96,31 @@ class Module(BaseModel):
             case _:
                 return None
 
-    def to_document(self, course_id) -> Document:
-        text_parts = []
-        
-        # Name
-        text_parts.append(f"Module Name: {self.name}")
-        
-        # Intro
+    def _header_parts(self) -> list[str]:
+        """Name + Beschreibung: der Teil des Modultexts, der aus den Moodle-
+        Stammdaten kommt und NICHT aus der Inhalts-Extraktion."""
+        parts = [f"Module Name: {self.name}"]
         if self.intro:
             from src.loaders.models.hp5activities import strip_html
             intro_clean = strip_html(self.intro)
             if intro_clean:
-                text_parts.append(f"\nBeschreibung: {intro_clean}")
-        
+                parts.append(f"\nBeschreibung: {intro_clean}")
+        return parts
+
+    def has_extracted_content(self, doc: Document) -> bool:
+        """True, wenn `doc` (aus to_document) mehr enthält als Name + Beschreibung.
+
+        Vergleicht gegen genau die Header-Teile, die to_document selbst
+        verwendet — es gibt also keine zweite Liste von Inhaltsfeldern, die
+        auseinanderlaufen könnte. Inventarzeilen (Quiz, Transkripte, ...)
+        zählen als Inhalt, weil sie für ausgelagerte Item-Dokumente stehen.
+        """
+        return (doc.text or "").strip() != "\n".join(self._header_parts()).strip()
+
+    def to_document(self, course_id) -> Document:
+        # Name + Intro
+        text_parts = self._header_parts()
+
         # Text-Content
         if self.text is not None:
             text_parts.append(f"\nText: {self.text}")

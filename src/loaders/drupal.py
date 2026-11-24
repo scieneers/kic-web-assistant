@@ -469,7 +469,19 @@ class Drupal:
             case "paths":
                 return "Lernpfade"
             case _:
-                raise Exception(f"Bad type: {short_type}")
+                # An unknown field_format is a purely editorial change in Drupal
+                # (a new course format added in the CMS) and must not abort the
+                # whole Drupal stage: the node loop in get_page_type() has no
+                # error handling, so a raise here propagates up through
+                # get_data.extract() and fails the entire ingestion run.
+                # Falling back to the raw value keeps the course indexed with a
+                # slightly less pretty label until the mapping is extended.
+                self.logger.warning(
+                    "CONTENT_GAP UNKNOWN_COURSE_TYPE field_format=%s (using raw value; "
+                    "extend get_course_type() if this format is here to stay)",
+                    short_type,
+                )
+                return short_type
 
     def get_course_topic(self, topic_list: list):
         topics_str = ""
