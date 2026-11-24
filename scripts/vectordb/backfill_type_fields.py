@@ -25,8 +25,10 @@ import json
 from src.env import env
 from src.vectordb.azure_search import VectorDBAzureSearch
 
-# Only Moodle docs carry modname; restrict the scan to rows that still miss it.
-SCAN_FILTER = "source eq 'Moodle' and modname eq null"
+# Only Moodle module/item docs carry modname; restrict the scan to rows that
+# still miss it. Course summary docs (type 'Kurs') never have a modname — they
+# are not modules — and would otherwise be misreported as "needs re-ingest".
+SCAN_FILTER = "source eq 'Moodle' and modname eq null and type ne 'Kurs'"
 
 
 def main():
