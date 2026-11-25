@@ -562,3 +562,22 @@ class TestQuizMarkdown:
         assert f"**{pending['question']}**" in text
         for option in pending["options"]:
             assert f"- **{option['letter']})** {option['text']}" in text
+
+    def test_gender_stars_are_escaped_for_display_only(self):
+        # Two gender stars in one line would render the text between them in
+        # italics ("Nutzer*innen und Lehrer*innen").
+        pending = build_pending_quiz(
+            {
+                "kind": "multichoice",
+                "question": "Was dürfen Nutzer*innen und Lehrer*innen?",
+                "correct_answers": ["Daten der Patient*innen einsehen"],
+                "incorrect_answers": ["Nichts"],
+            }
+        )
+        text = render_quiz_message(pending)
+        assert "**Was dürfen Nutzer\\*innen und Lehrer\\*innen?**" in text
+        assert "Daten der Patient\\*innen einsehen" in text
+        # State keeps the raw text — grading by option text still works.
+        assert pending["question"] == "Was dürfen Nutzer*innen und Lehrer*innen?"
+        verdict = grade_quiz_answer(pending, "Daten der Patient*innen einsehen")
+        assert verdict["correct"] is True
