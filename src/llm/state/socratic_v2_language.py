@@ -303,6 +303,77 @@ _TEXTS = {
         "German": "Antworte mit dem Buchstaben oder mit „wahr“ bzw. „falsch“.",
         "English": "Reply with the letter or with “true” or “false”.",
     },
+    "quiz_partial": {
+        "German": "Teilweise richtig – ein Teil deiner Auswahl stimmt.",
+        "English": "Partly right — some of your choices are correct.",
+    },
+    "quiz_partial_wrong": {
+        "German": "Mindestens eine der gewählten Antworten passt aber nicht.",
+        "English": "But at least one of the options you chose doesn't fit.",
+    },
+    "quiz_partial_missing": {
+        "German": "Es ist noch mindestens eine weitere Antwort richtig.",
+        "English": "At least one more option is also correct.",
+    },
+    "quiz_partial_retry": {
+        "German": "Schau dir die Optionen noch einmal an und nenne alle passenden Buchstaben.",
+        "English": "Take another look at the options and give all matching letters.",
+    },
+    "quiz_none_left": {
+        "German": "Zu diesem Abschnitt gibt es keine weiteren Quizfragen aus dem Kurs. Ich kann dir aber gern eine eigene Übungsfrage zum Thema stellen – sag einfach Bescheid.",
+        "English": "There are no more quiz questions from the course for this section. I'm happy to ask you a practice question of my own on the topic instead — just let me know.",
+    },
+    "quiz_none_in_scope": {
+        "German": "Zu diesem Abschnitt gibt es im Kurs keine Quizfragen. Ich kann dir aber gern eine eigene Übungsfrage zum Thema stellen – sag einfach Bescheid.",
+        "English": "The course has no quiz questions for this section. I'm happy to ask you a practice question of my own on the topic instead — just let me know.",
+    },
+    # Second partial attempt: more concrete, counts only (no option names).
+    "quiz_partial_again": {
+        "German": "Noch nicht ganz.",
+        "English": "Not quite yet.",
+    },
+    "quiz_count_all_right": {
+        "German": "Alles, was du gewählt hast, stimmt.",
+        "English": "Everything you chose is correct.",
+    },
+    # Everything ticked: no counts — they would reveal how many are correct.
+    "quiz_all_selected": {
+        "German": "Du hast alle Optionen gewählt – aber nicht alle sind richtig. Wähle nur die passenden aus.",
+        "English": "You chose every option — but not all of them are correct. Pick only the ones that fit.",
+    },
+    "quiz_count_right_one": {
+        "German": "Eine deiner Antworten stimmt.",
+        "English": "One of your choices is correct.",
+    },
+    "quiz_count_right_many": {
+        "German": "{n} deiner Antworten stimmen.",
+        "English": "{n} of your choices are correct.",
+    },
+    "quiz_count_missing_one": {
+        "German": "Es fehlt noch genau eine richtige Antwort.",
+        "English": "Exactly one correct option is still missing.",
+    },
+    "quiz_count_missing_many": {
+        "German": "Es fehlen noch {n} richtige Antworten.",
+        "English": "{n} correct options are still missing.",
+    },
+    "quiz_count_wrong_one": {
+        "German": "Eine der gewählten Antworten passt nicht.",
+        "English": "One of the options you chose doesn't fit.",
+    },
+    "quiz_count_wrong_many": {
+        "German": "{n} der gewählten Antworten passen nicht.",
+        "English": "{n} of the options you chose don't fit.",
+    },
+    "quiz_last_try": {
+        "German": "Das ist dein letzter Versuch, danach lösen wir gemeinsam auf.",
+        "English": "This is your last try — after that we'll go through the solution together.",
+    },
+    # After a wrong pick the next reply replaces the selection — say so explicitly.
+    "quiz_partial_retry_full": {
+        "German": "Schau dir die Optionen noch einmal an und nenne deine komplette Antwort neu, also alle passenden Buchstaben (z. B. „A, C“).",
+        "English": "Take another look at the options and give your complete answer again, i.e. all matching letters (e.g. “A, C”).",
+    },
     "quiz_true": {"German": "Wahr", "English": "True"},
     "quiz_false": {"German": "Falsch", "English": "False"},
 }

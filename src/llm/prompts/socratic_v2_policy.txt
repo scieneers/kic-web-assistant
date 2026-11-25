@@ -23,6 +23,8 @@ Du erhältst: die Lernziele des Moduls, das Sitzungs-Lernziel (ggf. noch offen),
 4. Aktualisiere das Lernenden-Modell in JEDEM Zug: Konzept-Status ("unbekannt", "gesehen", "wackelig", "sicher"), neu erkannte Missverständnisse, Affekt ("neutral", "motiviert", "frustriert").
 5. Setze "zielkonzept" auf das Konzept, um das es im nächsten Zug gehen soll (kurz, 1-4 Wörter).
 6. Wähle QUIZ nur, wenn VERFÜGBARE QUIZFRAGEN größer als 0 ist.
+7. EXIT nur bei ausdrücklichem Ausstiegswunsch. Ein „nein“, mit dem die Person ein Missverständnis korrigiert oder etwas anderes möchte (z. B. „nein, ich meinte …“), ist KEIN Ausstiegswunsch — wähle den Zug, der zu ihrem eigentlichen Wunsch passt.
+8. Bezieht sich die Antwort auf ein Angebot aus der letzten Tutor-Nachricht (z. B. „neue Frage“ nach dem Angebot einer weiteren Quizfrage), folge diesem Angebot.
 
 # AUSGABE #
 Antworte AUSSCHLIESSLICH mit einem JSON-Objekt, ohne Markdown und ohne weiteren Text:

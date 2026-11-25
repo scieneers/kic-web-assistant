@@ -340,6 +340,7 @@ def build_pending_quiz(payload: Dict[str, Any], concept: Optional[str] = None) -
         # Replies that matched no option so far — the first one gets a
         # clarification without the solution, the second resolves the quiz.
         "unrecognized_count": 0,
+        "partial_count": 0,
     }
 
 
@@ -371,10 +372,28 @@ def render_quiz_message(pending: Dict[str, Any], language: str | None = None) ->
     else:
         instruction = localize("quiz_instruction_single", language)
 
-    lines = [localize("quiz_header", language), "", pending["question"], ""]
-    lines += [f"{option['letter']}) {_quiz_option_label(option, kind, language)}" for option in pending["options"]]
+    # Markdown: options as a real list — plain lines joined by "\n" collapse
+    # into one paragraph in every Markdown renderer (Streamlit, Moodle).
+    lines = [localize("quiz_header", language), "", f"**{pending['question'].strip()}**", ""]
+    lines += [f"- **{option['letter']})** {_quiz_option_label(option, kind, language)}" for option in pending["options"]]
     lines += ["", instruction]
     return "\n".join(lines)
+
+
+# Explicit request for a course quiz question ("Stell mir eine Quizfrage",
+# "nein, Quizfrage meinte ich", "quiz me"). Word start only, so "Quiz" inside
+# an unrelated compound does not trigger; questions ABOUT a quiz ("wie viele
+# Quizfragen gibt es?") are rare in a running tutor session and harmless.
+_QUIZ_REQUEST_RE = re.compile(r"\bquiz", re.IGNORECASE)
+# "keine Quizfragen mehr", "genug Quiz", "no more quizzes" — not a request.
+_QUIZ_NEGATION_RE = re.compile(
+    r"\b(kein\w*|nicht|genug|ohne|no|not|don'?t|enough|stop\w*)\b", re.IGNORECASE
+)
+
+
+def is_quiz_request(user_query: str) -> bool:
+    text = user_query or ""
+    return bool(_QUIZ_REQUEST_RE.search(text)) and not _QUIZ_NEGATION_RE.search(text)
 
 
 def is_quiz_give_up(user_answer: str) -> bool:
@@ -435,6 +454,17 @@ def grade_quiz_answer(pending: Dict[str, Any], user_answer: str) -> Dict[str, An
             if kind == "truefalse":
                 selected = selected[:1]
 
+    return _quiz_verdict(options, selected)
+
+
+def grade_quiz_selection(pending: Dict[str, Any], letters: List[str]) -> Dict[str, Any]:
+    """Grade an explicit set of option letters (e.g. a partial answer plus the
+    letters added after the retry prompt)."""
+    options = pending.get("options") or []
+    return _quiz_verdict(options, [o for o in options if o["letter"] in set(letters)])
+
+
+def _quiz_verdict(options: List[Dict[str, Any]], selected: List[Dict[str, Any]]) -> Dict[str, Any]:
     selected_letters = {o["letter"] for o in selected}
     correct_letters = {o["letter"] for o in options if o.get("correct")}
     recognized = bool(selected)
@@ -445,7 +475,15 @@ def grade_quiz_answer(pending: Dict[str, Any], user_answer: str) -> Dict[str, An
         "recognized": recognized,
         "correct": correct,
         "partially_correct": partially_correct,
+        "selected_letters": sorted(selected_letters),
         "matched_options": [o["text"] for o in selected],
         "matched_option": ", ".join(f"{o['letter']}) {o['text']}" for o in selected) or None,
+        # For the partial-answer retry: says WHAT kind of mistake without naming options.
+        "missing_correct": bool(correct_letters - selected_letters),
+        "has_wrong_selected": bool(selected_letters - correct_letters),
+        # For the second retry: counts only, still no option names.
+        "right_count": len(selected_letters & correct_letters),
+        "missing_count": len(correct_letters - selected_letters),
+        "wrong_count": len(selected_letters - correct_letters),
         "correct_options": [o["text"] for o in options if o.get("correct")],
     }
