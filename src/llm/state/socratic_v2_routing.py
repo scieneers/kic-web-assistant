@@ -356,6 +356,13 @@ def _quiz_option_label(option: Dict[str, Any], kind: str | None, language: str |
     return option["text"]
 
 
+def _escape_markdown(text: str) -> str:
+    """Escape asterisks in course texts: two gender stars in one line
+    ("Nutzer*innen und Lehrer*innen") would otherwise render the text between
+    them in italics (CommonMark allows intraword * emphasis)."""
+    return text.replace("*", "\\*")
+
+
 def render_quiz_message(pending: Dict[str, Any], language: str | None = None) -> str:
     """Deterministic quiz rendering — no LLM involved, nothing can leak.
 
@@ -374,8 +381,13 @@ def render_quiz_message(pending: Dict[str, Any], language: str | None = None) ->
 
     # Markdown: options as a real list — plain lines joined by "\n" collapse
     # into one paragraph in every Markdown renderer (Streamlit, Moodle).
-    lines = [localize("quiz_header", language), "", f"**{pending['question'].strip()}**", ""]
-    lines += [f"- **{option['letter']})** {_quiz_option_label(option, kind, language)}" for option in pending["options"]]
+    # Course texts are escaped for display only (state keeps the raw text,
+    # grading matches against it).
+    lines = [localize("quiz_header", language), "", f"**{_escape_markdown(pending['question'].strip())}**", ""]
+    lines += [
+        f"- **{option['letter']})** {_escape_markdown(_quiz_option_label(option, kind, language))}"
+        for option in pending["options"]
+    ]
     lines += ["", instruction]
     return "\n".join(lines)
 
