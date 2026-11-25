@@ -20,6 +20,7 @@ from src.llm.state.socratic_v2_routing import (
     build_pending_quiz,
     grade_quiz_answer,
     initial_learner_model,
+    is_quiz_request,
     mastery_reached,
     merge_learner_update,
     parse_policy_response,
@@ -482,6 +483,58 @@ class TestQuizMove:
         _, mock_policy, _ = self._run(state, _policy("FRAGE"))
         assert mock_policy.call_args.kwargs["available_quiz_items"] == 1
 
+    # Testing 2026-11: only one quiz item in the module; after it, "nein
+    # Quizfrage meinte ich" made the policy choose EXIT.
+    def test_quiz_request_with_none_left_gets_fixed_note(self):
+        state = _base_state(v2_quiz_items=[_quiz_payload(asked=True)])
+        state["user_query"] = "nein Quizfrage meinte ich"
+        result, mock_policy, mock_generate = self._run(state, _policy("EXIT"))
+        mock_policy.assert_not_called()
+        mock_generate.assert_not_called()
+        assert result["socratic_v2_phase"] == "core"  # session keeps running
+        assert result["v2_last_move"] == "QUIZ_LEER"
+        assert result["answer"].startswith("Zu diesem Abschnitt gibt es keine weiteren Quizfragen")
+
+    def test_quiz_request_without_any_items_says_none_in_scope(self):
+        state = _base_state(v2_quiz_items=[], v2_language="English")
+        state["user_query"] = "quiz me please"
+        result, mock_policy, _ = self._run(state, _policy("FRAGE"))
+        mock_policy.assert_not_called()
+        assert result["answer"].startswith("The course has no quiz questions for this section")
+
+    def test_quiz_request_overrides_policy_when_items_left(self):
+        state = _base_state(v2_quiz_items=[_quiz_payload()])
+        state["user_query"] = "nein, Quizfrage meinte ich"
+        result, _, mock_generate = self._run(state, _policy("EXIT"))
+        mock_generate.assert_not_called()
+        assert result["v2_last_move"] == "QUIZ"
+        assert result["v2_pending_quiz"] is not None
+        assert result["socratic_v2_phase"] == "core"
+
+    @pytest.mark.parametrize(
+        "text, expected",
+        [
+            ("Stell mir eine Quizfrage", True),
+            ("nein Quizfrage meinte ich", True),
+            ("Quiz bitte", True),
+            ("quiz me", True),
+            ("Ich will keine Quizfragen mehr", False),
+            ("genug Quiz für heute", False),
+            ("no more quizzes", False),
+            ("neue frage", False),
+            ("Was ist Overfitting?", False),
+        ],
+    )
+    def test_is_quiz_request(self, text, expected):
+        assert is_quiz_request(text) is expected
+
+    def test_quiz_feedback_knows_remaining_quiz_count(self):
+        pending = build_pending_quiz(_quiz_payload(), concept="Overfitting")
+        state = _base_state(v2_pending_quiz=pending, v2_quiz_items=[_quiz_payload(asked=True)])
+        state["user_query"] = next(o["letter"] for o in pending["options"] if o["correct"])
+        _, _, mock_generate = self._run(state, _policy("FRAGE"))
+        assert "WEITERE QUIZFRAGEN VERFÜGBAR: 0" in mock_generate.call_args.kwargs["query"]
+
     def _pending_state(self):
         pending = build_pending_quiz(_quiz_payload(), concept="Overfitting")
         return _base_state(v2_pending_quiz=pending), pending
@@ -548,6 +601,200 @@ class TestQuizMove:
         assert "BEWERTUNG: NICHT ERKANNT" in mock_generate.call_args.kwargs["query"]
         assert result["v2_pending_quiz"] is None
 
+    def test_first_partial_answer_gets_retry_without_revealing(self):
+        # Testing 2026-11: answering only "A" of A, B, C revealed the solution.
+        state, pending = self._multi_pending_state()
+        one_correct = next(o for o in pending["options"] if o["correct"])
+        state["user_query"] = one_correct["letter"]
+        with patch("src.llm.tools.socratic_v2_core.run_policy") as mock_policy, patch(
+            "src.llm.tools.socratic_v2_core._llm.chat"
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        mock_policy.assert_not_called()
+        mock_generate.assert_not_called()  # fixed text — nothing can leak
+        assert result["v2_last_move"] == "QUIZ_TEILWEISE"
+        assert result["answer"].startswith("Teilweise richtig")
+        assert "mindestens eine weitere Antwort richtig" in result["answer"]
+        assert "passt aber nicht" not in result["answer"]
+        for option in pending["options"]:
+            assert option["text"] not in result["answer"]
+        assert result["v2_pending_quiz"]["partial_count"] == 1
+        assert "v2_learner_model" not in result
+        assert result["v2_core_turns"] == state.get("v2_core_turns", 0)
+
+    def test_partial_with_wrong_option_says_so(self):
+        state, pending = self._multi_pending_state()
+        right = next(o for o in pending["options"] if o["correct"])
+        wrong = next(o for o in pending["options"] if not o["correct"])
+        state["user_query"] = f"{right['letter']}, {wrong['letter']}"
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch("src.llm.tools.socratic_v2_core._llm.chat"):
+            result = socratic_v2_core(state)
+        assert "passt aber nicht" in result["answer"]
+        assert "mindestens eine weitere Antwort richtig" in result["answer"]
+        # Wrong pick → next reply replaces the selection, and the text says so.
+        assert "komplette Antwort neu" in result["answer"]
+        assert result["v2_pending_quiz"]["partial_selection"] == []
+
+    def test_new_letter_after_wrong_pick_is_not_added(self):
+        # "B, D" (B wrong) → retry → "A" must not silently keep the wrong B.
+        state, pending = self._multi_pending_state()
+        first, second = [o["letter"] for o in pending["options"] if o["correct"]]
+        state["v2_pending_quiz"] = {**pending, "partial_count": 2, "partial_selection": []}
+        state["user_query"] = second
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Teilweise.")
+        ) as mock_generate:
+            socratic_v2_core(state)
+        query = mock_generate.call_args.kwargs["query"]
+        assert "BEWERTUNG: TEILWEISE RICHTIG" in query
+        assert "ergänzt" not in query
+
+    def test_partial_retry_in_session_language(self):
+        state, pending = self._multi_pending_state()
+        state["v2_language"] = "English"
+        state["user_query"] = next(o for o in pending["options"] if o["correct"])["letter"]
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch("src.llm.tools.socratic_v2_core._llm.chat"):
+            result = socratic_v2_core(state)
+        assert result["answer"].startswith("Partly right")
+
+    def test_third_partial_answer_resolves_quiz(self):
+        state, pending = self._multi_pending_state()
+        state["v2_pending_quiz"] = {**pending, "partial_count": 2}
+        state["user_query"] = next(o for o in pending["options"] if o["correct"])["letter"]
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Richtig wären A, B, C.")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        assert "BEWERTUNG: TEILWEISE RICHTIG" in mock_generate.call_args.kwargs["query"]
+        assert result["v2_pending_quiz"] is None
+        assert result["v2_learner_model"]["konzepte"]["Bias"] == "wackelig"
+
+    def test_complete_answer_after_partial_is_correct(self):
+        state, pending = self._multi_pending_state()
+        state["v2_pending_quiz"] = {**pending, "partial_count": 1}
+        state["user_query"] = ", ".join(o["letter"] for o in pending["options"] if o["correct"])
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Richtig!")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        assert "BEWERTUNG: RICHTIG" in mock_generate.call_args.kwargs["query"]
+        assert result["v2_learner_model"]["konzepte"]["Bias"] == "sicher"
+
+    def test_second_partial_answer_gets_counts_and_last_try(self):
+        state, pending = self._multi_pending_state()
+        right = next(o for o in pending["options"] if o["correct"])["letter"]
+        wrong = next(o for o in pending["options"] if not o["correct"])["letter"]
+        state["v2_pending_quiz"] = {**pending, "partial_count": 1, "partial_selection": []}
+        state["user_query"] = f"{right}, {wrong}"
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat"
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        mock_generate.assert_not_called()
+        answer = result["answer"]
+        assert answer.startswith("Noch nicht ganz.")
+        assert "Eine deiner Antworten stimmt." in answer
+        assert "Es fehlt noch genau eine richtige Antwort." in answer
+        assert "Eine der gewählten Antworten passt nicht." in answer
+        assert "letzter Versuch" in answer
+        assert result["v2_pending_quiz"]["partial_count"] == 2
+        for option in pending["options"]:
+            assert option["text"] not in answer
+
+    def test_second_retry_without_wrong_pick_says_all_chosen_fit(self):
+        # Single correct pick: "Eine deiner Antworten stimmt" would sound odd.
+        state, pending = self._multi_pending_state()
+        right = next(o for o in pending["options"] if o["correct"])["letter"]
+        state["v2_pending_quiz"] = {**pending, "partial_count": 1, "partial_selection": []}
+        state["user_query"] = right
+        with patch("src.llm.tools.socratic_v2_core.run_policy"):
+            result = socratic_v2_core(state)
+        answer = result["answer"]
+        assert "Alles, was du gewählt hast, stimmt." in answer
+        assert "Es fehlt noch genau eine richtige Antwort." in answer
+        assert "deiner Antworten stimmt" not in answer
+
+    @pytest.mark.parametrize("partial_count", [0, 1])
+    def test_all_options_selected_reveals_no_counts(self, partial_count):
+        state, pending = self._multi_pending_state()
+        state["v2_pending_quiz"] = {**pending, "partial_count": partial_count}
+        state["user_query"] = ", ".join(o["letter"] for o in pending["options"])
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat"
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        mock_generate.assert_not_called()
+        answer = result["answer"]
+        assert answer.startswith("Du hast alle Optionen gewählt")
+        assert not any(ch.isdigit() for ch in answer)
+        assert "Eine der gewählten" not in answer
+        assert result["v2_pending_quiz"]["partial_selection"] == []
+
+    def test_first_retry_does_not_announce_last_try(self):
+        state, pending = self._multi_pending_state()
+        state["user_query"] = next(o for o in pending["options"] if o["correct"])["letter"]
+        with patch("src.llm.tools.socratic_v2_core.run_policy"):
+            result = socratic_v2_core(state)
+        assert "letzter Versuch" not in result["answer"]
+        assert "Noch nicht ganz" not in result["answer"]
+
+    def test_second_retry_counts_in_english_plural(self):
+        payload = _quiz_payload(
+            correct_answers=["K1", "K2", "K3"],
+            incorrect_answers=["F1", "F2", "F3"],
+        )
+        pending = build_pending_quiz(payload, concept="Bias")
+        state = _base_state(v2_pending_quiz={**pending, "partial_count": 1, "partial_selection": []})
+        state["v2_language"] = "English"
+        wrong = [o["letter"] for o in pending["options"] if not o["correct"]][:2]
+        right = next(o for o in pending["options"] if o["correct"])["letter"]
+        state["user_query"] = ", ".join([right, *wrong])
+        with patch("src.llm.tools.socratic_v2_core.run_policy"):
+            result = socratic_v2_core(state)
+        answer = result["answer"]
+        assert answer.startswith("Not quite yet.")
+        assert "One of your choices is correct." in answer
+        assert "2 correct options are still missing." in answer
+        assert "2 of the options you chose don't fit." in answer
+        assert "last try" in answer
+
+    def test_retry_remembers_partial_selection(self):
+        state, pending = self._multi_pending_state()
+        first = next(o for o in pending["options"] if o["correct"])["letter"]
+        state["user_query"] = first
+        with patch("src.llm.tools.socratic_v2_core.run_policy"):
+            result = socratic_v2_core(state)
+        assert result["v2_pending_quiz"]["partial_selection"] == [first]
+
+    def test_only_new_letters_after_partial_add_to_selection(self):
+        # Testing 2026-11: "A" → retry → "C" was graded as "C" alone ("A übersehen").
+        state, pending = self._multi_pending_state()
+        first, second = [o["letter"] for o in pending["options"] if o["correct"]]
+        state["v2_pending_quiz"] = {**pending, "partial_count": 1, "partial_selection": [first]}
+        state["user_query"] = second
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Richtig!")
+        ) as mock_generate:
+            result = socratic_v2_core(state)
+        query = mock_generate.call_args.kwargs["query"]
+        assert "BEWERTUNG: RICHTIG" in query
+        assert f"zusammen {first}, {second}" in query
+        assert result["v2_learner_model"]["konzepte"]["Bias"] == "sicher"
+
+    def test_repeated_letter_after_partial_is_a_new_answer(self):
+        state, pending = self._multi_pending_state()
+        first = next(o for o in pending["options"] if o["correct"])["letter"]
+        wrong = next(o for o in pending["options"] if not o["correct"])["letter"]
+        state["v2_pending_quiz"] = {**pending, "partial_count": 2, "partial_selection": [first]}
+        state["user_query"] = f"{first}, {wrong}"
+        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
+            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Teilweise.")
+        ) as mock_generate:
+            socratic_v2_core(state)
+        query = mock_generate.call_args.kwargs["query"]
+        assert "BEWERTUNG: TEILWEISE RICHTIG" in query
+        assert "ergänzt" not in query
+
     def test_give_up_resolves_quiz_immediately(self):
         state, _ = self._pending_state()
         state["user_query"] = "Keine Ahnung, sag mir die Lösung"
@@ -577,17 +824,6 @@ class TestQuizMove:
             result = socratic_v2_core(state)
         assert "BEWERTUNG: RICHTIG" in mock_generate.call_args.kwargs["query"]
         assert result["v2_learner_model"]["konzepte"]["Bias"] == "sicher"
-
-    def test_multi_select_subset_graded_partially_correct(self):
-        state, pending = self._multi_pending_state()
-        one_correct = next(o["letter"] for o in pending["options"] if o["correct"])
-        state["user_query"] = one_correct
-        with patch("src.llm.tools.socratic_v2_core.run_policy"), patch(
-            "src.llm.tools.socratic_v2_core._llm.chat", return_value=_mock_llm_response("Fast!")
-        ) as mock_generate:
-            result = socratic_v2_core(state)
-        assert "BEWERTUNG: TEILWEISE RICHTIG" in mock_generate.call_args.kwargs["query"]
-        assert result["v2_learner_model"]["konzepte"]["Bias"] == "wackelig"
 
     def test_multi_select_clarification_says_multiple(self):
         state, _ = self._multi_pending_state()

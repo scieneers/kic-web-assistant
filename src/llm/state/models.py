@@ -71,7 +71,7 @@ class GraphState(TypedDict, total=False):
     # QUIZ move: real course quiz items (structured QuizItem payloads with the
     # known solutions), loaded once at opening; answers graded deterministically.
     v2_quiz_items: Optional[List[Dict[str, Any]]]  # [{...payload, "asked": bool}]
-    v2_pending_quiz: Optional[Dict[str, Any]]  # question currently posed: {question, kind, concept, options: [{letter, text, correct}], unrecognized_count}
+    v2_pending_quiz: Optional[Dict[str, Any]]  # question currently posed: {question, kind, concept, options: [{letter, text, correct}], unrecognized_count, partial_count, partial_selection}
     # Session language (English name, e.g. "German", "English") — resolved at
     # opening, re-detected on substantial learner messages, injected into every
     # v2 generation and used for the fixed texts (see socratic_v2_language.py).

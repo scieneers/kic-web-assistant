@@ -271,7 +271,7 @@ class TestCoreLanguage:
         with patch("src.llm.tools.socratic_v2_core.run_policy", return_value=policy):
             result = socratic_v2_core(_state(v2_language="English", v2_quiz_items=[{**payload, "asked": False}]))
         assert result["answer"].startswith("📝 Quiz question from the course:")
-        assert "A) True" in result["answer"] and "B) False" in result["answer"]
+        assert "- **A)** True" in result["answer"] and "- **B)** False" in result["answer"]
 
     def test_generation_fallback_localized(self):
         policy = {"move": "FRAGE", "zielkonzept": "Overfitting", "lernziel_session": None, "learner_update": None}
@@ -550,3 +550,15 @@ class TestLearningModeStatus:
         fake = SimpleNamespace(graph=MagicMock())
         fake.graph.get_state.side_effect = RuntimeError("redis down")
         assert KICampusAssistant.is_learning_mode_active(fake, "thread") is False
+
+
+class TestQuizMarkdown:
+    """Options must be a real Markdown list — plain lines collapse into one
+    paragraph in Streamlit and Moodle (testing 2026-11)."""
+
+    def test_options_render_as_markdown_list_with_bold_question(self):
+        pending = _multi_pending()
+        text = render_quiz_message(pending)
+        assert f"**{pending['question']}**" in text
+        for option in pending["options"]:
+            assert f"- **{option['letter']})** {option['text']}" in text

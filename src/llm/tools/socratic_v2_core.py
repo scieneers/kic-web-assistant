@@ -30,9 +30,11 @@ from src.llm.state.socratic_v2_routing import (
     V2_QUESTION_MOVES,
     build_pending_quiz,
     grade_quiz_answer,
+    grade_quiz_selection,
     initial_learner_model,
     format_learner_model,
     is_quiz_give_up,
+    is_quiz_request,
     mastery_reached,
     merge_learner_update,
     quiz_has_multiple_correct,
@@ -238,9 +240,107 @@ NACHRICHT DER LERNENDEN PERSON: {user_query}"""
     }
 
 
+def _no_quiz_left(
+    *, any_quiz_items: bool, language: str, hint_count: int, question_streak: int, core_turns: int
+) -> dict:
+    """Quiz requested but the scope has no (more) course quiz items: say so
+    (fixed text, no LLM) and offer a practice question instead."""
+    langfuse_context.update_current_observation(
+        metadata={"executed_move": "QUIZ_LEER", "language": language}
+    )
+    return {
+        "socratic_v2_phase": "core",
+        "v2_hint_count": hint_count,
+        "v2_question_streak": question_streak,
+        "v2_core_turns": core_turns,
+        "v2_last_policy_move": None,
+        "v2_last_move": "QUIZ_LEER",
+        "answer": localize("quiz_none_left" if any_quiz_items else "quiz_none_in_scope", language),
+        "citations_markdown": None,
+    }
+
+
+# Multi-answer quiz: partially correct answers get this many retries before
+# the solution is revealed (third attempt is graded and resolved).
+QUIZ_PARTIAL_RETRIES = 2
+
+
+def _retry_partial_quiz(
+    *,
+    pending_quiz: dict,
+    verdict: dict,
+    language: str,
+    hint_count: int,
+    question_streak: int,
+    core_turns: int,
+) -> dict:
+    """Partially correct answer to a multi-answer quiz: say what kind of
+    mistake it is and let the learner try again — without naming options.
+
+    Testing 2026-11: answering only "A" (of A, B, C) revealed the full solution
+    right away. Fixed text, no LLM, so nothing can leak. Up to
+    QUIZ_PARTIAL_RETRIES retries: the first says only "something is missing /
+    something doesn't fit", the second gives counts ("one correct option is
+    still missing") and announces the last try; the attempt after that is
+    graded and resolved as usual.
+
+    Without a wrong pick the selection is remembered, so a reply with only new
+    letters counts as an addition ("A" → "C" = A, C). With a wrong pick the
+    learner is asked for the complete answer and the next reply replaces it —
+    otherwise "B, D" → "A" would silently keep the wrong B.
+    """
+    wrong_picked = verdict["has_wrong_selected"]
+    retry_number = pending_quiz.get("partial_count", 0) + 1
+
+    all_selected = len(verdict["selected_letters"]) == len(pending_quiz.get("options") or [])
+
+    if all_selected:
+        # Ticking everything must not be rewarded with counts ("2 don't fit"
+        # would reveal how many are correct).
+        parts = [localize("quiz_all_selected", language)]
+    elif retry_number == 1:
+        parts = [localize("quiz_partial", language)]
+        if wrong_picked:
+            parts.append(localize("quiz_partial_wrong", language))
+        if verdict["missing_correct"]:
+            parts.append(localize("quiz_partial_missing", language))
+    else:
+        parts = [localize("quiz_partial_again", language)]
+        counted = ("right", "missing", "wrong") if wrong_picked else ("missing",)
+        if not wrong_picked:
+            parts.append(localize("quiz_count_all_right", language))
+        for kind in counted:
+            n = verdict[f"{kind}_count"]
+            if n:
+                parts.append(localize(f"quiz_count_{kind}_{'one' if n == 1 else 'many'}", language, n=n))
+    parts.append(localize("quiz_partial_retry_full" if wrong_picked else "quiz_partial_retry", language))
+    if retry_number >= QUIZ_PARTIAL_RETRIES:
+        parts.append(localize("quiz_last_try", language))
+
+    langfuse_context.update_current_observation(
+        metadata={"executed_move": "QUIZ_TEILWEISE", "quiz_retry": retry_number, "language": language}
+    )
+    return {
+        "socratic_v2_phase": "core",
+        "v2_pending_quiz": {
+            **pending_quiz,
+            "partial_count": retry_number,
+            "partial_selection": [] if wrong_picked else verdict["selected_letters"],
+        },
+        "v2_hint_count": hint_count,
+        "v2_question_streak": question_streak,
+        "v2_core_turns": core_turns,
+        "v2_last_policy_move": None,
+        "v2_last_move": "QUIZ_TEILWEISE",
+        "answer": " ".join(parts),
+        "citations_markdown": None,
+    }
+
+
 def _grade_pending_quiz(
     *,
     pending_quiz: dict,
+    remaining_quiz_items: int = 0,
     user_query: str,
     chat_history: list,
     model,
@@ -257,11 +357,27 @@ def _grade_pending_quiz(
     learner-model update, LLM only phrases the feedback.
 
     A reply that matches no option is first answered as a clarification with
-    the quiz kept open (_clarify_pending_quiz). The solution is revealed only
-    for a recognized answer, an explicit give-up ("keine Ahnung", "Lösung"),
-    or a second unrecognized reply in a row.
+    the quiz kept open (_clarify_pending_quiz); partially correct answers get
+    up to QUIZ_PARTIAL_RETRIES retries (_retry_partial_quiz). The solution is
+    revealed only for a correct/wrong answer, the attempt after the last
+    retry, an explicit give-up
+    ("keine Ahnung", "Lösung"), or a second unrecognized reply in a row.
     """
     verdict = grade_quiz_answer(pending_quiz, user_query)
+    answer_for_llm = user_query
+
+    # After the partial-answer retry learners often just add the missing
+    # letters ("A" → retry → "C"). Only new letters = an addition to the first
+    # selection; any repeated letter = a complete new answer.
+    previous = pending_quiz.get("partial_selection") or []
+    if previous and verdict["recognized"] and not set(verdict["selected_letters"]) & set(previous):
+        combined = sorted(set(previous) | set(verdict["selected_letters"]))
+        verdict = grade_quiz_selection(pending_quiz, combined)
+        answer_for_llm = (
+            f"{user_query} (ergänzt die vorherige Auswahl {', '.join(previous)} "
+            f"→ zusammen {', '.join(combined)})"
+        )
+
     gave_up = not verdict["recognized"] and is_quiz_give_up(user_query)
 
     if not verdict["recognized"] and not gave_up and pending_quiz.get("unrecognized_count", 0) < 1:
@@ -270,6 +386,16 @@ def _grade_pending_quiz(
             user_query=user_query,
             chat_history=chat_history,
             model=model,
+            language=language,
+            hint_count=hint_count,
+            question_streak=question_streak,
+            core_turns=core_turns,
+        )
+
+    if verdict["partially_correct"] and pending_quiz.get("partial_count", 0) < QUIZ_PARTIAL_RETRIES:
+        return _retry_partial_quiz(
+            pending_quiz=pending_quiz,
+            verdict=verdict,
             language=language,
             hint_count=hint_count,
             question_streak=question_streak,
@@ -299,7 +425,8 @@ def _grade_pending_quiz(
     grading_summary = (
         f"ERKANNTE ANTWORT: {verdict['matched_option'] or 'keine der Optionen erkannt'}\n"
         f"BEWERTUNG: {rating}\n"
-        f"KORREKTE ANTWORT(EN): {', '.join(verdict['correct_options'])}"
+        f"KORREKTE ANTWORT(EN): {', '.join(verdict['correct_options'])}\n"
+        f"WEITERE QUIZFRAGEN VERFÜGBAR: {remaining_quiz_items}"
     )
     query_for_llm = f"""ZUG: QUIZ_FEEDBACK
 SPRACHE: {language}
@@ -311,7 +438,7 @@ LERNSTAND: {format_learner_model(learner_model)}
 KURSMATERIAL:
 {chr(10).join(f"[Material {i + 1}]{chr(10)}{chunk.text}" for i, chunk in enumerate(reranked)) or "Kein spezifisches Kursmaterial gefunden."}
 
-ANTWORT DER LERNENDEN PERSON: {user_query}"""
+ANTWORT DER LERNENDEN PERSON: {answer_for_llm}"""
 
     answer = _generate_validated(query_for_llm, chat_history, model, language)
 
@@ -412,9 +539,12 @@ def socratic_v2_core(state: GraphState) -> dict:
     # 0) A posed quiz question is graded DETERMINISTICALLY against the known
     #    solution — no policy call, no LLM judgement on correctness. Only the
     #    feedback wording comes from the generation LLM.
+    unasked_quiz_items = sum(1 for item in quiz_items if not item.get("asked"))
+
     if pending_quiz:
         return _grade_pending_quiz(
             pending_quiz=pending_quiz,
+            remaining_quiz_items=unasked_quiz_items,
             user_query=user_query,
             chat_history=chat_history,
             model=model,
@@ -428,7 +558,18 @@ def socratic_v2_core(state: GraphState) -> dict:
             language=language,
         )
 
-    unasked_quiz_items = sum(1 for item in quiz_items if not item.get("asked"))
+    # Explicit quiz request ("Stell mir eine Quizfrage", "nein, Quizfrage meinte
+    # ich") is honored deterministically. With nothing left, a fixed note —
+    # testing 2026-11: the policy, forbidden to pick QUIZ, ended the session.
+    quiz_requested = is_quiz_request(user_query)
+    if quiz_requested and unasked_quiz_items == 0:
+        return _no_quiz_left(
+            any_quiz_items=bool(quiz_items),
+            language=language,
+            hint_count=hint_count,
+            question_streak=question_streak,
+            core_turns=core_turns,
+        )
 
     # 1) Policy: which move, and what did we learn about the learner?
     policy = run_policy(
@@ -444,6 +585,8 @@ def socratic_v2_core(state: GraphState) -> dict:
     )
     move = policy["move"]
     policy_move = move  # the policy's raw choice, before quiz fallback and guards
+    if quiz_requested:
+        move = "QUIZ"
 
     if move == "EXIT":
         logger.debug("socratic_v2_core: policy chose EXIT — resetting v2 state")
